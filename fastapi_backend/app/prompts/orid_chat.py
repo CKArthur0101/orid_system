@@ -7,7 +7,7 @@ from .shared import ORID_CHAT_SHARED_SYSTEM_RULES
 Stage = Literal["O", "R", "I", "D"]
 
 STAGE_NAME = {
-    "O": "O（客觀）",
+    "O": "O（客）",
     "R": "R（感受）",
     "I": "I（意義）",
     "D": "D（行動）",
