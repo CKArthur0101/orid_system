@@ -6,12 +6,11 @@ services:
       - .env
     environment:
       - OPENAPI_OUTPUT_FILE=./shared-data/openapi.json
-      # 這裡是「容器內部」連線，不用跟著 host port 改
       - DATABASE_URL=postgresql+asyncpg://postgres:password@db:5432/mydatabase
       - TEST_DATABASE_URL=postgresql+asyncpg://postgres:password@db_test:5432/testdatabase
       - MAIL_SERVER=mailhog
     ports:
-      - "8001:8000"
+      - "127.0.0.1:18000:8000"
     networks:
       - my_network
     volumes:
@@ -28,9 +27,8 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
       POSTGRES_DB: mydatabase
-    # ✅ 主資料庫改成 15432 -> 5432
     ports:
-      - "15432:5432"
+      - "15432:5432" # ✅ 主資料庫 host:15432 -> container:5432
     networks:
       - my_network
     volumes:
@@ -43,9 +41,8 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
       POSTGRES_DB: testdatabase
-    # ✅ 測試資料庫維持 5433 -> 5432（你原本就這樣跑）
     ports:
-      - "5433:5432"
+      - "5433:5432" # ✅ 測試資料庫 host:5433 -> container:5432
     networks:
       - my_network
     volumes:
@@ -57,17 +54,20 @@ services:
       context: ./nextjs-frontend
     user: node
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3100:3000" # ✅ 用 3100 避開 3000 被佔用/被擋
+    command: npm run dev -- --hostname 0.0.0.0 --port 3000
     networks:
       - my_network
     environment:
       NODE_ENV: development
-      API_BASE_URL: http://backend:8000
+      API_BASE_URL: http://backend:8000 # ✅ 容器內用 backend:8000
       OPENAPI_OUTPUT_FILE: ./shared-data/openapi.json
     volumes:
       - ./nextjs-frontend:/app
       - nextjs-node-modules:/app/node_modules
       - ./local-shared-data:/app/shared-data
+    depends_on:
+      - backend
 
   mailhog:
     image: mailhog/mailhog
