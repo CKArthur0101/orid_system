@@ -9,7 +9,12 @@ export type ConditionKey = "genai" | "template";
 export type StageDraft = {
   d1: string;
   d2: string;
-  done?: boolean; // 可選：標記本段完成
+  // ✅ 新增：存 AI 回饋（不改 DB schema，直接存在 content JSON）
+  tips?: {
+    d1?: string[];
+    d2?: string[];
+  };
+  done?: boolean;
 };
 
 export type OridWritingV1 = {
@@ -34,36 +39,54 @@ export default function WritingPanel(props: {
   setData: (v: OridWritingV1) => void;
   activeStage: StageKey;
   setActiveStage: (s: StageKey) => void;
-  currentStageFromChat: string; // 來自聊天 currentStage
+  currentStageFromChat: string;
   condition: ConditionKey;
-}) {
-  const { data, setData, activeStage, setActiveStage, currentStageFromChat, condition } = props;
 
-  // 解鎖規則（先做簡單版）：允許「目前聊天階段」與「之前階段」可寫
+  // ✅ 新增：由外層 page.tsx 傳入（因為只有外層知道 sessionId/week）
+  onAssist?: (draft: "d1" | "d2", stage: StageKey) => Promise<void>;
+  assistLoading?: boolean;
+  assistError?: string | null;
+}) {
+  const {
+    data,
+    setData,
+    activeStage,
+    setActiveStage,
+    currentStageFromChat,
+    condition,
+    onAssist,
+    assistLoading = false,
+    assistError = null,
+  } = props;
+
   const unlockedIndex = useMemo(() => {
     const i = idxOfStage(currentStageFromChat || "O");
     return i < 0 ? 0 : i;
   }, [currentStageFromChat]);
 
   const activeIndex = idxOfStage(activeStage);
-
   const locked = activeIndex > unlockedIndex;
 
+  const stage = data.stages[activeStage];
+
+  // ✅ 顯示 AI tips：以 Draft1 的建議為主（因為通常是寫完 D1 → 看建議 → 寫 D2）
+  const tipsForD1 = stage.tips?.d1 ?? [];
+
   const feedbackText = useMemo(() => {
-    // 前端先做「展示用」：實驗組顯示個人化提示的“型態”，對照組顯示固定檢核規則
     if (condition === "genai") {
+      if (tipsForD1.length) {
+        return tipsForD1.map((t) => `• ${t}`).join("\n");
+      }
       return [
-        "• 根據你這段的內容，系統會指出缺漏（情緒/原因/換位/行動可檢核）",
-        "• 並提供下一句可以怎麼補的具體方向（不直接幫你代寫）",
+        "• 你可以按「AI 生成 Draft 1」先出第一版",
+        "• 或先自己寫 Draft 1，再按「AI 生成 Draft 2」讓系統示範怎麼修",
       ].join("\n");
     }
     return [
       "• 固定模板檢核（不個人化、不生成改寫）",
       "• 例：至少兩句、需包含「因為」、需連回故事線索、D 段需具體做法",
     ].join("\n");
-  }, [condition]);
-
-  const stage = data.stages[activeStage];
+  }, [condition, tipsForD1]);
 
   return (
     <div className="space-y-3">
@@ -79,7 +102,9 @@ export default function WritingPanel(props: {
               onClick={() => setActiveStage(s.key)}
               className={[
                 "rounded-full border px-3 py-1 text-xs",
-                isActive ? "bg-primary text-primary-foreground border-primary" : "bg-muted/30",
+                isActive
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-muted/30",
                 disabled ? "opacity-40 cursor-not-allowed" : "hover:bg-muted",
               ].join(" ")}
               title={disabled ? "請先完成前面對話" : ""}
@@ -99,7 +124,22 @@ export default function WritingPanel(props: {
       {/* Draft 1 */}
       <Card>
         <CardContent className="p-4 space-y-2">
-          <div className="text-sm font-medium">Draft 1（第一稿）</div>
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-medium">Draft 1（第一稿）</div>
+
+            {condition === "genai" && (
+              <button
+                type="button"
+                disabled={locked || assistLoading || !onAssist}
+                onClick={() => onAssist?.("d1", activeStage)}
+                className="rounded-md border px-3 py-1 text-xs hover:bg-muted disabled:opacity-50"
+                title="用聊天紀錄 + 閱讀內容產生本段 Draft 1（示範用）"
+              >
+                {assistLoading ? "生成中…" : "AI 生成 Draft 1"}
+              </button>
+            )}
+          </div>
+
           <textarea
             disabled={locked}
             className="min-h-[170px] w-full rounded-md border bg-background p-3 text-sm outline-none"
@@ -118,18 +158,40 @@ export default function WritingPanel(props: {
         </CardContent>
       </Card>
 
-      {/* Feedback (展示區) */}
+      {/* Feedback */}
       <Card>
         <CardContent className="p-4 space-y-2">
           <div className="text-sm font-medium">回饋提示（兩組差異在這裡）</div>
-          <pre className="whitespace-pre-wrap text-xs text-muted-foreground">{feedbackText}</pre>
+          <pre className="whitespace-pre-wrap text-xs text-muted-foreground">
+            {feedbackText}
+          </pre>
+          {assistError && (
+            <div className="text-xs text-red-600 whitespace-pre-wrap">
+              ❌ {assistError}
+            </div>
+          )}
         </CardContent>
       </Card>
 
       {/* Draft 2 */}
       <Card>
         <CardContent className="p-4 space-y-2">
-          <div className="text-sm font-medium">Draft 2（修訂稿）</div>
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-medium">Draft 2（修訂稿）</div>
+
+            {condition === "genai" && (
+              <button
+                type="button"
+                disabled={locked || assistLoading || !onAssist || !stage.d1.trim()}
+                onClick={() => onAssist?.("d2", activeStage)}
+                className="rounded-md border px-3 py-1 text-xs hover:bg-muted disabled:opacity-50"
+                title="用 Draft 1 + 建議示範產生修訂稿（示範用）"
+              >
+                {assistLoading ? "生成中…" : "AI 生成 Draft 2"}
+              </button>
+            )}
+          </div>
+
           <textarea
             disabled={locked}
             className="min-h-[170px] w-full rounded-md border bg-background p-3 text-sm outline-none"

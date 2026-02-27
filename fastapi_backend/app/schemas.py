@@ -70,6 +70,10 @@ class OridSessionRead(BaseModel):
     condition: str | None
     current_stage: str
     stage_turn: int
+
+    # ✅ OpenAI Assistants thread id（每個 session 綁一個 thread）
+    thread_id: str | None = None
+
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -90,6 +94,12 @@ class OridChatResponse(BaseModel):
     ai_reply: str
     current_stage: str
     stage_turn: int
+
+    # ✅ 讓 orid.py 可回傳（避免 500）
+    pass_ok: bool | None = None
+    reason: str | None = None
+    next_suggested: str | None = None
+
 
 
 # ----------------------------
@@ -114,6 +124,20 @@ class OridWritingRead(BaseModel):
     session_id: UUID
     week: int
     content: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ----------------------------
+# ORID Messages (chat logs)
+# ----------------------------
+class OridMessageRead(BaseModel):
+    id: UUID
+    session_id: UUID
+    stage: str
+    sender: str
+    text: str
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

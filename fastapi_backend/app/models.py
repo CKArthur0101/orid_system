@@ -29,6 +29,7 @@ class Item(Base):
 
     user = relationship("User", back_populates="items")
 
+
 class Reading(Base):
     __tablename__ = "readings"
 
@@ -44,6 +45,9 @@ class OridSession(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
     reading_id = Column(UUID(as_uuid=True), ForeignKey("readings.id"), nullable=False)
+
+    # ✅ OpenAI Assistants thread id（每個 session 綁一個 thread）
+    thread_id = Column(String, nullable=True, index=True)
 
     condition = Column(String, nullable=True)  # A/B 或 experimental/control
     current_stage = Column(String, default="O", nullable=False)  # O/R/I/D
@@ -69,6 +73,7 @@ class OridMessage(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     session = relationship("OridSession", back_populates="messages")
+
 
 class OridWriting(Base):
     __tablename__ = "orid_writings"
