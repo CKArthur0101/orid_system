@@ -95,8 +95,8 @@ def build_orid_checker_prompts(
 
 你要做三件事：
 (1) 偵測學生訊息是否含不友善用語（辱罵、人身攻擊、歧視、威脅、性暗示等）。只要有，unsafe_language=true。
-(2) 偵測是否離題（與書或本階段任務無關）。離題就 off_topic=true。
-(3) 產生一個「拉回故事」且符合目前 ORID 階段的問題（suggested_question）。
+(2) 偵測是否「完全偏離故事」。只要學生提到書中角色或事件，哪怕加了個人形容詞（如「很小氣」、「捨不得」），也【絕對不算離題】（off_topic=false）！只有在聊完全無關的事情（如電玩、午餐）時才 off_topic=true。
+(3) 產生一個「緊扣故事」且符合目前 ORID 階段的問題（suggested_question）。
 
 目前 ORID 階段：{stage}
 - O：問「故事發生什麼/誰做什麼/先後順序」，不能問感受或道理或行動

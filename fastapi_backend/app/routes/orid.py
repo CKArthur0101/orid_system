@@ -42,6 +42,7 @@ from app.prompts.writing_assist import (
     build_writing_d1_prompts,
     build_writing_d2_prompts,
 )
+from app.prompts.writing_hints import build_writing_hints_prompts
 from app.prompts.orid_checker import (
     build_orid_checker_prompts,
     parse_orid_checker_json,
@@ -135,8 +136,8 @@ def _env_bool(name: str, default: bool = False) -> bool:
 ORID_DEMO_MODE = _env_bool("ORID_DEMO_MODE", True)
 ORID_HISTORY_LIMIT = int(os.getenv("ORID_HISTORY_LIMIT", "10"))
 
-ORID_REQUIRED_PASS_DEFAULT = int(os.getenv("ORID_REQUIRED_PASS", "1" if ORID_DEMO_MODE else "2"))
-ORID_REQUIRED_PASS_D = int(os.getenv("ORID_REQUIRED_PASS_D", "1"))
+ORID_REQUIRED_PASS_DEFAULT = int(os.getenv("ORID_REQUIRED_PASS", "2"))
+ORID_REQUIRED_PASS_D = int(os.getenv("ORID_REQUIRED_PASS_D", "2"))
 
 # checker debug switch
 ORID_CHECKER_DEBUG = _env_bool("ORID_CHECKER_DEBUG", False)
@@ -648,6 +649,65 @@ async def _genai_feedback(
     return ok, missing[:3], suggestions[:3], example, improved
 
 
+class GenerateHintsRequest(BaseModel):
+    session_id: UUID
+    stage: str = Field(..., pattern="^(O|R|I|D)$")
+
+class GenerateHintsResponse(BaseModel):
+    hints: list[str]
+
+@router.post("/writings/generate_hints", response_model=GenerateHintsResponse)
+async def generate_hints(
+    data: GenerateHintsRequest,
+    db: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_active_user),
+):
+    r = await db.execute(select(OridSession).filter(OridSession.id == data.session_id))
+    session = r.scalars().first()
+    if not session or session.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+
+    # Load messages only for this specific stage to keep hints highly relevant
+    q = await db.execute(
+        select(OridMessage)
+        .filter(OridMessage.session_id == session.id)
+        .filter(OridMessage.stage == data.stage)
+        .order_by(OridMessage.created_at.asc())
+    )
+    msgs = q.scalars().all()
+    
+    # We only care about the last 10 messages within this stage
+    chat_history = []
+    for m in msgs[-10:]:
+        prefix = "學生" if m.sender == "student" else "老師"
+        chat_history.append(f"{prefix}：{m.text}")
+
+    sys_prompt, user_msg = build_writing_hints_prompts(stage=data.stage, chat_history=chat_history)
+    
+    raw = await _chat_completion(
+        [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": user_msg},
+        ],
+        max_completion_tokens=150,
+        temperature=0.7,
+    )
+    
+    hints = []
+    for line in raw.split("\n"):
+        line = line.strip()
+        if line.startswith("-") or line.startswith("*"):
+            line = line[1:].strip()
+        if line:
+            hints.append(line)
+            
+    if not hints:
+        hints = ["回想一下你剛剛講過什麼", "試著把對話裡的句子寫下來"]
+        
+    return GenerateHintsResponse(hints=hints[:3])
+
+
 def _ensure_orid_writing_v1(week: int) -> dict[str, Any]:
     return {
         "schema": "orid_writing_v1",
@@ -772,7 +832,7 @@ async def generate_natural_pullback(student_text: str, fallback_q: str, custom_h
     if custom_hint:
         sys = f"你是一位溫暖的國小閱讀老師。學生回答不够完整（原因：{custom_hint}）。請用「短短一句話」自然地承接學生的話並給予鼓勵，然後在第二句話【一字不漏】接上這個問題：{fallback_q}。總計最多兩句話。"
     else:
-        sys = f"你是一位溫暖幽默的國小閱讀老師。學生剛剛可能離題或閒聊了。請用「短短一句話」自然且帶點幽默地接住他講的話，然後在第二句話【一字不漏】接回這個正軌問題：{fallback_q}。總計最多兩句話。"
+        sys = f"你是一位溫暖的國小閱讀老師。學生的回答可能不夠完整或加了太多個人猜測。請用「短短一句話」自然肯定他的分享（切勿指責或說他想像力豐富），然後在第二句話【一字不漏】接回這個引導問題：{fallback_q}。總計最多兩句話。"
         
     raw = await _chat_completion(
         [
@@ -783,6 +843,20 @@ async def generate_natural_pullback(student_text: str, fallback_q: str, custom_h
         temperature=0.7,
     )
     return raw.strip() if raw.strip() else f"我們先回到故事。{fallback_q}"
+
+async def generate_positive_followup(student_text: str, next_q: str) -> str:
+    """Outsources empathy to LLM when student answers correctly but needs more turns in the stage."""
+    sys = f"你是一位於國小閱讀老師。學生剛才的回答很棒。請用「短短一句話」給予具體且溫度的稱讚或引申，然後在第二句話【一字不漏】地接上這個追問：{next_q}。總計最多兩句話。"
+        
+    raw = await _chat_completion(
+        [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": f"學生回答：{student_text}"},
+        ],
+        max_completion_tokens=150,
+        temperature=0.7,
+    )
+    return raw.strip() if raw.strip() else f"你說得很好！接下來，{next_q}"
 
 @router.post("/chat", response_model=OridChatResponse)
 async def chat(
@@ -927,9 +1001,8 @@ async def chat(
         session.stage_turn = 0
         will_advance = True
 
-    final_ai_text = clean_ai.strip() if clean_ai else ""
-
-    # ✅ 推進到下一階段：自然轉場 + 下一題（仍一個問號）
+    # ✅ 完全接管對話方向（不使用 LLM 自己瞎掰的 clean_ai，純用它做判定）
+    # 推進到下一階段：自然轉場 + 下一題（仍一個問號）
     if will_advance:
         new_stage = (session.current_stage or "O").strip().upper()
         ai_count_new_stage = len([m for m in msgs if m.sender == "ai" and m.stage == new_stage])
@@ -938,15 +1011,15 @@ async def chat(
         prefix = (STAGE_TRANSITION_PREFIX.get(new_stage) or "").strip()
         final_ai_text = _two_sentence_ack_then_question(prefix or "好，我們繼續聊下去", q2)
     else:
-        if not final_ai_text:
-            if pass_ok:
-                q2 = fallback_q or _sanitize_one_question(
-                    pick_prompt_from_bank(book_pack, current_stage_before, ai_count_same_stage + 1)
-                )
-                final_ai_text = await generate_natural_pullback(student_text, q2)
-            else:
-                short_reason = (reason or "再補充一點就更完整了").strip()
-                final_ai_text = await generate_natural_pullback(student_text, fallback_q, custom_hint=short_reason)
+        # 單一階段內（無論過關與否），我們都強制接管對話，防止 LLM 自己跳階或偏題
+        if pass_ok:
+            q2 = fallback_q or _sanitize_one_question(
+                pick_prompt_from_bank(book_pack, current_stage_before, ai_count_same_stage + 1)
+            )
+            final_ai_text = await generate_positive_followup(student_text, q2)
+        else:
+            short_reason = (reason or "再補充一點就更完整了").strip()
+            final_ai_text = await generate_natural_pullback(student_text, fallback_q, custom_hint=short_reason)
 
     ai_stage_for_save = session.current_stage if will_advance else current_stage_before
     db.add(OridMessage(session_id=session.id, stage=ai_stage_for_save, sender="ai", text=final_ai_text))

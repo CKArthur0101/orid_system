@@ -176,6 +176,9 @@ export default function WeekBookPage() {
   const [fbError, setFbError] = useState<string | null>(null);
   const [fbState, setFbState] = useState<FeedbackState>({});
 
+  const [stageHints, setStageHints] = useState<Partial<Record<StageKey, string[]>>>({});
+  const [hintsLoading, setHintsLoading] = useState<Partial<Record<StageKey, boolean>>>({});
+
   const canChat = useMemo(() => !!sessionId && !loading, [sessionId, loading]);
 
   const unlockedIndex = useMemo(() => {
@@ -186,6 +189,36 @@ export default function WeekBookPage() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    const activeUnlocked = STAGES.slice(0, unlockedIndex + 1).map((s) => s.key);
+    activeUnlocked.forEach((stg) => {
+      // only fetch if we don't have them and aren't currently fetching
+      if (!stageHints[stg] && !hintsLoading[stg] && messages.length > 2) {
+        setHintsLoading((prev) => ({ ...prev, [stg]: true }));
+        fetch(`/api/orid/writings/generate_hints`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: sessionId, stage: stg }),
+        })
+          .then((res) => {
+            if (!res.ok) throw new Error("fetch hints failed");
+            return res.json();
+          })
+          .then((data) => {
+            setStageHints((prev) => ({ ...prev, [stg]: data.hints || [] }));
+          })
+          .catch((err) => {
+            console.error(`Failed to fetch hints for ${stg}:`, err);
+            setStageHints((prev) => ({ ...prev, [stg]: [] }));
+          })
+          .finally(() => {
+            setHintsLoading((prev) => ({ ...prev, [stg]: false }));
+          });
+      }
+    });
+  }, [unlockedIndex, sessionId, messages.length]);
 
   async function ensureNewOrLatestSession(forceNew: boolean) {
     const res = await fetch(`/api/orid/sessions/ensure?week=${weekNum}&force_new=${forceNew ? "true" : "false"}`, {
@@ -223,6 +256,8 @@ export default function WeekBookPage() {
       setWritingId(null);
       setWritingData(emptyWriting);
       setFbState({});
+      setStageHints({});
+      setHintsLoading({});
       setFbError(null);
       setSaveMsg(null);
 
@@ -695,6 +730,24 @@ export default function WeekBookPage() {
 
                 <div className="kid-hint-panel space-y-4">
                   <div className="text-lg md:text-xl font-semibold">寫作支架提示</div>
+
+                  {hintsLoading[focusStage] && (
+                    <div className="rounded-xl border bg-orange-50/50 p-4 text-center text-sm md:text-base text-orange-700 animate-pulse shadow-sm">
+                      正在替你整理聊天重點當作靈感...
+                    </div>
+                  )}
+                  {(stageHints[focusStage]?.length ?? 0) > 0 && (
+                    <div className="rounded-xl bg-orange-50 border border-orange-200 p-4 shadow-sm">
+                      <div className="text-sm md:text-base font-bold text-orange-800 mb-2 flex items-center gap-2">
+                        <span>💡</span> 你剛剛聊到的重點
+                      </div>
+                      <ul className="list-disc pl-5 space-y-1 text-sm md:text-base text-orange-900 leading-relaxed">
+                        {stageHints[focusStage]!.map((hint, idx) => (
+                          <li key={idx}>{hint}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
 
                   <div>
                     <div className="text-sm md:text-base font-medium mb-2">情緒詞彙提示</div>
