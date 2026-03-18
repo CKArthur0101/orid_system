@@ -29,13 +29,12 @@ def build_genai_feedback_prompts(
 
 本段寫作重點：{guide}
 
-【輸出格式】你只能輸出「純 JSON」，不要多任何字（不要 markdown，不要解釋）。
-JSON 欄位（請全部提供）：
-- ok: boolean（是否達到本段基本要求）
-- missing: string[]（最多 3 點，指出缺漏要素，用簡短詞）
-- suggestions: string[]（最多 3 點，具體可做的建議，每點 8–18 字）
-- example: string|null（示例 2–4 句，引用故事事件，不可亂編）
-- improved: string|null（可直接貼到 Draft2 的改寫版本 2–5 句；用學生原意補足缺漏；不可新增教材外細節）
+【回饋內容要求】
+- ok: 是否達到本段基本要求
+- missing: 最多 3 點，指出缺漏要素，用簡短詞
+- suggestions: 最多 3 點，具體可做的建議，每點 8–18 字
+- example: 示例 2–4 句，引用故事事件，不可亂編
+- improved: 根據學生原意改寫的完整段落（可直接貼到 Draft2），2–5 句，不可新增教材外細節
 
 【語氣】鼓勵、適合國小生；不要責備。
 """.strip()

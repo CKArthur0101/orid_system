@@ -27,175 +27,27 @@ from app.schemas import (
 router = APIRouter(tags=["orid"])
 
 # ----------------------------
-# ✅ Prompt bank (safe import with fallback)
+# ✅ Prompt bank & Checker (direct import)
 # ----------------------------
 PROMPTS_OK = True
 PROMPTS_IMPORT_ERROR: Optional[str] = None
-
-# fallback constant (will be overwritten if import success)
-ASSIST_TEXT_SPLIT = "【TIPS】"
-
-try:
-    from app.prompts.shared import build_book_context_block
-    from app.prompts.orid_chat import build_orid_chat_system_prompt
-    from app.prompts.writing_feedback import build_genai_feedback_prompts
-    from app.prompts.writing_assist import (
-        ASSIST_TEXT_SPLIT as _ASSIST_TEXT_SPLIT,
-        build_writing_d1_prompts,
-        build_writing_d2_prompts,
-    )
-    ASSIST_TEXT_SPLIT = _ASSIST_TEXT_SPLIT
-except Exception as e:
-    PROMPTS_OK = False
-    PROMPTS_IMPORT_ERROR = f"{type(e).__name__}: {e}"
-
-    # ---- fallback builders (so backend can boot) ----
-    def build_book_context_block(
-        book_pack: Optional[dict[str, Any]],
-        *,
-        max_events: int = 6,
-        max_chars: int = 900,
-    ) -> str:
-        if not book_pack:
-            return "BOOK_CONTEXT：目前沒有提供 book_pack（請避免編造）。"
-        book_title = str(book_pack.get("book_title") or "本週繪本")
-        grade = str(book_pack.get("grade") or "國小")
-        key_events = (book_pack.get("key_events") or [])[:max_events]
-        key_events_str = " / ".join([str(x) for x in key_events]) if key_events else "（未提供）"
-        block = f"BOOK_CONTEXT：書名={book_title}；適用={grade}；摘要={key_events_str}"
-        return block[:max_chars] if len(block) > max_chars else block
-
-    def build_orid_chat_system_prompt(
-        *,
-        stage: str,
-        stage_turn: int,
-        required_pass: int,
-        fallback_question: str,
-        book_context: str,
-    ) -> str:
-        return f"""
-你是給台灣國小高年級學生使用的閱讀反思同伴。
-你要依 ORID 四階段引導學生思考：O→R→I→D。
-{book_context}
-
-目前階段：{stage}
-目前合格次數：{stage_turn} / 需要：{required_pass}
-
-你必須在回覆最開頭輸出控制標籤（第一行，格式固定，不可缺漏）：
-【PASS:true/false】【NEXT:O/R/I/D】【REASON:一句很短原因或OK】
-
-第二行開始給學生看的內容：
-- 只寫 2 句：第1句接住學生；第2句只問 1 個問題（只出現 1 個問號「？」）
-- 不要編造教材外細節，一律繁體中文
-- 不要提你是 AI / OpenAI
-
-若 PASS=false：第2句用提示式追問（可改寫）：{fallback_question}
-若 PASS=true：第2句問更深入但不跳階
-""".strip()
-
-    def build_genai_feedback_prompts(
-        *,
-        stage: str,
-        text: str,
-        book_pack: Optional[dict[str, Any]],
-    ) -> Tuple[str, str]:
-        book_title = (book_pack or {}).get("book_title", "本週繪本")
-        key_events = (book_pack or {}).get("key_events", [])[:6]
-        key_events_str = " / ".join([str(x) for x in key_events]) if key_events else "（未提供摘要）"
-        sys = f"""
-你是國小高年級的寫作回饋老師。
-你只能用以下摘要，不可編造：
-書名：{book_title}
-摘要：{key_events_str}
-
-你只能輸出純 JSON：
-ok:boolean
-missing:string[]
-suggestions:string[]
-example:string|null
-improved:string|null
-""".strip()
-        user = f"學生原文：\n{text}\n"
-        return sys, user
-
-    def build_writing_d1_prompts(
-        *,
-        stage: str,
-        book_pack: Optional[dict[str, Any]],
-        chat_recent_hint: str,
-    ) -> Tuple[str, str]:
-        book_title = (book_pack or {}).get("book_title", "本週繪本")
-        key_events = (book_pack or {}).get("key_events", [])[:6]
-        key_events_str = " / ".join([str(x) for x in key_events]) if key_events else "（未提供摘要）"
-        sys = f"""
-你是寫作小教練，幫國小高年級學生完成 ORID 寫作。
-書名：{book_title}；階段：{stage}
-只能用摘要：{key_events_str}
-請輸出 80–140 字一段文字，符合該階段，不要條列。
-""".strip()
-        user = f"聊天線索：{chat_recent_hint}\n請直接給草稿內容。"
-        return sys, user
-
-    def build_writing_d2_prompts(
-        *,
-        stage: str,
-        book_pack: Optional[dict[str, Any]],
-        chat_recent_hint: str,
-        base_text: str,
-    ) -> Tuple[str, str]:
-        book_title = (book_pack or {}).get("book_title", "本週繪本")
-        key_events = (book_pack or {}).get("key_events", [])[:6]
-        key_events_str = " / ".join([str(x) for x in key_events]) if key_events else "（未提供摘要）"
-        sys = f"""
-你是寫作小教練，幫學生把 Draft1 改得更清楚、更符合 ORID。
-書名：{book_title}；階段：{stage}
-只能用摘要：{key_events_str}
-
-輸出格式必須是：
-<改寫後的段落>
-{ASSIST_TEXT_SPLIT}
-1) ...
-2) ...
-3) ...
-""".strip()
-        user = f"Draft1：\n{base_text}\n\n聊天線索：{chat_recent_hint}\n"
-        return sys, user
-
-
-# ----------------------------
-# ✅ ORID Checker (safe import with fallback)
-# ----------------------------
 CHECKER_OK = True
 CHECKER_IMPORT_ERROR: Optional[str] = None
 
-try:
-    from app.prompts.orid_checker import (
-        build_orid_checker_prompts,
-        parse_orid_checker_json,
-        clamp_checker_output,
-    )
-except Exception as e:
-    CHECKER_OK = False
-    CHECKER_IMPORT_ERROR = f"{type(e).__name__}: {e}"
-
-    def build_orid_checker_prompts(
-        *,
-        student_text: str,
-        book_pack: Optional[dict[str, Any]],
-        stage: str,
-        message_history: Optional[list[str]] = None,
-        max_history: int = 6,
-    ) -> Tuple[str, str]:
-        bc = build_book_context_block(book_pack)
-        sys = f"你是 ORID Checker（fallback）。只能用 BOOK_CONTEXT，不可編造。\n{bc}\n請輸出純 JSON。"
-        user = f"學生：{student_text}\n"
-        return sys, user
-
-    def parse_orid_checker_json(raw: str) -> Dict[str, Any]:
-        return {}
-
-    def clamp_checker_output(obj: Dict[str, Any]) -> Dict[str, Any]:
-        return {}
+from app.prompts.shared import build_book_context_block
+from app.prompts.orid_chat import build_orid_chat_system_prompt
+from app.prompts.writing_feedback import build_genai_feedback_prompts
+from app.prompts.writing_assist import (
+    ASSIST_TEXT_SPLIT,
+    build_writing_d1_prompts,
+    build_writing_d2_prompts,
+)
+from app.prompts.orid_checker import (
+    build_orid_checker_prompts,
+    parse_orid_checker_json,
+    clamp_checker_output,
+)
+from app.services.safety import check_safety
 
 
 # ----------------------------
@@ -732,6 +584,13 @@ def _control_feedback(stage: str, text: str) -> Tuple[bool, list[str], list[str]
     return ok, missing[:3], suggestions[:3], example
 
 
+class GenAIFeedbackOutput(BaseModel):
+    ok: bool
+    missing: list[str]
+    suggestions: list[str]
+    example: Optional[str]
+    improved: Optional[str]
+
 async def _genai_feedback(
     *,
     stage: str,
@@ -740,41 +599,44 @@ async def _genai_feedback(
 ) -> Tuple[bool, list[str], list[str], Optional[str], Optional[str]]:
     sys, user_msg = build_genai_feedback_prompts(stage=stage, text=text, book_pack=book_pack)
 
-    raw = await _chat_completion(
-        [
+    if client is None:
+        return False, [], [], None, None
+
+    kwargs = {
+        "model": OPENAI_MODEL,
+        "messages": [
             {"role": "system", "content": sys},
             {"role": "user", "content": user_msg},
         ],
-        max_completion_tokens=OPENAI_MAX_COMPLETION_TOKENS,
-        temperature=OPENAI_TEMPERATURE,
-    )
+        "response_format": GenAIFeedbackOutput,
+    }
+    if OPENAI_MAX_COMPLETION_TOKENS is not None:
+        kwargs["max_completion_tokens"] = OPENAI_MAX_COMPLETION_TOKENS
+    if OPENAI_TEMPERATURE is not None:
+        kwargs["temperature"] = OPENAI_TEMPERATURE
 
     try:
-        obj = json.loads(raw)
-    except Exception:
-        m = re.search(r"\{[\s\S]*\}", raw)
-        if m:
-            try:
-                obj = json.loads(m.group(0))
-            except Exception:
-                obj = {}
+        resp = await client.beta.chat.completions.parse(**kwargs)
+    except BadRequestError as e:
+        msg = str(e)
+        if "temperature" in msg and ("unsupported" in msg or "Only the default" in msg):
+            kwargs.pop("temperature", None)
+            resp = await client.beta.chat.completions.parse(**kwargs)
+        elif "max_completion_tokens" in msg and "unsupported" in msg:
+            kwargs.pop("max_completion_tokens", None)
+            resp = await client.beta.chat.completions.parse(**kwargs)
         else:
-            obj = {}
+            raise
 
-    ok = bool(obj.get("ok", False))
-    missing = obj.get("missing", [])
-    suggestions = obj.get("suggestions", [])
-    example = obj.get("example", None)
-    improved = obj.get("improved", None)
+    parsed = resp.choices[0].message.parsed
+    if not parsed:
+        return False, [], [], None, None
 
-    if not isinstance(missing, list):
-        missing = []
-    if not isinstance(suggestions, list):
-        suggestions = []
-    if example is not None and not isinstance(example, str):
-        example = None
-    if improved is not None and not isinstance(improved, str):
-        improved = None
+    ok = bool(parsed.ok)
+    missing = [str(x) for x in parsed.missing] if parsed.missing else []
+    suggestions = [str(x) for x in parsed.suggestions] if parsed.suggestions else []
+    example = str(parsed.example) if parsed.example else None
+    improved = str(parsed.improved) if parsed.improved else None
 
     if (not missing) and (not suggestions):
         ok2, miss2, sug2, ex2 = _control_feedback(stage, text)
@@ -783,7 +645,7 @@ async def _genai_feedback(
         suggestions = suggestions or sug2
         example = example or ex2
 
-    return ok, [str(x) for x in missing][:3], [str(x) for x in suggestions][:3], example, improved
+    return ok, missing[:3], suggestions[:3], example, improved
 
 
 def _ensure_orid_writing_v1(week: int) -> dict[str, Any]:
@@ -905,6 +767,23 @@ async def ensure_session(
     return new_session
 
 
+async def generate_natural_pullback(student_text: str, fallback_q: str, custom_hint: Optional[str] = None) -> str:
+    """Outsources empathy to LLM while strictly defining the fallback question."""
+    if custom_hint:
+        sys = f"你是一位溫暖的國小閱讀老師。學生回答不够完整（原因：{custom_hint}）。請用「短短一句話」自然地承接學生的話並給予鼓勵，然後在第二句話【一字不漏】接上這個問題：{fallback_q}。總計最多兩句話。"
+    else:
+        sys = f"你是一位溫暖幽默的國小閱讀老師。學生剛剛可能離題或閒聊了。請用「短短一句話」自然且帶點幽默地接住他講的話，然後在第二句話【一字不漏】接回這個正軌問題：{fallback_q}。總計最多兩句話。"
+        
+    raw = await _chat_completion(
+        [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": f"學生說：{student_text}"},
+        ],
+        max_completion_tokens=150,
+        temperature=0.7,
+    )
+    return raw.strip() if raw.strip() else f"我們先回到故事。{fallback_q}"
+
 @router.post("/chat", response_model=OridChatResponse)
 async def chat(
     data: OridChatRequest,
@@ -944,24 +823,34 @@ async def chat(
         role = "user" if m.sender == "student" else "assistant"
         history.append({"role": role, "content": m.text})
 
-    # 3) run checker FIRST (gate)
-    msg_texts_for_checker = [m.text for m in msgs[-10:]]
-    checker_obj: dict[str, Any] = {}
-    try:
-        checker_obj = await run_orid_checker(
-            student_text=student_text,
-            book_pack=book_pack,
-            stage=current_stage_before,  # ✅ 重要：不跳階
-            msg_texts=msg_texts_for_checker,
-        )
-    except Exception:
-        checker_obj = {}
+    # 3) run Safety Gate FIRST (Layer 1 & 2)
+    is_unsafe, safety_reason = await check_safety(student_text)
+    
+    if is_unsafe:
+        checker_unsafe = True
+        checker_unsafe_reason = safety_reason
+        checker_off_topic = False
+        checker_reason = ""
+        checker_q = ""
+    else:
+        # LLM Checker (Layer 3: Topic & Flow)
+        msg_texts_for_checker = [m.text for m in msgs[-10:]]
+        checker_obj: dict[str, Any] = {}
+        try:
+            checker_obj = await run_orid_checker(
+                student_text=student_text,
+                book_pack=book_pack,
+                stage=current_stage_before,  # ✅ 重要：不跳階
+                msg_texts=msg_texts_for_checker,
+            )
+        except Exception:
+            checker_obj = {}
 
-    checker_q = (checker_obj or {}).get("suggested_question") or ""
-    checker_off_topic = bool((checker_obj or {}).get("off_topic", False))
-    checker_reason = str((checker_obj or {}).get("reason", "") or "").strip()
-    checker_unsafe = bool((checker_obj or {}).get("unsafe_language", False))
-    checker_unsafe_reason = str((checker_obj or {}).get("unsafe_reason", "") or "").strip()
+        checker_q = (checker_obj or {}).get("suggested_question") or ""
+        checker_off_topic = bool((checker_obj or {}).get("off_topic", False))
+        checker_reason = str((checker_obj or {}).get("reason", "") or "").strip()
+        checker_unsafe = bool((checker_obj or {}).get("unsafe_language", False))
+        checker_unsafe_reason = str((checker_obj or {}).get("unsafe_reason", "") or "").strip()
 
     # 4) fallback question selection (stage-anchored)
     ai_count_same_stage = len([m for m in msgs if m.sender == "ai" and m.stage == current_stage_before])
@@ -997,11 +886,7 @@ async def chat(
     if checker_off_topic and fallback_q:
         pass_ok = False
         reason = checker_reason or "先回到故事內容"
-        kw = _extract_keyword(student_text)
-        final_ai_text = _two_sentence_ack_then_question(
-            f"我有聽到你提到「{kw}」",
-            fallback_q,
-        )
+        final_ai_text = await generate_natural_pullback(student_text, fallback_q)
         db.add(OridMessage(session_id=session.id, stage=current_stage_before, sender="ai", text=final_ai_text))
         await db.commit()
         await db.refresh(session)
@@ -1058,11 +943,10 @@ async def chat(
                 q2 = fallback_q or _sanitize_one_question(
                     pick_prompt_from_bank(book_pack, current_stage_before, ai_count_same_stage + 1)
                 )
-                kw = _extract_keyword(student_text)
-                final_ai_text = _two_sentence_ack_then_question(f"我有聽到你說「{kw}」", q2)
+                final_ai_text = await generate_natural_pullback(student_text, q2)
             else:
                 short_reason = (reason or "再補充一點就更完整了").strip()
-                final_ai_text = _two_sentence_ack_then_question(f"差一點點：{short_reason}", fallback_q)
+                final_ai_text = await generate_natural_pullback(student_text, fallback_q, custom_hint=short_reason)
 
     ai_stage_for_save = session.current_stage if will_advance else current_stage_before
     db.add(OridMessage(session_id=session.id, stage=ai_stage_for_save, sender="ai", text=final_ai_text))

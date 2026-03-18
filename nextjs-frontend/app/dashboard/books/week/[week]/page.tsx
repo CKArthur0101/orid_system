@@ -90,7 +90,6 @@ function buildInitialAiMsg(bookPack: BookPackV1 | null): ChatMsg {
   const title = String(bookPack?.book_title ?? "").trim();
   const events = Array.isArray(bookPack?.key_events) ? bookPack!.key_events!.map(String) : [];
 
-  // 優先用「柿子蒂/陀螺」事件當開場（更貼書）
   const prefer = events.find((x) => x.includes("柿子蒂") || x.includes("陀螺"))?.trim();
   const pick = (prefer || events[0] || "").trim().replaceAll("？", "").replaceAll("?", "");
   const anchor = pick.length > 44 ? pick.slice(0, 44) + "…" : pick;
@@ -138,12 +137,10 @@ export default function WeekBookPage() {
   const [condition, setCondition] = useState<ConditionKey>("genai");
   const [currentStage, setCurrentStage] = useState<string>("O");
 
-  // 強制重新抓 reading（即使 readingId 沒變）
   const [readingReloadNonce, setReadingReloadNonce] = useState(0);
 
   const [bookPack, setBookPack] = useState<BookPackV1 | null>(null);
 
-  // chat
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
@@ -152,7 +149,6 @@ export default function WeekBookPage() {
   const [seededInitial, setSeededInitial] = useState(false);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
-  // writing
   const emptyWriting: OridWritingV1 = useMemo(
     () => ({
       schema: "orid_writing_v1",
@@ -166,6 +162,7 @@ export default function WeekBookPage() {
     }),
     [weekNum]
   );
+
   const [writingData, setWritingData] = useState<OridWritingV1>(emptyWriting);
   const [writingId, setWritingId] = useState<string | null>(null);
   const [writingSubmitting, setWritingSubmitting] = useState(false);
@@ -238,10 +235,8 @@ export default function WeekBookPage() {
     }
   }
 
-  // 首次進頁：URL 有 force_new=1 時，直接開新 session
   const [forceNewOnce] = useState<boolean>(() => getForceNewFromUrl());
 
-  // ensure session
   useEffect(() => {
     if (sessionId) return;
     const ac = new AbortController();
@@ -272,10 +267,8 @@ export default function WeekBookPage() {
     })();
 
     return () => ac.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weekNum, sessionId]);
+  }, [weekNum, sessionId, forceNewOnce]);
 
-  // load chat history
   useEffect(() => {
     if (!sessionId || historyLoaded) return;
     const ac = new AbortController();
@@ -296,8 +289,14 @@ export default function WeekBookPage() {
           : [];
 
         if (mapped.length) {
-          setMessages(mapped);
-          setSeededInitial(false);
+          let finalMapped = mapped;
+          let shouldSeed = false;
+          if (mapped[0].role === "student") {
+            finalMapped = [buildInitialAiMsg(null), ...mapped];
+            shouldSeed = true;
+          }
+          setMessages(finalMapped);
+          setSeededInitial(shouldSeed);
           const last = Array.isArray(list) ? list[list.length - 1] : null;
           if (last?.stage) setCurrentStage(String(last.stage));
         } else {
@@ -317,7 +316,6 @@ export default function WeekBookPage() {
     return () => ac.abort();
   }, [sessionId, historyLoaded]);
 
-  // load reading (book_pack) 支援 content=string 或 content=object
   useEffect(() => {
     if (!readingId) return;
     const ac = new AbortController();
@@ -356,14 +354,15 @@ export default function WeekBookPage() {
     return () => ac.abort();
   }, [readingId, readingReloadNonce]);
 
-  // book_pack 載到後：若目前只有初始句，就替換成貼書版本
   useEffect(() => {
     if (!seededInitial) return;
     if (!bookPack) return;
     setMessages((prev) => {
-      if (prev.length !== 1) return prev;
+      if (prev.length === 0) return prev;
       if (prev[0]?.role !== "ai") return prev;
-      return [buildInitialAiMsg(bookPack)];
+      const copy = [...prev];
+      copy[0] = buildInitialAiMsg(bookPack);
+      return copy;
     });
   }, [bookPack, seededInitial]);
 
@@ -519,13 +518,11 @@ export default function WeekBookPage() {
   const VALUES = ["責任", "同理", "公平", "合作"] as const;
   const FRAMES = ["我感到…因為…", "我認為…因為…", "下次我會…在…"] as const;
 
-  // 高度：跟著視窗拉高，且有最小/最大限制
   const CHAT_H = "h-[calc(100vh-260px)] min-h-[520px] max-h-[860px]";
   const RIGHT_H = "h-[calc(100vh-260px)] min-h-[520px] max-h-[860px]";
 
   return (
     <div className="min-h-screen p-4">
-      {/* 放大容器 + ✅整體字級放大 */}
       <div className="mx-auto w-full max-w-[1400px] 2xl:max-w-[1600px] kid-shell text-[15px] md:text-base">
         <div className="px-6 pt-6">
           <div className="flex items-start justify-between gap-4">
@@ -565,7 +562,6 @@ export default function WeekBookPage() {
           </div>
         </div>
 
-        {/* 平均分配：lg 以上左右 1:1 */}
         <div className="grid grid-cols-1 gap-6 px-6 pb-6 pt-6 lg:grid-cols-2">
           {/* Left: Chat */}
           <div className="rounded-2xl border bg-white flex flex-col">
@@ -660,7 +656,6 @@ export default function WeekBookPage() {
 
             <div className={`${RIGHT_H} overflow-auto`}>
               <div className="grid grid-cols-1 gap-4 p-5 lg:grid-cols-3">
-                {/* Writing boxes */}
                 <div className="lg:col-span-2 space-y-3">
                   {(STAGES.map((s, i) => {
                     const locked = i > unlockedIndex;
@@ -698,7 +693,6 @@ export default function WeekBookPage() {
                   }) as any)}
                 </div>
 
-                {/* Hint panel */}
                 <div className="kid-hint-panel space-y-4">
                   <div className="text-lg md:text-xl font-semibold">寫作支架提示</div>
 
@@ -751,7 +745,18 @@ export default function WeekBookPage() {
                     {fbError && <div className="mt-2 text-sm md:text-base text-red-600">{fbError}</div>}
 
                     {fbNow && (
-                      <div className="mt-3 text-sm md:text-base space-y-2">
+                      <div className="mt-3 text-sm md:text-base space-y-3">
+                        <div
+                          className={[
+                            "rounded-xl border px-3 py-2",
+                            fbNow.ok ? "bg-emerald-50" : "bg-amber-50",
+                          ].join(" ")}
+                        >
+                          {fbNow.ok
+                            ? "這一段已達到基本要求，可以再把內容寫得更完整。"
+                            : "這一段還可以再補強，先看看下面的缺漏與建議。"}
+                        </div>
+
                         {fbNow.missing?.length > 0 && (
                           <div>
                             <div className="font-semibold">缺漏</div>
@@ -774,7 +779,32 @@ export default function WeekBookPage() {
                           </div>
                         )}
 
-                        {draftView === "d1" && String((fbNow as any)?.improved ?? "").trim() && (
+                        {String(fbNow.example ?? "").trim() && (
+                          <div>
+                            <div className="font-semibold">示例參考</div>
+                            <div className="mt-1 rounded-xl border bg-slate-50 p-3 whitespace-pre-wrap leading-relaxed">
+                              {fbNow.example}
+                            </div>
+                          </div>
+                        )}
+
+                        {String(fbNow.improved ?? "").trim() && (
+                          <div>
+                            <div className="font-semibold">可直接參考的改寫版本</div>
+                            <div className="mt-1 rounded-xl border bg-emerald-50 p-3 whitespace-pre-wrap leading-relaxed">
+                              {fbNow.improved}
+                            </div>
+                          </div>
+                        )}
+
+                        {!fbNow.missing?.length &&
+                          !fbNow.suggestions?.length &&
+                          !String(fbNow.example ?? "").trim() &&
+                          !String(fbNow.improved ?? "").trim() && (
+                            <div className="text-muted-foreground">這次回饋沒有可顯示的內容。</div>
+                          )}
+
+                        {draftView === "d1" && String(fbNow.improved ?? "").trim() && (
                           <button
                             type="button"
                             className="mt-1 w-full rounded-xl border bg-white px-3 py-2 text-sm md:text-base hover:bg-muted"
