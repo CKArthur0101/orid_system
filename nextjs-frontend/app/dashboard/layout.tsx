@@ -1,128 +1,69 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
-import { Home, List} from "lucide-react";
-
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { usePathname } from "next/navigation";
+import { BookOpen, Home, LogOut } from "lucide-react";
 import { logout } from "@/components/actions/logout-action";
+
+const NAV_ITEMS = [
+  { href: "/dashboard", label: "首頁", icon: Home },
+  { href: "/dashboard/books", label: "閱讀選單", icon: BookOpen },
+];
 
 export default function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const pathname = usePathname();
+
   return (
-    <div className="flex min-h-screen">
-      <aside className="fixed inset-y-0 left-0 z-10 w-16 flex flex-col border-r bg-background p-4">
-        <div className="flex flex-col items-center gap-8">
-          <Link href="/" className="flex items-center justify-center rounded-full">
-            <Image
-              src="/images/vinta.png"
-              alt="Vinta"
-              width={64}
-              height={64}
-              className="object-cover transition-transform duration-200 hover:scale-105"
-            />
-          </Link>
+    <div className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-amber-50/30">
+      {/* Top navigation */}
+      <header className="sticky top-0 z-30 border-b bg-white/80 backdrop-blur-md shadow-sm">
+        <div className="mx-auto flex h-14 max-w-[1440px] items-center justify-between px-6">
+          <div className="flex items-center gap-6">
+            <Link href="/dashboard" className="flex items-center gap-2">
+              <span className="text-xl">📖</span>
+              <span className="text-base font-bold text-sky-700">AI–ORID 反思對話</span>
+            </Link>
 
-          {/* ✅ ORID Demo（A 新增的入口） */}
-          {/* <Link
-            href="/dashboard/orid-demo"
-            className="flex items-center gap-2 text-muted-foreground hover:text-foreground"
-            title="ORID Demo"
-          >
-            <MessageSquare className="h-5 w-5" />
-          </Link> */}
-
-          <Link
-            href="/dashboard"
-            className="flex items-center gap-2 text-muted-foreground hover:text-foreground"
-            title="Dashboard"
-          >
-            <List className="h-5 w-5" />
-          </Link>
-
-          {/* <Link
-            href="/customers"
-            className="flex items-center gap-2 text-muted-foreground hover:text-foreground"
-            title="Customers"
-          >
-            <Users2 className="h-5 w-5" />
-          </Link> */}
-        </div>
-      </aside>
-
-      <main className="ml-16 w-full p-8 bg-muted/40">
-        <header className="flex justify-between items-center mb-6">
-          <Breadcrumb>
-            <BreadcrumbList>
-              <BreadcrumbItem>
-                <BreadcrumbLink asChild>
-                  <Link href="/" className="flex items-center gap-2">
-                    <Home className="h-4 w-4" />
-                    <span>Home</span>
-                  </Link>
-                </BreadcrumbLink>
-              </BreadcrumbItem>
-              <BreadcrumbSeparator>/</BreadcrumbSeparator>
-              <BreadcrumbItem>
-                <BreadcrumbLink asChild>
-                  <Link href="/dashboard" className="flex items-center gap-2">
-                    <List className="h-4 w-4" />
-                    <span>Dashboard</span>
-                  </Link>
-                </BreadcrumbLink>
-              </BreadcrumbItem>
-            </BreadcrumbList>
-          </Breadcrumb>
-
-          <div className="relative">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button className="flex items-center justify-center w-10 h-10 rounded-full bg-gray-300 hover:bg-gray-400">
-                  <Avatar>
-                    <AvatarFallback>U</AvatarFallback>
-                  </Avatar>
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" side="bottom">
-                <DropdownMenuItem>
+            <nav className="hidden items-center gap-1 sm:flex">
+              {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
+                const active =
+                  href === "/dashboard"
+                    ? pathname === "/dashboard"
+                    : pathname.startsWith(href);
+                return (
                   <Link
-                    href="/support"
-                    className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                    key={href}
+                    href={href}
+                    className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-[15px] font-medium transition ${
+                      active
+                        ? "bg-sky-100 text-sky-700"
+                        : "text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                    }`}
                   >
-                    Support
+                    <Icon className="h-4 w-4" />
+                    {label}
                   </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem>
-                  <button
-                    onClick={logout}
-                    className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                  >
-                    Logout
-                  </button>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+                );
+              })}
+            </nav>
           </div>
-        </header>
 
-        <section className="grid gap-6">{children}</section>
-      </main>
+          <button
+            onClick={() => logout()}
+            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-slate-500 hover:bg-red-50 hover:text-red-600 transition"
+          >
+            <LogOut className="h-4 w-4" />
+            <span className="hidden sm:inline">登出</span>
+          </button>
+        </div>
+      </header>
+
+      {/* Content */}
+      <main className="mx-auto max-w-[1440px] px-6 py-6">{children}</main>
     </div>
   );
 }

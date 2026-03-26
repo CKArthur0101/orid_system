@@ -1,16 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-
 import { login } from "@/components/actions/login-action";
 import { useActionState } from "react";
 import { SubmitButton } from "@/components/ui/submitButton";
@@ -20,145 +12,124 @@ export default function Page() {
   const [state, dispatch] = useActionState(login, undefined);
 
   return (
-    <div className="relative min-h-screen w-full overflow-hidden bg-slate-950 px-4">
-      {/* 背景：深藍漸層 + 霧化光暈 */}
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute inset-0 bg-[radial-gradient(1000px_600px_at_50%_-10%,rgba(56,189,248,0.18),transparent_60%),radial-gradient(900px_520px_at_10%_30%,rgba(99,102,241,0.14),transparent_60%),radial-gradient(900px_520px_at_90%_70%,rgba(236,72,153,0.10),transparent_60%)]" />
-        <div className="absolute inset-0 opacity-60 [background-image:radial-gradient(rgba(255,255,255,0.06)_1px,transparent_1px)] [background-size:18px_18px]" />
-      </div>
+    <div className="relative flex min-h-screen w-full flex-col items-center justify-center overflow-hidden bg-gradient-to-br from-sky-50 via-white to-amber-50/30 px-4">
+      {/* Floating decorations */}
+      <FloatingDecor />
 
-      {/* 四角裝飾（閱讀/對話/SEL 風格） */}
-      <ReadingDecor />
+      {/* Login card */}
+      <div className="relative z-10 w-full max-w-md">
+        {/* Logo area */}
+        <div className="mb-6 text-center">
+          <div className="mx-auto mb-3 flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-400 to-blue-600 shadow-lg shadow-sky-200">
+            <span className="text-4xl">📖</span>
+          </div>
+          <h1 className="text-2xl font-bold text-slate-800">AI–ORID 反思對話</h1>
+          <p className="mt-1 text-sm text-slate-500">閱讀、思考、對話、寫作</p>
+        </div>
 
-      {/* 置中登入卡 */}
-      <div className="relative flex min-h-screen w-full items-center justify-center">
-        <form action={dispatch} className="w-full max-w-sm">
-          <Card className="rounded-2xl border border-white/10 bg-white/10 shadow-[0_20px_80px_rgba(0,0,0,0.35)] backdrop-blur-xl">
-            <CardHeader className="text-center pb-4">
-              {/* 發光標題 */}
-              <div className="mx-auto mb-2 inline-flex items-center justify-center rounded-2xl px-3 py-2">
-                <div className="text-2xl font-semibold tracking-tight text-white drop-shadow-[0_0_18px_rgba(56,189,248,0.35)]">
-                  AI–ORID 反思對話系統
-                </div>
-              </div>
+        <form
+          action={dispatch}
+          className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/50 sm:p-8"
+        >
+          <h2 className="mb-1 text-center text-lg font-bold text-slate-700">
+            歡迎回來！
+          </h2>
+          <p className="mb-6 text-center text-sm text-slate-500">
+            輸入你的帳號密碼登入系統
+          </p>
 
-              <CardTitle className="text-xl font-semibold text-white">
-                系統登入
-              </CardTitle>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="username" className="text-sm font-medium text-slate-600">
+                電子郵件
+              </Label>
+              <Input
+                id="username"
+                name="username"
+                type="email"
+                placeholder="例如：student@example.com"
+                required
+                className="h-11 rounded-xl border-slate-200 bg-slate-50 text-slate-800 placeholder:text-slate-400 focus-visible:ring-2 focus-visible:ring-sky-400/50 focus-visible:border-sky-400"
+              />
+              <FieldError state={state} field="username" />
+            </div>
 
-              <CardDescription className="text-sm text-white/70">
-                請輸入你的電子郵件與密碼登入。
-              </CardDescription>
-            </CardHeader>
-
-            <CardContent className="grid gap-5 p-6 pt-2">
-              <div className="grid gap-2">
-                <Label htmlFor="username" className="text-white/80">
-                  電子郵件
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="password" className="text-sm font-medium text-slate-600">
+                  密碼
                 </Label>
-                <Input
-                  id="username"
-                  name="username"
-                  type="email"
-                  placeholder="例如：student@example.com"
-                  required
-                  className="h-11 rounded-xl border-white/10 bg-white/10 text-white placeholder:text-white/40 focus-visible:ring-2 focus-visible:ring-sky-400/60"
-                />
-                <FieldError state={state} field="username" />
-              </div>
-
-              <div className="grid gap-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="password" className="text-white/80">
-                    密碼
-                  </Label>
-                  <Link
-                    href="/password-recovery"
-                    className="text-xs text-sky-300 hover:text-sky-200"
-                  >
-                    忘記密碼？
-                  </Link>
-                </div>
-
-                <Input
-                  id="password"
-                  name="password"
-                  type="password"
-                  required
-                  className="h-11 rounded-xl border-white/10 bg-white/10 text-white placeholder:text-white/40 focus-visible:ring-2 focus-visible:ring-sky-400/60"
-                />
-                <FieldError state={state} field="password" />
-              </div>
-
-              {/* 讓你原本的 SubmitButton 保持可用 */}
-              <div className="[&>button]:h-11 [&>button]:w-full [&>button]:rounded-xl [&>button]:bg-sky-500 [&>button]:text-white [&>button:hover]:bg-sky-400 [&>button]:shadow-[0_12px_30px_rgba(56,189,248,0.25)]">
-                <SubmitButton text="登入" />
-              </div>
-
-              <FormError state={state} />
-
-              <div className="mt-1 text-center text-sm text-white/70">
-                還沒有帳號嗎？{" "}
-                <Link href="/register" className="text-sky-300 hover:text-sky-200">
-                  註冊
+                <Link
+                  href="/password-recovery"
+                  className="text-xs text-sky-500 hover:text-sky-600"
+                >
+                  忘記密碼？
                 </Link>
               </div>
+              <Input
+                id="password"
+                name="password"
+                type="password"
+                required
+                className="h-11 rounded-xl border-slate-200 bg-slate-50 text-slate-800 placeholder:text-slate-400 focus-visible:ring-2 focus-visible:ring-sky-400/50 focus-visible:border-sky-400"
+              />
+              <FieldError state={state} field="password" />
+            </div>
 
-              <div className="text-center text-[11px] text-white/45">
-                提示：本系統將引導你依 ORID（客觀→感受→意義→行動）完成反思。
-              </div>
-            </CardContent>
-          </Card>
+            <div className="pt-1 [&>button]:h-11 [&>button]:w-full [&>button]:rounded-xl [&>button]:bg-gradient-to-r [&>button]:from-sky-500 [&>button]:to-blue-600 [&>button]:text-white [&>button]:font-semibold [&>button]:shadow-md [&>button]:shadow-sky-200 [&>button:hover]:from-sky-400 [&>button:hover]:to-blue-500 [&>button]:transition-all">
+              <SubmitButton text="登入" />
+            </div>
+
+            <FormError state={state} />
+
+            <div className="text-center text-sm text-slate-500">
+              還沒有帳號嗎？{" "}
+              <Link href="/register" className="font-medium text-sky-500 hover:text-sky-600">
+                註冊
+              </Link>
+            </div>
+          </div>
         </form>
+
+        {/* ORID steps hint */}
+        <div className="mt-6 flex items-center justify-center gap-3 text-slate-400">
+          {[
+            { icon: "📖", label: "閱讀" },
+            { icon: "💬", label: "對話" },
+            { icon: "✍️", label: "寫作" },
+            { icon: "💡", label: "反思" },
+          ].map(({ icon, label }, i) => (
+            <div key={label} className="flex items-center gap-1">
+              {i > 0 && <span className="mr-2 text-slate-300">→</span>}
+              <span className="text-lg">{icon}</span>
+              <span className="text-xs">{label}</span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
 }
 
-function ReadingDecor() {
+function FloatingDecor() {
   return (
-    <div className="pointer-events-none absolute inset-0">
-      {/* 左上：對話 */}
-      <div className="absolute left-8 top-6 opacity-80">
-        <div className="text-6xl drop-shadow-[0_0_18px_rgba(56,189,248,0.28)]">
-          💬
-        </div>
-      </div>
+    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+      {/* Top-left blob */}
+      <div className="absolute -left-20 -top-20 h-64 w-64 rounded-full bg-sky-200/40 blur-3xl" />
+      {/* Top-right blob */}
+      <div className="absolute -right-16 -top-16 h-56 w-56 rounded-full bg-amber-200/30 blur-3xl" />
+      {/* Bottom-left blob */}
+      <div className="absolute -bottom-16 -left-16 h-48 w-48 rounded-full bg-emerald-200/25 blur-3xl" />
+      {/* Bottom-right blob */}
+      <div className="absolute -bottom-20 -right-20 h-60 w-60 rounded-full bg-violet-200/25 blur-3xl" />
 
-      {/* 左中：繪本 */}
-      <div className="absolute left-10 top-40 opacity-85">
-        <div className="text-6xl drop-shadow-[0_0_18px_rgba(251,191,36,0.18)]">
-          📖
-        </div>
-      </div>
-
-      {/* 左下：寫作 */}
-      <div className="absolute bottom-10 left-10 opacity-85">
-        <div className="text-6xl drop-shadow-[0_0_18px_rgba(236,72,153,0.16)]">
-          ✏️
-        </div>
-      </div>
-
-      {/* 右上：靈感 */}
-      <div className="absolute right-10 top-8 opacity-80">
-        <div className="text-6xl drop-shadow-[0_0_18px_rgba(34,197,94,0.16)]">
-          ✨
-        </div>
-      </div>
-
-      {/* 右中：同理/情緒 */}
-      <div className="absolute right-12 top-44 opacity-85">
-        <div className="text-6xl drop-shadow-[0_0_18px_rgba(244,63,94,0.16)]">
-          🫶
-        </div>
-      </div>
-
-      {/* 右下：思考 */}
-      <div className="absolute bottom-10 right-10 opacity-85">
-        <div className="text-6xl drop-shadow-[0_0_18px_rgba(249,115,22,0.14)]">
-          🧠
-        </div>
-      </div>
+      {/* Scattered emojis */}
+      <div className="absolute left-[8%] top-[15%] text-4xl opacity-20 sm:text-5xl">📖</div>
+      <div className="absolute right-[10%] top-[12%] text-4xl opacity-15 sm:text-5xl">✨</div>
+      <div className="absolute left-[5%] bottom-[18%] text-4xl opacity-15 sm:text-5xl">✏️</div>
+      <div className="absolute right-[8%] bottom-[15%] text-4xl opacity-15 sm:text-5xl">💬</div>
+      <div className="absolute left-[45%] top-[8%] text-3xl opacity-10 sm:text-4xl">🌟</div>
+      <div className="absolute right-[35%] bottom-[10%] text-3xl opacity-10 sm:text-4xl">🦋</div>
     </div>
   );
 }

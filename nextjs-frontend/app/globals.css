@@ -70,33 +70,41 @@
   }
 }
 
-/* 小工具 class：讓 page.tsx 更像你參考圖 */
 @layer components {
   .kid-shell {
-    @apply rounded-[26px] border bg-white shadow-sm;
+    @apply rounded-2xl bg-white shadow-md border border-slate-200;
   }
   .kid-pill {
-    @apply inline-flex items-center justify-center rounded-full border px-4 py-2 text-xs font-medium;
+    @apply inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-1.5 text-sm font-medium text-slate-500 transition-all;
   }
   .kid-pill-active {
-    @apply bg-primary text-primary-foreground border-primary;
+    @apply bg-gradient-to-r from-sky-500 to-blue-600 text-white border-transparent shadow-sm;
   }
   .kid-bubble-ai {
-    @apply rounded-2xl border bg-sky-100 px-4 py-3 text-sm leading-relaxed;
+    @apply rounded-2xl bg-sky-50 border border-sky-200 px-4 py-3 text-[15px] leading-relaxed text-slate-700;
   }
   .kid-bubble-student {
-    @apply rounded-2xl border bg-emerald-100 px-4 py-3 text-sm leading-relaxed;
+    @apply rounded-2xl bg-gradient-to-br from-sky-500 to-blue-600 px-4 py-3 text-[15px] leading-relaxed text-white;
   }
   .kid-box {
-    @apply rounded-2xl border bg-white p-4;
+    @apply rounded-xl border border-slate-200 bg-slate-50/50 p-4;
   }
   .kid-box-blue {
-    @apply border-primary/50;
+    @apply border-sky-200 bg-sky-50/30;
   }
   .kid-hint-panel {
-    @apply rounded-2xl border bg-amber-50 p-4;
+    @apply rounded-xl border border-amber-200 bg-amber-50/60 p-4;
   }
   .kid-chip {
-    @apply inline-flex items-center rounded-full border bg-white px-3 py-1 text-xs;
+    @apply inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-sm text-sky-700 font-medium;
+  }
+  .kid-section-header {
+    @apply flex items-center gap-2 rounded-t-xl bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-3 text-white;
+  }
+  .kid-btn-primary {
+    @apply rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-2.5 text-[15px] font-semibold text-white shadow-md shadow-sky-200 transition-all hover:from-sky-400 hover:to-blue-500 disabled:opacity-50;
+  }
+  .kid-btn-secondary {
+    @apply rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-[15px] font-semibold text-slate-600 shadow-sm transition-all hover:bg-slate-50 disabled:opacity-50;
   }
 }

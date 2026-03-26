@@ -831,344 +831,393 @@ export default function WeekBookPage() {
   const VALUES = ["責任", "同理", "公平", "合作"] as const;
   const FRAMES = ["我感到…因為…", "我認為…因為…", "下次我會…在…"] as const;
 
-  const CHAT_H = "h-[calc(100vh-260px)] min-h-[520px] max-h-[860px]";
-  const RIGHT_H = "h-[calc(100vh-260px)] min-h-[520px] max-h-[860px]";
+  const CHAT_H = "h-[calc(100vh-300px)] min-h-[480px] max-h-[800px]";
+  const RIGHT_H = "h-[calc(100vh-300px)] min-h-[480px] max-h-[800px]";
+
+  const STAGE_COLORS: Record<StageKey, string> = {
+    O: "from-sky-400 to-sky-500",
+    R: "from-amber-400 to-orange-500",
+    I: "from-emerald-400 to-teal-500",
+    D: "from-violet-400 to-purple-500",
+  };
+
+  const STAGE_EMOJI: Record<StageKey, string> = { O: "👀", R: "💭", I: "💡", D: "🎯" };
 
   return (
-    <div className="min-h-screen p-4">
-      <div className="mx-auto w-full max-w-[1400px] 2xl:max-w-[1600px] kid-shell text-[15px] md:text-base">
-        <div className="px-6 pt-6">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <div className="text-3xl font-bold">AI–ORID 反思對話</div>
-              <div className="text-base text-muted-foreground">
-                第 1 週｜閱讀 → ORID 對話 → 反思寫作
-                {bookPack?.book_title ? `｜本週繪本：${bookPack.book_title}` : ""}
-              </div>
-            </div>
-            <div className="flex items-center gap-3 text-sm text-muted-foreground">
-              {loading ? "初始化中…" : error ? <span className="text-red-600">{error}</span> : `condition：${condition}`}
-              <button
-                type="button"
-                onClick={restartWeek}
-                disabled={loading}
-                className="rounded-full border bg-white px-4 py-2 text-sm md:text-base hover:bg-muted disabled:opacity-50"
-                title="開新 session、清空聊天與寫作（demo 用）"
-              >
-                重新開始本週
-              </button>
-            </div>
+    <div className="space-y-5">
+      {/* Hero banner */}
+      <div className="rounded-2xl bg-gradient-to-r from-sky-500 to-blue-600 px-8 py-6 text-white shadow-lg sm:px-10">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold sm:text-3xl">📖 AI–ORID 反思對話</h1>
+            <p className="mt-1 text-base text-sky-100">
+              第 {weekNum} 週｜閱讀 → ORID 對話 → 反思寫作
+              {bookPack?.book_title ? `｜${bookPack.book_title}` : ""}
+            </p>
           </div>
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            {STAGES.map((s) => {
-              const active = currentStage === s.key;
-              return (
-                <span
-                  key={s.key}
-                  className={["kid-pill text-sm md:text-base", active ? "kid-pill-active" : "bg-white/70"].join(" ")}
-                >
-                  {s.label}
-                </span>
-              );
-            })}
+          <div className="flex items-center gap-3">
+            {loading ? (
+              <span className="text-sm text-sky-200">初始化中…</span>
+            ) : error ? (
+              <span className="rounded-lg bg-red-500/20 px-3 py-1 text-sm text-white">{error}</span>
+            ) : (
+              <span className="rounded-full bg-white/20 px-3 py-1 text-xs backdrop-blur-sm">{condition}</span>
+            )}
+            <button
+              type="button"
+              onClick={restartWeek}
+              disabled={loading}
+              className="rounded-xl bg-white/20 px-4 py-2 text-sm font-medium backdrop-blur-sm transition hover:bg-white/30 disabled:opacity-50"
+              title="開新 session、清空聊天與寫作（demo 用）"
+            >
+              重新開始本週
+            </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-6 px-6 pb-6 pt-6 lg:grid-cols-2">
-          <div className="rounded-2xl border bg-white flex flex-col">
-            <div className="border-b px-5 py-4">
-              <div className="text-lg md:text-xl font-semibold">AI–ORID 反思對話</div>
-            </div>
+        {/* Stage progress pills */}
+        <div className="mt-4 flex flex-wrap gap-2">
+          {STAGES.map((s, i) => {
+            const active = currentStage === s.key;
+            const done = i < idxOfStage(currentStage || "O");
+            return (
+              <span
+                key={s.key}
+                className={[
+                  "inline-flex items-center gap-1.5 rounded-full px-4 py-1.5 text-[15px] font-medium transition-all",
+                  active
+                    ? "bg-white text-sky-700 shadow-md"
+                    : done
+                      ? "bg-white/30 text-white"
+                      : "bg-white/10 text-sky-200",
+                ].join(" ")}
+              >
+                <span>{STAGE_EMOJI[s.key]}</span>
+                {s.label}
+              </span>
+            );
+          })}
+        </div>
+      </div>
 
-            <div className={`${CHAT_H} overflow-auto p-5 space-y-3 bg-white`}>
-              {messages.length === 0 ? (
-                <div className="text-base text-muted-foreground">{historyLoaded ? "尚無訊息" : "載入中…"}</div>
-              ) : (
-                messages.map((m, idx) => {
-                  const isStudent = m.role === "student";
-                  return (
-                    <div
-                      key={idx}
-                      className={["flex items-end gap-3", isStudent ? "justify-end" : "justify-start"].join(" ")}
-                    >
-                      {!isStudent && (
-                        <div className="h-10 w-10 rounded-full border bg-white flex items-center justify-center text-lg">
-                          🤖
-                        </div>
-                      )}
-                      <div className={isStudent ? "kid-bubble-student max-w-[78%]" : "kid-bubble-ai max-w-[78%]"}>
-                        <div className="whitespace-pre-wrap text-base md:text-lg leading-relaxed">{m.text}</div>
-                      </div>
-                      {isStudent && (
-                        <div className="h-10 w-10 rounded-full border bg-white flex items-center justify-center text-lg">
-                          🧒
-                        </div>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-              <div ref={chatEndRef} />
-            </div>
-
-            <div className="border-t p-4">
-              <div className="flex items-center gap-2">
-                <div className="flex-1 rounded-full border bg-white px-4 py-3 flex items-center gap-2">
-                  <input
-                    className="flex-1 bg-transparent text-base md:text-lg outline-none"
-                    placeholder={canChat ? "請輸入你的回應…" : "初始化中…"}
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    disabled={!canChat || chatLoading}
-                  />
-                  <span className="text-muted-foreground text-lg">🎤</span>
-                </div>
-
-                <button
-                  onClick={sendChat}
-                  disabled={!canChat || chatLoading || !input.trim()}
-                  className="rounded-full bg-primary px-6 py-3 text-base md:text-lg text-primary-foreground disabled:opacity-50"
-                >
-                  {chatLoading ? "送出中…" : "送出"}
-                </button>
-              </div>
-
-              {chatError && <div className="mt-2 text-base text-red-600 whitespace-pre-wrap">{chatError}</div>}
-            </div>
+      {/* Main two-column layout */}
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        {/* === LEFT: Chat === */}
+        <div className="kid-shell flex flex-col overflow-hidden">
+          <div className="kid-section-header">
+            <span className="text-xl">💬</span>
+            <span className="text-base font-bold">AI–ORID 反思對話</span>
           </div>
 
-          <div className="rounded-2xl border bg-white flex flex-col">
-            <div className="border-b px-5 py-4 flex items-center justify-between">
-              <div className="text-lg md:text-xl font-semibold">反思寫作（結構化）</div>
-
-              <div className="flex gap-2">
-                <button
-                  className={["kid-pill text-sm md:text-base", draftView === "d1" ? "kid-pill-active" : "bg-white"].join(" ")}
-                  onClick={() => setDraftView("d1")}
-                  type="button"
-                >
-                  草稿 1
-                </button>
-                <button
-                  className={["kid-pill text-sm md:text-base", draftView === "d2" ? "kid-pill-active" : "bg-white"].join(" ")}
-                  onClick={() => setDraftView("d2")}
-                  type="button"
-                >
-                  草稿 2
-                </button>
+          <div className={`${CHAT_H} flex-1 overflow-auto bg-gradient-to-b from-slate-50 to-white p-5 space-y-3`}>
+            {messages.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-sm text-slate-400">
+                {historyLoaded ? "尚無訊息，開始聊天吧！" : "載入中…"}
               </div>
-            </div>
-
-            <div className={`${RIGHT_H} overflow-auto`}>
-              <div className="grid grid-cols-1 gap-4 p-5 lg:grid-cols-3">
-                <div className="lg:col-span-2 space-y-3">
-                  {STAGES.map((s, i) => {
-                    const locked = i > unlockedIndex;
-                    const stage = s.key;
-
-                    return (
-                      <div key={stage} className={["kid-box kid-box-blue", locked ? "opacity-60" : ""].join(" ")}>
-                        <div className="flex items-center justify-between">
-                          <div className="text-base md:text-lg font-semibold">{STAGE_TITLES[stage]}</div>
-                          <button type="button" className="text-xl" title="提示/回饋" onClick={() => setFocusStage(stage)}>
-                            💡
-                          </button>
-                        </div>
-
-                        <textarea
-                          className="mt-3 w-full min-h-[110px] rounded-xl border bg-white p-4 text-base md:text-lg leading-relaxed outline-none"
-                          placeholder={STAGE_PLACEHOLDER[stage]}
-                          disabled={locked}
-                          value={writingData.stages[stage][draftView]}
-                          onFocus={() => setFocusStage(stage)}
-                          onChange={(e) =>
-                            setWritingData((prev) => ({
-                              ...prev,
-                              stages: {
-                                ...prev.stages,
-                                [stage]: { ...prev.stages[stage], [draftView]: e.target.value },
-                              },
-                            }))
-                          }
-                        />
-
-                        {locked && <div className="mt-2 text-sm text-muted-foreground">先完成前面對話再寫這一段喔。</div>}
+            ) : (
+              messages.map((m, idx) => {
+                const isStudent = m.role === "student";
+                return (
+                  <div
+                    key={idx}
+                    className={["flex items-end gap-2.5", isStudent ? "justify-end" : "justify-start"].join(" ")}
+                  >
+                    {!isStudent && (
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-100 text-base shadow-sm">
+                        🤖
                       </div>
-                    );
-                  })}
-                </div>
-
-                <div className="kid-hint-panel space-y-4">
-                  <div className="text-lg md:text-xl font-semibold">寫作支架提示</div>
-
-                  {hintsLoading[focusStage] && (
-                    <div className="rounded-xl border bg-orange-50/50 p-4 text-center text-sm md:text-base text-orange-700 animate-pulse shadow-sm">
-                      正在替你整理聊天重點當作靈感...
+                    )}
+                    <div className={["max-w-[78%]", isStudent ? "kid-bubble-student" : "kid-bubble-ai"].join(" ")}>
+                      <div className="whitespace-pre-wrap text-[15px] leading-relaxed">{m.text}</div>
                     </div>
-                  )}
-
-                  <div className="rounded-xl bg-orange-50 border border-orange-200 p-4 shadow-sm">
-                    <div className="text-sm md:text-base font-bold text-orange-800 mb-2 flex items-center gap-2">
-                      <span>💡</span> 你剛剛聊到的重點
-                    </div>
-                    <ul className="list-disc pl-5 space-y-1 text-sm md:text-base text-orange-900 leading-relaxed">
-                      {displayHints.map((hint, idx) => (
-                        <li key={idx}>{hint}</li>
-                      ))}
-                    </ul>
-                  </div>
-
-                  <div>
-                    <div className="text-sm md:text-base font-medium mb-2">情緒詞彙提示</div>
-                    <div className="flex flex-wrap gap-2">
-                      {EMOTION.map((t) => (
-                        <span key={t} className="kid-chip text-sm md:text-base">
-                          {t}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="text-sm md:text-base font-medium mb-2">價值詞彙提示</div>
-                    <div className="flex flex-wrap gap-2">
-                      {VALUES.map((t) => (
-                        <span key={t} className="kid-chip text-sm md:text-base">
-                          {t}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="text-sm md:text-base font-medium mb-2">句型提示</div>
-                    <div className="space-y-2">
-                      {FRAMES.map((t, i) => (
-                        <div key={i} className="rounded-xl border bg-white p-3 text-sm md:text-base leading-relaxed">
-                          {t}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border bg-white p-3">
-                    <div className="flex items-center justify-between">
-                      <div className="text-base md:text-lg font-semibold">回饋（本段：{focusStage}）</div>
-                      <button
-                        type="button"
-                        className="rounded-full bg-primary px-4 py-2 text-sm md:text-base text-primary-foreground disabled:opacity-50"
-                        disabled={!sessionId || fbLoading}
-                        onClick={() => runFeedback(focusStage, draftView)}
-                      >
-                        {fbLoading ? "回饋中…" : "取得回饋"}
-                      </button>
-                    </div>
-
-                    {fbError && <div className="mt-2 text-sm md:text-base text-red-600 whitespace-pre-wrap">{fbError}</div>}
-
-                    {fbNow && (
-                      <div className="mt-3 text-sm md:text-base space-y-3">
-                        <div
-                          className={[
-                            "rounded-xl border px-3 py-2",
-                            fbNow.ok ? "bg-emerald-50" : "bg-amber-50",
-                          ].join(" ")}
-                        >
-                          {fbNow.ok
-                            ? "這一段已達到基本要求，可以再把內容寫得更完整。"
-                            : "這一段還可以再補強，先看看下面的缺漏與建議。"}
-                        </div>
-
-                        {fbNow.missing?.length > 0 && (
-                          <div>
-                            <div className="font-semibold">缺漏</div>
-                            <ul className="list-disc pl-5">
-                              {fbNow.missing.map((x, i) => (
-                                <li key={i}>{x}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-
-                        {fbNow.suggestions?.length > 0 && (
-                          <div>
-                            <div className="font-semibold">建議</div>
-                            <ul className="list-disc pl-5">
-                              {fbNow.suggestions.map((x, i) => (
-                                <li key={i}>{x}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-
-                        {!isControlConditionValue(fbNow.meta?.condition ?? condition) && String(fbNow.example ?? "").trim() && (
-                          <div>
-                            <div className="font-semibold">示例參考</div>
-                            <div className="mt-1 rounded-xl border bg-slate-50 p-3 whitespace-pre-wrap leading-relaxed">
-                              {fbNow.example}
-                            </div>
-                          </div>
-                        )}
-
-                        {String(fbNow.improved ?? "").trim() && (
-                          <div>
-                            <div className="font-semibold">可直接參考的改寫版本</div>
-                            <div className="mt-1 rounded-xl border bg-emerald-50 p-3 whitespace-pre-wrap leading-relaxed">
-                              {fbNow.improved}
-                            </div>
-                          </div>
-                        )}
-
-                        {!fbNow.missing?.length &&
-                          !fbNow.suggestions?.length &&
-                          !String(fbNow.example ?? "").trim() &&
-                          !String(fbNow.improved ?? "").trim() && (
-                            <div className="text-muted-foreground">這次回饋沒有可顯示的內容。</div>
-                          )}
-
-                        {draftView === "d1" && String(fbNow.improved ?? "").trim() && (
-                          <button
-                            type="button"
-                            className="mt-1 w-full rounded-xl border bg-white px-3 py-2 text-sm md:text-base hover:bg-muted"
-                            onClick={() => applyImprovedToDraft2(focusStage)}
-                          >
-                            一鍵套用到「草稿 2」
-                          </button>
-                        )}
+                    {isStudent && (
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-100 text-base shadow-sm">
+                        🧒
                       </div>
                     )}
                   </div>
+                );
+              })
+            )}
+            <div ref={chatEndRef} />
+          </div>
 
-                  <div className="flex gap-2 pt-2">
+          <div className="border-t border-slate-200 bg-white p-4">
+            <div className="flex items-center gap-2">
+              <input
+                className="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-[15px] outline-none placeholder:text-slate-400 focus:border-sky-400 focus:ring-2 focus:ring-sky-400/30"
+                placeholder={canChat ? "輸入你的回應…" : "初始化中…"}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                disabled={!canChat || chatLoading}
+              />
+              <button
+                onClick={sendChat}
+                disabled={!canChat || chatLoading || !input.trim()}
+                className="kid-btn-primary whitespace-nowrap"
+              >
+                {chatLoading ? "送出中…" : "送出"}
+              </button>
+            </div>
+            {chatError && <div className="mt-2 text-sm text-red-600 whitespace-pre-wrap">{chatError}</div>}
+          </div>
+        </div>
+
+        {/* === RIGHT: Writing + hints === */}
+        <div className="kid-shell flex flex-col overflow-hidden">
+          <div className="kid-section-header justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-xl">✍️</span>
+              <span className="text-base font-bold">反思寫作</span>
+            </div>
+            <div className="flex gap-1.5">
+              {(["d1", "d2"] as DraftKey[]).map((dk) => (
+                <button
+                  key={dk}
+                  className={[
+                    "rounded-full px-3 py-1 text-xs font-medium transition-all",
+                    draftView === dk ? "bg-white text-sky-700 shadow" : "bg-white/20 text-sky-100 hover:bg-white/30",
+                  ].join(" ")}
+                  onClick={() => setDraftView(dk)}
+                  type="button"
+                >
+                  {dk === "d1" ? "草稿 1" : "草稿 2"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className={`${RIGHT_H} flex-1 overflow-auto`}>
+            <div className="grid grid-cols-1 gap-5 p-5 xl:grid-cols-5">
+              {/* Writing areas */}
+              <div className="xl:col-span-3 space-y-4">
+                {STAGES.map((s, i) => {
+                  const locked = i > unlockedIndex;
+                  const stage = s.key;
+                  const isFocused = focusStage === stage;
+
+                  return (
+                    <div
+                      key={stage}
+                      className={[
+                        "rounded-xl border p-4 transition-all",
+                        locked
+                          ? "border-slate-200 bg-slate-50 opacity-50"
+                          : isFocused
+                            ? "border-sky-300 bg-sky-50/40 shadow-sm ring-1 ring-sky-200"
+                            : "border-slate-200 bg-white hover:border-sky-200",
+                      ].join(" ")}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`inline-flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br ${STAGE_COLORS[stage]} text-sm text-white`}
+                          >
+                            {STAGE_EMOJI[stage]}
+                          </span>
+                          <span className="text-[15px] font-bold text-slate-700">{STAGE_TITLES[stage]}</span>
+                        </div>
+                        {!locked && (
+                          <button
+                            type="button"
+                            className="rounded-lg p-1 text-slate-400 transition hover:bg-sky-50 hover:text-sky-600"
+                            title="查看提示與回饋"
+                            onClick={() => setFocusStage(stage)}
+                          >
+                            💡
+                          </button>
+                        )}
+                      </div>
+
+                      <textarea
+                        className="mt-3 w-full min-h-[100px] rounded-lg border border-slate-200 bg-white p-3 text-[15px] leading-relaxed outline-none placeholder:text-slate-400 focus:border-sky-400 focus:ring-2 focus:ring-sky-400/20 disabled:bg-slate-100"
+                        placeholder={STAGE_PLACEHOLDER[stage]}
+                        disabled={locked}
+                        value={writingData.stages[stage][draftView]}
+                        onFocus={() => setFocusStage(stage)}
+                        onChange={(e) =>
+                          setWritingData((prev) => ({
+                            ...prev,
+                            stages: {
+                              ...prev.stages,
+                              [stage]: { ...prev.stages[stage], [draftView]: e.target.value },
+                            },
+                          }))
+                        }
+                      />
+
+                      {locked && (
+                        <p className="mt-2 text-xs text-slate-400">🔒 先完成前面的對話再寫這一段喔</p>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Save buttons */}
+                <div className="flex gap-3 pt-1">
+                  <button
+                    type="button"
+                    className="kid-btn-secondary flex-1"
+                    disabled={!sessionId || !readingId || writingSubmitting}
+                    onClick={() => saveWriting("draft")}
+                  >
+                    💾 儲存草稿
+                  </button>
+                  <button
+                    type="button"
+                    className="kid-btn-primary flex-1"
+                    disabled={!sessionId || !readingId || writingSubmitting}
+                    onClick={() => saveWriting("submit")}
+                  >
+                    ✅ 提交
+                  </button>
+                </div>
+                {saveMsg && <div className="text-sm font-medium text-emerald-600">{saveMsg}</div>}
+                {writingError && <div className="text-sm text-red-600 whitespace-pre-wrap">{writingError}</div>}
+              </div>
+
+              {/* Hints + Feedback sidebar */}
+              <div className="xl:col-span-2 space-y-4">
+                <h3 className="flex items-center gap-2 text-base font-bold text-slate-700">
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-amber-100 text-xs">📝</span>
+                  寫作支架提示
+                </h3>
+
+                {hintsLoading[focusStage] && (
+                  <div className="animate-pulse rounded-xl border border-amber-200 bg-amber-50 p-3 text-center text-xs text-amber-700">
+                    正在替你整理聊天重點…
+                  </div>
+                )}
+
+                <div className="rounded-xl border border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50/50 p-4">
+                  <p className="mb-2 flex items-center gap-1.5 text-sm font-bold text-amber-800">
+                    <span>💡</span> 你剛剛聊到的重點
+                  </p>
+                  <ul className="list-disc space-y-1 pl-4 text-sm leading-relaxed text-amber-900">
+                    {displayHints.map((hint, idx) => (
+                      <li key={idx}>{hint}</li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <p className="mb-1.5 text-sm font-semibold text-slate-600">情緒詞彙</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {EMOTION.map((t) => (
+                        <span key={t} className="kid-chip">{t}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="mb-1.5 text-sm font-semibold text-slate-600">價值詞彙</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {VALUES.map((t) => (
+                        <span key={t} className="kid-chip">{t}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="mb-1.5 text-sm font-semibold text-slate-600">句型提示</p>
+                    <div className="space-y-1.5">
+                      {FRAMES.map((t, i) => (
+                        <div key={i} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-relaxed text-slate-600">
+                          {t}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Feedback section */}
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <h4 className="text-[15px] font-bold text-slate-700">回饋（{STAGE_TITLES[focusStage]}）</h4>
                     <button
                       type="button"
-                      className="flex-1 rounded-full border bg-white px-4 py-3 text-base md:text-lg hover:bg-muted disabled:opacity-50"
-                      disabled={!sessionId || !readingId || writingSubmitting}
-                      onClick={() => saveWriting("draft")}
+                      className="kid-btn-primary !px-3 !py-1.5 !text-xs"
+                      disabled={!sessionId || fbLoading}
+                      onClick={() => runFeedback(focusStage, draftView)}
                     >
-                      儲存草稿
-                    </button>
-                    <button
-                      type="button"
-                      className="flex-1 rounded-full bg-amber-500 px-4 py-3 text-base md:text-lg text-white disabled:opacity-50"
-                      disabled={!sessionId || !readingId || writingSubmitting}
-                      onClick={() => saveWriting("submit")}
-                    >
-                      提交
+                      {fbLoading ? "回饋中…" : "取得回饋"}
                     </button>
                   </div>
 
-                  {saveMsg && <div className="text-sm md:text-base text-emerald-700">{saveMsg}</div>}
-                  {writingError && <div className="text-sm md:text-base text-red-600 whitespace-pre-wrap">{writingError}</div>}
+                  {fbError && <div className="mt-2 text-sm text-red-600 whitespace-pre-wrap">{fbError}</div>}
+
+                  {fbNow && (
+                    <div className="mt-3 space-y-3 text-sm">
+                      <div
+                        className={[
+                          "rounded-lg border px-3 py-2",
+                          fbNow.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800",
+                        ].join(" ")}
+                      >
+                        {fbNow.ok
+                          ? "✅ 這一段已達到基本要求，可以再寫得更完整。"
+                          : "⚠️ 這一段還可以再補強，看看下面的建議。"}
+                      </div>
+
+                      {fbNow.missing?.length > 0 && (
+                        <div>
+                          <p className="font-bold text-slate-700">缺漏</p>
+                          <ul className="list-disc pl-4 text-slate-600">
+                            {fbNow.missing.map((x, i) => <li key={i}>{x}</li>)}
+                          </ul>
+                        </div>
+                      )}
+
+                      {fbNow.suggestions?.length > 0 && (
+                        <div>
+                          <p className="font-bold text-slate-700">建議</p>
+                          <ul className="list-disc pl-4 text-slate-600">
+                            {fbNow.suggestions.map((x, i) => <li key={i}>{x}</li>)}
+                          </ul>
+                        </div>
+                      )}
+
+                      {!isControlConditionValue(fbNow.meta?.condition ?? condition) && String(fbNow.example ?? "").trim() && (
+                        <div>
+                          <p className="font-bold text-slate-700">示例參考</p>
+                          <div className="mt-1 rounded-lg border border-slate-200 bg-slate-50 p-3 whitespace-pre-wrap leading-relaxed text-slate-600">
+                            {fbNow.example}
+                          </div>
+                        </div>
+                      )}
+
+                      {String(fbNow.improved ?? "").trim() && (
+                        <div>
+                          <p className="font-bold text-slate-700">改寫版本</p>
+                          <div className="mt-1 rounded-lg border border-emerald-200 bg-emerald-50 p-3 whitespace-pre-wrap leading-relaxed text-emerald-800">
+                            {fbNow.improved}
+                          </div>
+                        </div>
+                      )}
+
+                      {!fbNow.missing?.length &&
+                        !fbNow.suggestions?.length &&
+                        !String(fbNow.example ?? "").trim() &&
+                        !String(fbNow.improved ?? "").trim() && (
+                          <div className="text-slate-400">這次回饋沒有可顯示的內容。</div>
+                        )}
+
+                      {draftView === "d1" && String(fbNow.improved ?? "").trim() && (
+                        <button
+                          type="button"
+                          className="kid-btn-secondary w-full !text-xs"
+                          onClick={() => applyImprovedToDraft2(focusStage)}
+                        >
+                          ✨ 一鍵套用到「草稿 2」
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
           </div>
         </div>
-
-        <div className="h-2" />
       </div>
     </div>
   );
