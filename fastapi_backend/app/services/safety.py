@@ -1,46 +1,67 @@
 import os
+import re
 from typing import Tuple
 from openai import AsyncOpenAI
 
 # ==========================================
-# Layer 1: 本地動態黑名單過濾引擎 (O(1) 攔截)
+# Layer 1: 本地快速過濾
 # ==========================================
-# 這組詞庫未來可以從資料庫讀取，確保不動到程式碼就能更新。
 LOCAL_BAD_WORDS = {
     "幹", "靠北", "靠夭", "機掰", "智障", "白痴", "白癡", "去死", "垃圾", "低能",
-    "草泥馬", "操", "王八蛋"
+    "草泥馬", "操", "王八蛋", "廢物"
 }
 
+LOCAL_ATTACK_PATTERNS = [
+    r"(你|妳|他|她|你們|妳們)\s*(是|很|超|真|也太)?\s*[^ \n]{0,4}(笨|蠢|爛|噁|討厭|白痴|白癡|智障|低能|廢物)",
+    r"(你|妳|他|她)\s*(去|給我去)\s*(死|滾)",
+]
+
 # ==========================================
-# Layer 2: Cloud Semantic Moderation (OpenAI)
+# Layer 2: OpenAI Moderation
 # ==========================================
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
+
+def _normalize_text(text: str) -> str:
+    return re.sub(r"\s+", "", (text or "").strip().lower())
+
+
+def _local_reason(text: str) -> str:
+    t = _normalize_text(text)
+    if any(w in t for w in ("去死", "滾")):
+        return "包含攻擊性語句"
+    if any(w in t for w in ("白痴", "白癡", "智障", "低能", "廢物")):
+        return "包含人身攻擊"
+    return "請注意用字遣詞"
+
+
 async def check_safety(text: str) -> Tuple[bool, str]:
     """
-    雙層把關學生的輸入：
+    雙層把關學生輸入：
     回傳 (is_unsafe, unsafe_reason)
-    如果 is_unsafe 為 True，代表查覺到惡意或不雅言論。
     """
     if not text or not text.strip():
         return False, ""
-    
+
     content = text.strip()
+    content_norm = _normalize_text(content)
 
-    # 1. 先過本地防線：精準比對，直接封殺高頻髒話
+    # 1. 本地快速過濾：髒話、直接辱罵、明顯攻擊
     for word in LOCAL_BAD_WORDS:
-        if word in content:
-            return True, "請注意用字遣詞"
+        if word in content_norm:
+            return True, _local_reason(content)
 
-    # 2. 如果本地防線沒擋下，過雲端 OpenAI Moderation API：
-    #    攔截隱晦的仇恨言論、霸凌、自殘等語意意圖
+    for pattern in LOCAL_ATTACK_PATTERNS:
+        if re.search(pattern, content_norm):
+            return True, "包含人身攻擊"
+
+    # 2. 雲端 Moderation：補語意層
     if client is not None:
         try:
             resp = await client.moderations.create(input=content)
             result = resp.results[0]
             if result.flagged:
-                # 抓出最嚴重的違規類別作為退回理由
                 flagged_cats = [k for k, v in result.categories.model_dump().items() if v]
                 reason = "包含不當言論"
                 if "harassment" in flagged_cats or "harassment_threatening" in flagged_cats:
@@ -51,13 +72,9 @@ async def check_safety(text: str) -> Tuple[bool, str]:
                     reason = "涉及自殘或危險暗示"
                 elif "sexual" in flagged_cats or "sexual_minors" in flagged_cats:
                     reason = "涉及不當性暗示內容"
-                
                 return True, reason
         except Exception as e:
-            # 如果 Moderation API 暫時掛掉（Timeout 或 Rate limit）
-            # 在教育現場，我們通常選擇 Fail-open（相信人性本善）讓對話能繼續
+            # 教學現場採 fail-open，避免 moderation 短暫失敗就整段流程中斷
             print(f"[Safety Warning] OpenAI Moderation API failed: {e}")
-            pass
 
-    # 兩道防線都安全通過
     return False, ""

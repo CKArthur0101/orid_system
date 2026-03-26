@@ -12,11 +12,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ detail: "Missing week" }, { status: 400 });
 
   const forceNew = searchParams.get("force_new");
+  const condition = searchParams.get("condition");
 
   const base = process.env.API_BASE_URL ?? "http://backend:8000";
 
   const qs = new URLSearchParams({ week });
   if (forceNew) qs.set("force_new", forceNew);
+  if (condition) qs.set("condition", condition);
 
   const r = await fetch(`${base}/orid/sessions/ensure?${qs.toString()}`, {
     method: "POST",

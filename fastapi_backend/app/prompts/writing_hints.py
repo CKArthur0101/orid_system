@@ -1,4 +1,19 @@
-from typing import Any, Optional
+from typing import Dict, List
+
+_STAGE_HINT_RULES: Dict[str, str] = {
+    "O": "優先抓角色、事件、順序、轉折。不要寫感想，不要抽象化。",
+    "R": "優先抓學生提過的感受詞，以及引發感受的故事畫面或原因。",
+    "I": "優先抓學生提過的提醒、道理、想法，以及支持這個想法的故事理由。",
+    "D": "優先抓學生提過的下一步行動、做法、小步驟，提示要具體。",
+}
+
+_STAGE_GENERIC_HINTS: Dict[str, List[str]] = {
+    "O": ["先寫誰做了什麼", "補上事情怎麼改變", "用先後順序整理"],
+    "R": ["先寫你的感受", "補上為什麼會這樣想", "把感受連回故事"],
+    "I": ["先寫你學到什麼", "補上故事裡的理由", "想想哪個轉折最重要"],
+    "D": ["先寫下次我會", "行動要具體可做", "補上第一個小步驟"],
+}
+
 
 def build_writing_hints_prompts(
     stage: str,
@@ -6,24 +21,44 @@ def build_writing_hints_prompts(
 ) -> tuple[str, str]:
     """
     Returns (system_prompt, user_prompt) to generate 2-3 short writing hints
-    based ONLY on what the student said in the chat history.
+    based primarily on what the STUDENT said in the chat history.
     """
     stage = (stage or "O").strip().upper()
-    recent_chat = "\n".join(chat_history) if chat_history else "(無對話紀錄)"
-    
+    if stage not in {"O", "R", "I", "D"}:
+        stage = "O"
+
+    recent_chat = "\n".join(chat_history[-10:]) if chat_history else "(無對話紀錄)"
+    generic_hints = " / ".join(_STAGE_GENERIC_HINTS[stage])
+
     sys = f"""
-你是一位引導兒童寫作的助理。
-現在學生剛完成了「{stage}」階段的口語對話，準備進入右側的「寫作框」練習寫出短文。
+你是一位幫國小高年級學生整理寫作靈感的小助理。
+學生剛完成 ORID 的 {stage} 階段口語對話，現在要開始寫右側的短文。
 
-請根據他們剛剛在聊天室裡的「完整對話紀錄」，幫學生抓出他們自己講過的「2 到 3 個重點重點」，轉換成簡短的「寫作靈感小抄 (Hint)」。
+你的任務是：
+根據剛剛的對話，產出 2–3 個很短的 Hint，幫學生回想「他自己剛剛說過什麼」，讓他更容易開始寫。
 
-【規則】
-1. 這是為了幫助學生「回憶起自己剛剛說了什麼」，所以靈感必須【嚴格基於學生說過的話】，不要無中生有。
-2. 每個靈感長度只需「短語」或「半句話」（不超過 15 個字）。
-3. 語氣要是中性或第一人稱的點子提示，例如：「阿松爺爺捨不得分柿子」、「村裡小孩來要柿子吃」。
-4. 輸出格式：「純字串清單」，每一行一個 Hint，前面用 - 開頭，不要包含任何多餘問候語或思考過程。
+【最重要規則】
+1. 優先使用「學生自己說過的內容」。
+2. 老師說過的話只能當背景，不要直接改寫成 Hint。
+3. 不要編造聊天裡沒出現的細節。
+4. 每個 Hint 只要短語或半句話，盡量 6–15 個字。
+5. Hint 要像寫作提醒，不要寫成完整評語，也不要寫成問句。
+6. 每一行只輸出一個 Hint，前面用「- 」開頭。
+7. 不要輸出多餘說明，不要編號，不要加前言或結語。
 
-如果學生對話紀錄太空泛或沒有內容，請根據本階段 {stage} 給出 2 個通用提示。
-"""
-    user_msg = f"這是剛剛的對話紀錄：\n{recent_chat}"
-    return sys.strip(), user_msg.strip()
+【本階段抓重點方式】
+{_STAGE_HINT_RULES[stage]}
+
+【若對話太空泛】
+若學生自己的內容太少、太空，請改用這些通用提示中的 2–3 個：
+{generic_hints}
+""".strip()
+
+    user_msg = f"""
+以下是剛剛的對話紀錄（已含學生與老師）：
+{recent_chat}
+
+請直接輸出 Hint 清單。
+""".strip()
+
+    return sys, user_msg

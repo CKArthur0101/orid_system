@@ -1,11 +1,9 @@
 import uuid
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, Text, func
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, Text, func, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy import Column, String, Integer, ForeignKey, DateTime, Text
 from sqlalchemy.orm import relationship
-from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime
 from uuid import uuid4
 
@@ -15,6 +13,7 @@ class Base(DeclarativeBase):
 
 
 class User(SQLAlchemyBaseUserTableUUID, Base):
+    role = Column(String, nullable=False, default="student", server_default="student")
     items = relationship("Item", back_populates="user", cascade="all, delete-orphan")
 
 
@@ -86,3 +85,33 @@ class OridWriting(Base):
     week = Column(Integer, nullable=False)          # 第幾週(1~6)
     content = Column(Text, nullable=False)          # 寫作內容
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ClassRoom(Base):
+    __tablename__ = "classes"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    name = Column(String, nullable=False)
+    year = Column(Integer, nullable=False, default=datetime.utcnow().year)
+    external_code = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class StudentClassMembership(Base):
+    __tablename__ = "student_class_memberships"
+    __table_args__ = (UniqueConstraint("student_id", "class_id", name="uq_student_class_membership"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    student_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
+    class_id = Column(UUID(as_uuid=True), ForeignKey("classes.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TeacherClassAssignment(Base):
+    __tablename__ = "teacher_class_assignments"
+    __table_args__ = (UniqueConstraint("teacher_id", "class_id", name="uq_teacher_class_assignment"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    teacher_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
+    class_id = Column(UUID(as_uuid=True), ForeignKey("classes.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

@@ -7,6 +7,8 @@ import { redirect } from "next/navigation";
 import { loginSchema } from "@/lib/definitions";
 import { getErrorMessage } from "@/lib/utils";
 
+const API_BASE_URL = process.env.API_BASE_URL ?? "http://backend:8000";
+
 export async function login(prevState: unknown, formData: FormData) {
   const validatedFields = loginSchema.safeParse({
     username: formData.get("username") as string,
@@ -28,17 +30,33 @@ export async function login(prevState: unknown, formData: FormData) {
     },
   };
 
+  let redirectTo = "/dashboard";
+
   try {
     const { data, error } = await authJwtLogin(input);
     if (error) {
       return { server_validation_error: getErrorMessage(error) };
     }
     (await cookies()).set("accessToken", data.access_token);
+    try {
+      const meRes = await fetch(`${API_BASE_URL}/users/me`, {
+        headers: { Authorization: `Bearer ${data.access_token}` },
+      });
+      if (meRes.ok) {
+        const me = await meRes.json();
+        const role = String(me?.role ?? "student").toLowerCase();
+        if (role === "teacher" || role === "admin") {
+          redirectTo = "/teacher";
+        }
+      }
+    } catch {
+      // role lookup failed — fall back to student dashboard
+    }
   } catch (err) {
     console.error("Login error:", err);
     return {
       server_error: "An unexpected error occurred. Please try again later.",
     };
   }
-  redirect("/dashboard");
+  redirect(redirectTo);
 }

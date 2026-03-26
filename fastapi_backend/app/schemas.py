@@ -10,15 +10,15 @@ from pydantic import BaseModel, ConfigDict
 # Users (fastapi-users)
 # ----------------------------
 class UserRead(schemas.BaseUser[uuid.UUID]):
-    pass
+    role: str = "student"
 
 
 class UserCreate(schemas.BaseUserCreate):
-    pass
+    role: str = "student"
 
 
 class UserUpdate(schemas.BaseUserUpdate):
-    pass
+    role: str | None = None
 
 
 # ----------------------------
@@ -141,3 +141,43 @@ class OridMessageRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class TeacherClassRead(BaseModel):
+    id: UUID
+    name: str
+    year: int
+    external_code: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TeacherStudentRow(BaseModel):
+    student_id: UUID
+    student_email: str
+    current_stage: str
+    interaction_count: int
+    writing_completed_stages: int
+    last_activity_at: datetime | None = None
+
+
+class TeacherClassOverview(BaseModel):
+    class_id: UUID
+    class_name: str
+    week: int
+    total_students: int
+    active_students: int
+    completion_rate: float
+    stage_distribution: dict[str, int]
+    students: list[TeacherStudentRow]
+
+
+class TeacherStudentSummary(BaseModel):
+    class_id: UUID
+    student_id: UUID
+    student_email: str
+    week: int
+    current_stage: str
+    interaction_count: int
+    writing_completed_stages: int
+    last_activity_at: datetime | None = None

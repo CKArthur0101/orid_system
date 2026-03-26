@@ -8,22 +8,30 @@ from .shared import build_book_context_block
 
 Stage = str  # "O" | "R" | "I" | "D"
 
-
-# ----------------------------
-# Lightweight unsafe heuristics (not a blacklist)
-# - Focus on "attack structure": "你/妳 + 是/很/超 + 貶損詞"
-# - Also catch common profanity patterns without enumerating tons of words
-# ----------------------------
 _ATTACK_PATTERNS = [
-    r"(你|妳|他|她|你們|妳們)\s*(是|很|超|真|也太)\s*[^ \n]{0,4}(笨|蠢|爛|噁|討厭|白痴|智障)",
+    r"(你|妳|他|她|你們|妳們)\s*(是|很|超|真|也太)?\s*[^ \n]{0,4}(笨|蠢|爛|噁|討厭|白痴|白癡|智障|低能|廢物)",
     r"(你|妳|他|她)\s*(去|給我去)\s*(死|滾)",
 ]
-# A small set of high-signal profanity tokens (kept minimal; not a big blacklist)
 _PROFANITY_MIN = [
-    "幹", "靠北", "操", "媽的", "他媽", "傻逼", "白痴", "智障", "廢物"
+    "幹", "靠北", "操", "媽的", "他媽", "白痴", "白癡", "智障", "廢物", "去死",
 ]
 
 _JSON_RE = re.compile(r"\{[\s\S]*\}")
+_GENERIC_Q_PATTERNS = [
+    r"故事發生了什麼",
+    r"說說故事",
+    r"有什麼感覺",
+    r"提醒我們什麼",
+    r"你會怎麼做",
+]
+_DAILY_LIFE_KEYWORDS = [
+    "今天", "昨天", "明天", "早餐", "午餐", "晚餐", "便當", "飲料", "咖啡", "手機", "遊戲",
+    "睡覺", "起床", "上課", "下課", "回家", "逛街", "天氣", "考試", "排骨", "雞排", "奶茶",
+]
+_STORY_CUE_KEYWORDS = [
+    "故事", "書裡", "一開始", "後來", "接著", "最後", "改變", "分享", "柿子", "種子",
+    "爺爺", "奶奶", "孩子", "小朋友", "大家一起", "不想分", "提醒", "誤會",
+]
 
 
 def _looks_unsafe_by_structure(text: str) -> bool:
@@ -34,7 +42,6 @@ def _looks_unsafe_by_structure(text: str) -> bool:
     for p in _ATTACK_PATTERNS:
         if re.search(p, t_nospace):
             return True
-    # minimal profanity signal (not exhaustive)
     for w in _PROFANITY_MIN:
         if w in t_nospace:
             return True
@@ -51,15 +58,130 @@ def _one_question(text: str) -> str:
     return first + "？"
 
 
-def _stage_safe_fallback_question(stage: str) -> str:
+def _extract_anchor(student_text: str) -> str:
+    t = re.sub(r"[「」『』\"'，。！？：；、（）()\[\]{}\s]+", " ", (student_text or "").strip())
+    parts = [p.strip() for p in t.split(" ") if p.strip()]
+    for p in parts:
+        if 2 <= len(p) <= 8:
+            return p
+    t2 = re.sub(r"\s+", "", t)
+    return t2[:6]
+
+
+def _anchor_is_daily_life(anchor: str) -> bool:
+    a = (anchor or "").strip()
+    if not a:
+        return False
+    return any(k in a for k in _DAILY_LIFE_KEYWORDS)
+
+
+def _normalize_match_text(text: str) -> str:
+    return re.sub(r"[\s「」『』\"'，。！？：；、（）()\[\]{}、]+", "", (text or "").strip())
+
+
+def _extract_book_terms(book_pack: Optional[dict[str, Any]]) -> set[str]:
+    terms: set[str] = set()
+    if not isinstance(book_pack, dict):
+        return terms
+
+    def add_term(value: Any) -> None:
+        s = str(value or "").strip()
+        if not s:
+            return
+        s_clean = _normalize_match_text(s)
+        if 2 <= len(s_clean) <= 10:
+            terms.add(s_clean)
+        for token in re.findall(r"[一-龥A-Za-z]{2,8}", s):
+            token = _normalize_match_text(token)
+            if 2 <= len(token) <= 8:
+                terms.add(token)
+
+    add_term(book_pack.get("book_title") or "")
+    for item in (book_pack.get("core_theme") or [])[:6]:
+        add_term(item)
+    for item in (book_pack.get("setting") or [])[:6]:
+        add_term(item)
+    for item in (book_pack.get("key_events") or [])[:8]:
+        add_term(item)
+    for item in (book_pack.get("characters") or [])[:8]:
+        if isinstance(item, dict):
+            add_term(item.get("name") or "")
+            add_term(item.get("role") or "")
+        else:
+            add_term(item)
+
+    terms.update(_STORY_CUE_KEYWORDS)
+    return {x for x in terms if x}
+
+
+def looks_story_related_to_book(student_text: str, book_pack: Optional[dict[str, Any]]) -> bool:
+    text_norm = _normalize_match_text(student_text)
+    if not text_norm:
+        return False
+
+    book_terms = _extract_book_terms(book_pack)
+    if any(term and term in text_norm for term in book_terms):
+        return True
+
+    if any(k in text_norm for k in _STORY_CUE_KEYWORDS):
+        return True
+
+    opinion_like_patterns = [
+        r"(他|她|他們|大家).{0,4}(很|太|不|有)",
+        r"這樣.{0,4}(很|不)",
+        r"(改變|分享|提醒|誤會|一起)",
+    ]
+    return any(re.search(p, text_norm) for p in opinion_like_patterns)
+
+
+def looks_obviously_offtopic(student_text: str, book_pack: Optional[dict[str, Any]]) -> bool:
+    text_norm = _normalize_match_text(student_text)
+    if not text_norm:
+        return False
+    if looks_story_related_to_book(student_text, book_pack):
+        return False
+
+    if text_norm.startswith("我今天") or text_norm.startswith("我昨天") or text_norm.startswith("我剛剛"):
+        return True
+
+    if any(k in text_norm for k in _DAILY_LIFE_KEYWORDS):
+        return True
+
+    daily_patterns = [
+        r"我(要|想|去|在).{0,8}(吃|買|玩|睡|上課|下課|回家)",
+        r"(午餐|早餐|晚餐|便當|手機|遊戲|天氣)",
+    ]
+    return any(re.search(p, text_norm) for p in daily_patterns)
+
+
+def _looks_generic_question(text: str) -> bool:
+    s = (text or "").strip()
+    if not s:
+        return True
+    return any(re.search(p, s) for p in _GENERIC_Q_PATTERNS)
+
+
+def _stage_safe_fallback_question(stage: str, student_text: Optional[str] = None) -> str:
     s = (stage or "O").strip().upper()
+    anchor = _extract_anchor(student_text or "")
+    if _anchor_is_daily_life(anchor):
+        anchor = ""
+
     if s == "R":
-        return _one_question("把故事裡那一刻說清楚後，你最強烈的感覺是什麼")
+        if anchor:
+            return _one_question(f"你剛剛提到{anchor}，那一刻你最明顯的感覺是什麼")
+        return _one_question("故事裡哪一幕最讓你有感覺")
     if s == "I":
-        return _one_question("根據故事發生的事，你覺得它想提醒我們什麼")
+        if anchor:
+            return _one_question(f"你剛剛提到{anchor}，你覺得這件事在提醒我們什麼")
+        return _one_question("根據故事裡發生的事，你覺得它想提醒我們什麼")
     if s == "D":
-        return _one_question("如果下次遇到類似情況，你會先做哪一個小行動")
-    return _one_question("你先用1–2句話說說故事發生了什麼")
+        if anchor:
+            return _one_question(f"下次遇到像{anchor}這樣的情況，你會先做哪一個小動作")
+        return _one_question("下次遇到類似情況，你會先做哪一個小動作")
+    if anchor:
+        return _one_question(f"你剛剛提到{anchor}，接著是哪一件事讓情況開始改變")
+    return _one_question("接著發生了什麼")
 
 
 def build_orid_checker_prompts(
@@ -72,10 +194,9 @@ def build_orid_checker_prompts(
 ) -> Tuple[str, str]:
     """
     Checker responsibilities:
-    1) Detect unsafe language (insult/harassment/hate/threat/sexual) -> unsafe_language=true
-    2) Detect off-topic -> off_topic=true
-    3) Produce ONE book-anchored question suited for current stage (O/R/I/D)
-    Output must be strict JSON.
+    1) Detect unsafe language.
+    2) Detect off-topic.
+    3) Produce ONE narrow, stage-appropriate, book-anchored next question.
     """
     stage = (stage or "O").strip().upper()
     if stage not in {"O", "R", "I", "D"}:
@@ -87,24 +208,37 @@ def build_orid_checker_prompts(
     history = [str(x).strip() for x in history if str(x).strip()]
     history = history[-max_history:]
 
-    # NOTE: The checker must not do "emotion guessing" like "你有情緒"
-    # It should be: boundary + pull back to task/story, and provide stage-appropriate question.
     sys = f"""
 你是「兒童閱讀對話的安全與引導檢查器（ORID Checker）」。
-你只允許根據 BOOK_CONTEXT 判斷與提問，不可編造故事細節或書外資訊。
+你只能根據 BOOK_CONTEXT 判斷與提問，不可編造故事細節或書外資訊。
 
-你要做三件事：
-(1) 偵測學生訊息是否含不友善用語（辱罵、人身攻擊、歧視、威脅、性暗示等）。只要有，unsafe_language=true。
-(2) 偵測是否「完全偏離故事」。只要學生提到書中角色或事件，哪怕加了個人形容詞（如「很小氣」、「捨不得」），也【絕對不算離題】（off_topic=false）！只有在聊完全無關的事情（如電玩、午餐）時才 off_topic=true。
-(3) 產生一個「緊扣故事」且符合目前 ORID 階段的問題（suggested_question）。
+你的工作有三件：
+(1) 偵測學生訊息是否含不友善用語（辱罵、人身攻擊、歧視、威脅、性暗示等）。
+(2) 偵測是否離題。
+(3) 產生一個「下一小步」的問題（suggested_question）。
 
 目前 ORID 階段：{stage}
-- O：問「故事發生什麼/誰做什麼/先後順序」，不能問感受或道理或行動
-- R：問「感受＋原因（連回故事事件）」，不能跳道理或行動
-- I：問「故事提醒的道理/價值＋理由（連回故事）」不能跳行動
-- D：問「下次可做的小行動（具體）」要貼近日常
+- O：只問故事中的角色、事件、順序、轉折，不問感受、道理、行動
+- R：問感受＋原因，而且原因要連回故事事件
+- I：問道理／提醒＋理由，而且理由要連回故事
+- D：問下次可做的小行動，而且要具體、貼近日常
 
-輸出必須是「純 JSON」，不要任何多餘文字、不要 code block。
+判斷離題的重要原則：
+- 只要學生有提到書中角色、事件、畫面、主題，或對這些內容做簡單評論，都不算離題。
+- 例如「他很小氣」「這樣不公平」「他後來有改變」都不算離題。
+- 像「我今天中午吃排骨便當」「我昨天去打球」這種明顯和故事無關的生活句子，才算 off_topic=true。
+- 不要因為學生只說一小句就當成離題；先看它有沒有碰到故事線索。
+
+suggested_question 的重要原則：
+- 要問「下一小步」，不是退回大題。
+- 若學生已經說到一個事件，不要又問「故事發生了什麼」。
+- 若學生已經說到感受，不要又問「你有什麼感覺」；要問原因或是哪個畫面。
+- 若學生已經說到道理，不要又問「提醒我們什麼」；要問理由或故事根據。
+- 若學生已經說到行動，不要又問「你會怎麼做」；要問第一步、對誰、什麼時候做。
+- 若學生明顯離題，不要重複他的生活瑣事細節；直接用書裡角色或事件把他拉回來。
+- suggested_question 只能有一個問號（？）。
+
+輸出必須是純 JSON，不要任何多餘文字、不要 code block。
 JSON schema（欄位不可少）：
 {{
   "unsafe_language": boolean,
@@ -114,19 +248,18 @@ JSON schema（欄位不可少）：
   "suggested_question": string
 }}
 
-重要規則：
-- 你不能寫「你有情緒」「你不耐煩」這種推測心理狀態的句子。
-- suggested_question 必須只出現一個問號（？）；若沒有問號請在句尾加「？」；若有多個只保留第一個。
-- 若 unsafe_language=true：
-  - unsafe_reason 用很短一句話，例如「語氣不友善」或「包含人身攻擊」。
-  - reason 也填入同樣意思（不要寫「尚未描述故事」）。
-  - suggested_question 仍要給：用溫和方式拉回書與本階段任務，且不要重複學生的髒話/辱罵字。
-- 若 off_topic=true：
-  - reason 用「離題」或「先回到故事」等短句。
-  - suggested_question 要用 BOOK_CONTEXT 的事件/角色拉回，不要指責學生。
-- 若 neither unsafe nor off-topic：
-  - off_topic=false，reason 用「OK」或「貼近本階段」。
-  - suggested_question 仍要是本階段下一個引導問題（不要跳階）。
+若 unsafe_language=true：
+- unsafe_reason 用很短一句話，例如：語氣不友善 / 包含人身攻擊
+- reason 填相同意思
+- suggested_question 仍要給，但要溫和把學生拉回書與本階段方向，不可重複學生的髒話
+
+若 off_topic=true：
+- reason 用「離題」或「先回到故事」
+- suggested_question 要用書裡角色或事件拉回，不可責備
+
+若既不 unsafe 也不 off-topic：
+- off_topic=false，reason 用「OK」或「貼近本階段」
+- suggested_question 要是本階段下一個更窄的問題，不可跳階，也不可回到整體大題
 
 BOOK_CONTEXT：
 {book_context}
@@ -136,7 +269,7 @@ BOOK_CONTEXT：
 學生訊息：
 {student_text}
 
-近期對話（用來判斷是否離題，不要用來編造書外資訊）：
+近期對話（只用來判斷是否離題與下一小步，不可編造書外資訊）：
 {json.dumps(history, ensure_ascii=False)}
 """.strip()
 
@@ -144,7 +277,6 @@ BOOK_CONTEXT：
 
 
 def parse_orid_checker_json(raw: str) -> Dict[str, Any]:
-    """Robust JSON extractor."""
     if raw is None:
         return {}
     s = str(raw).strip()
@@ -162,11 +294,12 @@ def parse_orid_checker_json(raw: str) -> Dict[str, Any]:
             return {}
 
 
-def clamp_checker_output(obj: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Ensure stable types + required fields.
-    Also apply a lightweight post-check so obvious insults never slip through.
-    """
+def clamp_checker_output(
+    obj: Dict[str, Any],
+    *,
+    stage: Optional[str] = None,
+    student_text: Optional[str] = None,
+) -> Dict[str, Any]:
     unsafe_language = bool(obj.get("unsafe_language", False))
     off_topic = bool(obj.get("off_topic", False))
 
@@ -185,31 +318,40 @@ def clamp_checker_output(obj: Dict[str, Any]) -> Dict[str, Any]:
     reason = reason.strip()[:80]
     suggested_question = suggested_question.strip()
 
-    # --- Post safety reinforcement (structure-based, minimal tokens) ---
-    # If model forgot to flag, but text is clearly abusive, force unsafe=true.
-    # NOTE: We rely on the model for semantics; this just catches high-signal misses.
-    # The actual student text isn't passed here, so we can only stabilize reasons/fields.
-    # We keep this block for consistency and future extension if you later pass student_text in clamp.
-    if unsafe_language:
+    stage_norm = (stage or "O").strip().upper()
+    if stage_norm not in {"O", "R", "I", "D"}:
+        stage_norm = "O"
+
+    if student_text and _looks_unsafe_by_structure(student_text):
+        unsafe_language = True
         if not unsafe_reason:
             unsafe_reason = "語氣不友善"
-        # reason should not be "尚未描述故事" when unsafe
+
+    if unsafe_language:
+        off_topic = False
+        if not unsafe_reason:
+            unsafe_reason = "語氣不友善"
         if not reason or ("描述故事" in reason):
             reason = unsafe_reason
-        # suggested_question must exist even when unsafe
-        if not suggested_question:
-            suggested_question = _stage_safe_fallback_question("O")  # default safe pull-back
+        if not suggested_question or _looks_generic_question(suggested_question):
+            suggested_question = _stage_safe_fallback_question(stage_norm, student_text)
     else:
-        # If not unsafe, keep reasons short and aligned
         if off_topic:
             if not reason:
                 reason = "先回到故事"
+            if not suggested_question or _looks_generic_question(suggested_question):
+                suggested_question = _stage_safe_fallback_question(stage_norm, None)
         else:
             if not reason:
                 reason = "OK"
+            if not suggested_question:
+                suggested_question = _stage_safe_fallback_question(stage_norm, student_text)
 
-    # Always enforce one-question rule
-    suggested_question = _one_question(suggested_question) if suggested_question else _stage_safe_fallback_question("O")
+    suggested_question = (
+        _one_question(suggested_question)
+        if suggested_question
+        else _stage_safe_fallback_question(stage_norm, student_text)
+    )
 
     return {
         "unsafe_language": bool(unsafe_language),
@@ -220,10 +362,5 @@ def clamp_checker_output(obj: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-# ----------------------------
-# Optional: helper you can use in routes if you want extra safety
-# (Not required right now; kept here for easy import later)
-# ----------------------------
 def quick_unsafe_check(student_text: str) -> bool:
-    """Structure-based quick check; can be used as a pre-check before calling LLM."""
     return _looks_unsafe_by_structure(student_text)
