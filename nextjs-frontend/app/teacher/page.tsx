@@ -80,16 +80,33 @@ export default function TeacherDashboardPage() {
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [studentDetail, setStudentDetail] = useState<StudentSummary | null>(null);
 
+  // On mount: fetch classes then immediately fetch overview with the first class
   useEffect(() => {
     void (async () => {
+      setLoading(true);
       const res = await fetch("/api/teacher/me/classes", { cache: "no-store" });
-      if (!res.ok) return;
+      if (!res.ok) { setLoading(false); return; }
       const list: ClassInfo[] = await res.json().catch(() => []);
       setClasses(list);
-      if (list.length > 0 && !classId) setClassId(list[0].id);
+      if (!list.length) { setLoading(false); return; }
+
+      const firstId = list[0].id;
+      setClassId(firstId);
+
+      // Immediately fetch overview without waiting for a second render cycle
+      const oRes = await fetch(`/api/teacher/classes/${firstId}/overview?week=1`, {
+        cache: "no-store",
+      });
+      if (oRes.ok) {
+        const data: Overview = await oRes.json().catch(() => null);
+        setOverview(data);
+        if (data?.students?.length) setSelectedStudentId(data.students[0].student_id);
+      }
+      setLoading(false);
     })();
   }, []);
 
+  // Re-fetch overview when classId or week changes (but not on the initial mount handled above)
   useEffect(() => {
     if (!classId) return;
     setLoading(true);
@@ -98,7 +115,7 @@ export default function TeacherDashboardPage() {
         cache: "no-store",
       });
       if (res.ok) {
-        const data = await res.json().catch(() => null);
+        const data: Overview = await res.json().catch(() => null);
         setOverview(data);
         if (data?.students?.length && !selectedStudentId) {
           setSelectedStudentId(data.students[0].student_id);
@@ -106,7 +123,7 @@ export default function TeacherDashboardPage() {
       }
       setLoading(false);
     })();
-  }, [classId, week]);
+  }, [classId, week]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!classId || !selectedStudentId) return;

@@ -5,6 +5,8 @@ from typing import Optional, Any, Tuple, List, Dict
 import os
 import re
 import json
+import time
+from collections import defaultdict, deque
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,7 +51,9 @@ from app.prompts.orid_checker import (
     clamp_checker_output,
     looks_story_related_to_book,
     looks_obviously_offtopic,
+    quick_unsafe_check,
 )
+from app.prompts.natural_redirect import build_natural_redirect_prompt
 from app.services.safety import check_safety
 from app.services.orid_condition import normalize_orid_condition, is_control_condition
 from app.services.orid_stage import build_stage_history, decide_stage_progress
@@ -140,13 +144,13 @@ def _env_bool(name: str, default: bool = False) -> bool:
 ORID_DEMO_MODE = _env_bool("ORID_DEMO_MODE", True)
 ORID_HISTORY_LIMIT = int(os.getenv("ORID_HISTORY_LIMIT", "10"))
 
-ORID_REQUIRED_PASS_DEFAULT = int(os.getenv("ORID_REQUIRED_PASS", "2"))
+ORID_REQUIRED_PASS_DEFAULT = int(os.getenv("ORID_REQUIRED_PASS", "5"))
 ORID_REQUIRED_PASS_O = int(os.getenv("ORID_REQUIRED_PASS_O", str(ORID_REQUIRED_PASS_DEFAULT)))
 ORID_REQUIRED_PASS_R = int(os.getenv("ORID_REQUIRED_PASS_R", str(ORID_REQUIRED_PASS_DEFAULT)))
 ORID_REQUIRED_PASS_I = int(os.getenv("ORID_REQUIRED_PASS_I", str(ORID_REQUIRED_PASS_DEFAULT)))
 ORID_REQUIRED_PASS_D = int(os.getenv("ORID_REQUIRED_PASS_D", str(ORID_REQUIRED_PASS_DEFAULT)))
 
-ORID_MIN_AI_TURNS_DEFAULT = int(os.getenv("ORID_MIN_AI_TURNS", "2"))
+ORID_MIN_AI_TURNS_DEFAULT = int(os.getenv("ORID_MIN_AI_TURNS", "4"))
 ORID_MIN_AI_TURNS_O = int(os.getenv("ORID_MIN_AI_TURNS_O", str(ORID_MIN_AI_TURNS_DEFAULT)))
 ORID_MIN_AI_TURNS_R = int(os.getenv("ORID_MIN_AI_TURNS_R", str(ORID_MIN_AI_TURNS_DEFAULT)))
 ORID_MIN_AI_TURNS_I = int(os.getenv("ORID_MIN_AI_TURNS_I", str(ORID_MIN_AI_TURNS_DEFAULT)))
@@ -154,9 +158,18 @@ ORID_MIN_AI_TURNS_D = int(os.getenv("ORID_MIN_AI_TURNS_D", str(ORID_MIN_AI_TURNS
 
 ORID_FOLLOWUP_MAX_COMPLETION_TOKENS = int(os.getenv("ORID_FOLLOWUP_MAX_COMPLETION_TOKENS", "120"))
 ORID_FOLLOWUP_TEMPERATURE = float(os.getenv("ORID_FOLLOWUP_TEMPERATURE", "0.7"))
+ORID_REDIRECT_TEMPERATURE = float(os.getenv("ORID_REDIRECT_TEMPERATURE", "0.9"))
+ORID_OFFTOPIC_STRICT = _env_bool("ORID_OFFTOPIC_STRICT", False)
+ORID_CHAT_PROMPT_VERSION = os.getenv("ORID_CHAT_PROMPT_VERSION", "orid-chat-v2.1")
+ORID_LIMIT_PER_MINUTE = int(os.getenv("ORID_LIMIT_PER_MINUTE", "30"))
+ORID_LIMIT_WINDOW_SECONDS = int(os.getenv("ORID_LIMIT_WINDOW_SECONDS", "60"))
+ORID_MAIN_FALLBACK_TEMPERATURE = float(os.getenv("ORID_MAIN_FALLBACK_TEMPERATURE", "0.9"))
 
 ORID_CHECKER_DEBUG = _env_bool("ORID_CHECKER_DEBUG", False)
 ORID_ALLOW_HEURISTIC_PASS = _env_bool("ORID_ALLOW_HEURISTIC_PASS", False)
+ORID_ENABLE_RATE_LIMIT = _env_bool("ORID_ENABLE_RATE_LIMIT", True)
+
+_CHAT_RATE_BUCKETS: dict[str, deque[float]] = defaultdict(deque)
 
 
 def get_required_pass(stage: str) -> int:
@@ -219,6 +232,8 @@ _GENERIC_QUESTION_PATTERNS = [
     r"有什麼感覺",
     r"提醒我們什麼",
     r"你會怎麼做",
+    r"接著是哪一件事讓情況開始改變",
+    r"接著發生了什麼",
 ]
 
 
@@ -680,6 +695,51 @@ def _choose_question_from_candidates(*candidates: str) -> str:
     return "你可以再說清楚一點嗎？"
 
 
+def _book_anchor_from_pack(book_pack: Optional[dict[str, Any]], seed: str) -> str:
+    if not isinstance(book_pack, dict):
+        return ""
+    pool: list[str] = []
+    title = str(book_pack.get("book_title") or "").strip()
+    if title:
+        pool.append(title)
+    for c in (book_pack.get("characters") or [])[:6]:
+        if isinstance(c, dict):
+            name = str(c.get("name") or "").strip()
+            if name:
+                pool.append(name)
+    for e in (book_pack.get("key_events") or [])[:8]:
+        s = str(e or "").strip()
+        if s:
+            short = re.sub(r"[，。；、].*$", "", s).strip()
+            pool.append(short or s[:14])
+    pool = [x[:14] for x in pool if x]
+    if not pool:
+        return ""
+    return _pick_variant(pool, seed)
+
+
+def _force_book_anchored_question(
+    *,
+    stage: str,
+    fallback_q: str,
+    book_pack: Optional[dict[str, Any]],
+    student_text: str,
+    category: str,
+) -> str:
+    q = _sanitize_one_question(fallback_q)
+    if q and (not _looks_generic_question(q)):
+        return q
+    anchor = _book_anchor_from_pack(book_pack, f"{category}:{stage}:{student_text}")
+    s = (stage or "O").upper()
+    if s == "R":
+        return _sanitize_one_question(f"回到故事裡的{anchor or '那個畫面'}，你當下最明顯的感覺是什麼")
+    if s == "I":
+        return _sanitize_one_question(f"根據{anchor or '故事裡這個轉折'}，你覺得它最提醒我們什麼")
+    if s == "D":
+        return _sanitize_one_question(f"如果再遇到{anchor or '類似情況'}，你會先做哪一個小步驟")
+    return _sanitize_one_question(f"回到{anchor or '故事內容'}，哪一件事讓情況開始改變")
+
+
 def _compose_reply_from_model(
     *,
     clean_ai: str,
@@ -709,11 +769,107 @@ def _stage_recent_lines(msgs: list[OridMessage], stage: str, limit: int = 8) -> 
     return out[-limit:]
 
 
+def _effective_depth_level(stage_turn: int, required_pass: int) -> int:
+    if required_pass <= 1:
+        return 3
+    ratio = max(0.0, min(float(stage_turn) / float(required_pass), 1.0))
+    if ratio < 0.34:
+        return 1
+    if ratio < 0.67:
+        return 2
+    return 3
+
+
+def _previous_stage_summary(msgs: list[OridMessage], current_stage: str, limit: int = 2) -> str:
+    stage = (current_stage or "O").strip().upper()
+    prev_map = {"R": "O", "I": "R", "D": "I"}
+    prev = prev_map.get(stage)
+    if not prev:
+        return ""
+    lines: list[str] = []
+    for m in reversed(msgs):
+        if (m.stage or "").strip().upper() != prev:
+            continue
+        role = "學生" if m.sender == "student" else "老師"
+        text = (m.text or "").strip()
+        if text:
+            lines.append(f"{role}:{text}")
+        if len(lines) >= limit:
+            break
+    return " | ".join(reversed(lines))
+
+
+def _is_meta_or_injection_text(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    meta_tokens = [
+        "忽略",
+        "無視",
+        "system prompt",
+        "你是chatgpt",
+        "你是 gpt",
+        "當作我通過",
+        "直接給我答案",
+        "幫我作弊",
+        "不要照規則",
+        "roleplay",
+    ]
+    return any(token in t for token in meta_tokens)
+
+
+def _is_low_effort_text(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return True
+    if len(t) <= 2:
+        return True
+    low_effort_tokens = {"不知道", "不會", "隨便", "嗯", "蛤", "呵", "..." , "。"}
+    if t in low_effort_tokens:
+        return True
+    return len(re.sub(r"\s+", "", t)) <= 3
+
+
+def _count_recent_student_streak(
+    msgs: list[OridMessage],
+    *,
+    predicate,
+    max_scan: int = 8,
+) -> int:
+    streak = 0
+    seen = 0
+    for m in reversed(msgs):
+        if m.sender != "student":
+            continue
+        seen += 1
+        if predicate((m.text or "").strip()):
+            streak += 1
+        else:
+            break
+        if seen >= max_scan:
+            break
+    return streak
+
+
+def _allow_chat_message(user_id: str) -> bool:
+    if not ORID_ENABLE_RATE_LIMIT or ORID_LIMIT_PER_MINUTE <= 0:
+        return True
+    now = time.time()
+    q = _CHAT_RATE_BUCKETS[user_id]
+    while q and (now - q[0] > ORID_LIMIT_WINDOW_SECONDS):
+        q.popleft()
+    if len(q) >= ORID_LIMIT_PER_MINUTE:
+        return False
+    q.append(now)
+    return True
+
+
 async def _generate_first_sentence(
     *,
     student_text: str,
     system_prompt: str,
     fallback_first: str,
+    temperature: Optional[float] = None,
 ) -> str:
     if client is None:
         return fallback_first
@@ -725,7 +881,7 @@ async def _generate_first_sentence(
                 {"role": "user", "content": f"學生剛剛說：{student_text}"},
             ],
             max_completion_tokens=ORID_FOLLOWUP_MAX_COMPLETION_TOKENS,
-            temperature=ORID_FOLLOWUP_TEMPERATURE,
+            temperature=temperature if temperature is not None else ORID_FOLLOWUP_TEMPERATURE,
         )
         first = _normalize_first_sentence(raw)
         if first:
@@ -745,8 +901,11 @@ async def llm_generate_reply(
     ai_turn_count_same_stage: int,
     min_ai_turns_same_stage: int,
     fallback_question: str,
+    prior_stage_summary: str = "",
+    latest_student_text: str = "",
 ) -> str:
     book_context = build_book_context_block(book_pack)
+    depth_level = _effective_depth_level(stage_turn=stage_turn, required_pass=required_pass)
     system_prompt = build_orid_chat_system_prompt(
         stage=stage,
         stage_turn=stage_turn,
@@ -755,6 +914,9 @@ async def llm_generate_reply(
         min_ai_turns_same_stage=min_ai_turns_same_stage,
         fallback_question=_sanitize_one_question(fallback_question),
         book_context=book_context,
+        depth_level=depth_level,
+        prior_stage_summary=prior_stage_summary,
+        latest_student_text=latest_student_text,
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -763,7 +925,7 @@ async def llm_generate_reply(
     return await _chat_completion(
         messages,
         max_completion_tokens=OPENAI_MAX_COMPLETION_TOKENS,
-        temperature=OPENAI_TEMPERATURE,
+        temperature=OPENAI_TEMPERATURE if OPENAI_TEMPERATURE is not None else ORID_MAIN_FALLBACK_TEMPERATURE,
     )
 
 
@@ -1118,6 +1280,50 @@ def _extract_hint_lines(raw: str) -> list[str]:
     return hints[:3]
 
 
+async def generate_natural_redirect(
+    *,
+    student_text: str,
+    fallback_q: str,
+    category: str,
+    current_stage: str,
+    book_pack: Optional[dict[str, Any]],
+    strike_count: int = 1,
+) -> str:
+    safe_category = category if category in {"unsafe", "off_topic", "low_effort", "meta", "rate_limit"} else "fallback"
+    fallback_first_map = {
+        "unsafe": _focus_ack(student_text, "unsafe"),
+        "off_topic": _neutral_pullback_ack(student_text),
+        "low_effort": _focus_ack(student_text, "pullback"),
+        "meta": "我們先把重點放在這本故事的討論。",
+        "rate_limit": "我們慢慢來，你每次說一個重點就好。",
+        "fallback": _focus_ack(student_text, "pullback"),
+    }
+    fallback_first = fallback_first_map.get(safe_category, _focus_ack(student_text, "pullback"))
+    anchored_q = _force_book_anchored_question(
+        stage=current_stage,
+        fallback_q=fallback_q,
+        book_pack=book_pack,
+        student_text=student_text,
+        category=safe_category,
+    )
+
+    sys = build_natural_redirect_prompt(
+        category=safe_category,  # type: ignore[arg-type]
+        stage=current_stage,
+        student_text=student_text,
+        fallback_question=fallback_q,
+        book_pack=book_pack,
+        strike_count=strike_count,
+    )
+    first = await _generate_first_sentence(
+        student_text=student_text,
+        system_prompt=sys,
+        fallback_first=fallback_first,
+        temperature=ORID_REDIRECT_TEMPERATURE,
+    )
+    return _two_sentence_ack_then_question(first, anchored_q)
+
+
 async def generate_natural_pullback(
     student_text: str,
     fallback_q: str,
@@ -1125,42 +1331,20 @@ async def generate_natural_pullback(
     *,
     anchor_student_text: bool = True,
     current_stage: Optional[str] = None,
+    book_pack: Optional[dict[str, Any]] = None,
+    strike_count: int = 1,
 ) -> str:
-    avoid_student_anchor = _should_avoid_student_anchor_for_pullback(student_text, anchor_student_text)
-    fallback_first = (
-        _neutral_pullback_ack(student_text)
-        if avoid_student_anchor
-        else _focus_ack(student_text, "pullback")
+    category = "off_topic" if _should_avoid_student_anchor_for_pullback(student_text, anchor_student_text) else "low_effort"
+    if custom_hint and "語氣" in custom_hint:
+        category = "unsafe"
+    return await generate_natural_redirect(
+        student_text=student_text,
+        fallback_q=fallback_q,
+        category=category,
+        current_stage=(current_stage or "O").upper(),
+        book_pack=book_pack,
+        strike_count=strike_count,
     )
-    hint_line = f"學生目前還缺：{custom_hint}" if custom_hint else "學生剛剛可能偏題或內容還不夠完整。"
-
-    anchor_rule = (
-        "這一句不要直接引用學生剛剛那句離題內容，也不要重複生活瑣事；要用中性方式把重點拉回故事。"
-        if avoid_student_anchor
-        else "這一句要自然承接學生剛剛說的內容。"
-    )
-
-    user_for_first = "學生剛剛離題了，請用中性方式把話題拉回故事。" if avoid_student_anchor else student_text
-
-    sys = f"""
-你是一位溫暖、自然的國小閱讀老師。
-{hint_line}
-
-請只輸出第一句，不要輸出第二句，不要列點：
-- {anchor_rule}
-- 不要責備
-- 不要做心理推測
-- 不要用模板稱讚
-- 不要提到階段、任務、系統
-- 12 到 28 個字左右
-""".strip()
-
-    first = await _generate_first_sentence(
-        student_text=user_for_first,
-        system_prompt=sys,
-        fallback_first=fallback_first,
-    )
-    return _two_sentence_ack_then_question(first, fallback_q)
 
 
 async def generate_stage_transition_reply(
@@ -1384,6 +1568,28 @@ async def chat(
 
     current_stage_before = (session.current_stage or "O").strip().upper()
     required_pass = get_required_pass(current_stage_before)
+    if not _allow_chat_message(str(user.id)):
+        fallback_q = _sanitize_one_question(pick_prompt_from_bank(book_pack, current_stage_before, session.stage_turn + 1))
+        final_ai_text = await generate_natural_redirect(
+            student_text=student_text,
+            fallback_q=fallback_q,
+            category="rate_limit",
+            current_stage=current_stage_before,
+            book_pack=book_pack,
+            strike_count=1,
+        )
+        db.add(OridMessage(session_id=session.id, stage=current_stage_before, sender="ai", text=final_ai_text))
+        await db.commit()
+        return OridChatResponse(
+            session_id=session.id,
+            stage=session.current_stage,
+            ai_reply=final_ai_text,
+            current_stage=session.current_stage,
+            stage_turn=session.stage_turn,
+            pass_ok=False,
+            reason="請慢一點，我們一次說一個重點",
+            next_suggested=session.current_stage,
+        )
 
     db.add(OridMessage(session_id=session.id, stage=current_stage_before, sender="student", text=student_text))
     await db.commit()
@@ -1394,6 +1600,16 @@ async def chat(
         .order_by(OridMessage.created_at.asc())
     )
     msgs = q.scalars().all()
+    prior_stage_summary = _previous_stage_summary(msgs, current_stage_before)
+    meta_input = _is_meta_or_injection_text(student_text)
+    low_effort_input = _is_low_effort_text(student_text)
+    off_topic_streak = _count_recent_student_streak(
+        msgs,
+        predicate=lambda text: looks_obviously_offtopic(text, book_pack),
+    )
+    unsafe_streak = _count_recent_student_streak(msgs, predicate=quick_unsafe_check)
+    meta_streak = _count_recent_student_streak(msgs, predicate=_is_meta_or_injection_text)
+    low_effort_streak = _count_recent_student_streak(msgs, predicate=_is_low_effort_text)
 
     history = build_stage_history(
         msgs,
@@ -1431,8 +1647,8 @@ async def chat(
     story_related = looks_story_related_to_book(student_text, book_pack)
     obvious_offtopic = looks_obviously_offtopic(student_text, book_pack)
     cross_stage_obj = _detect_cross_stage_answer(current_stage_before, student_text)
-    if (not checker_unsafe) and obvious_offtopic:
-        checker_off_topic = True
+    checker_off_topic = (checker_off_topic and obvious_offtopic) if ORID_OFFTOPIC_STRICT else (checker_off_topic or obvious_offtopic)
+    if checker_off_topic and (not checker_unsafe):
         if not checker_reason or checker_reason == "OK":
             checker_reason = "先回到故事"
         if _looks_generic_question(checker_q):
@@ -1448,9 +1664,38 @@ async def chat(
     if checker_unsafe:
         pass_ok = False
         reason = checker_unsafe_reason or "語氣不友善"
-        final_ai_text = _two_sentence_ack_then_question(
-            _focus_ack(student_text, "unsafe"),
-            fallback_q,
+        final_ai_text = await generate_natural_redirect(
+            student_text=student_text,
+            fallback_q=fallback_q,
+            category="unsafe",
+            current_stage=current_stage_before,
+            book_pack=book_pack,
+            strike_count=max(1, unsafe_streak),
+        )
+        db.add(OridMessage(session_id=session.id, stage=current_stage_before, sender="ai", text=final_ai_text))
+        await db.commit()
+        await db.refresh(session)
+        return OridChatResponse(
+            session_id=session.id,
+            stage=session.current_stage,
+            ai_reply=final_ai_text,
+            current_stage=session.current_stage,
+            stage_turn=session.stage_turn,
+            pass_ok=False,
+            reason=reason,
+            next_suggested=session.current_stage,
+        )
+
+    if meta_input:
+        pass_ok = False
+        reason = "先把重點放回故事內容"
+        final_ai_text = await generate_natural_redirect(
+            student_text=student_text,
+            fallback_q=fallback_q,
+            category="meta",
+            current_stage=current_stage_before,
+            book_pack=book_pack,
+            strike_count=max(1, meta_streak),
         )
         db.add(OridMessage(session_id=session.id, stage=current_stage_before, sender="ai", text=final_ai_text))
         await db.commit()
@@ -1474,6 +1719,33 @@ async def chat(
             fallback_q,
             anchor_student_text=not obvious_offtopic,
             current_stage=current_stage_before,
+            book_pack=book_pack,
+            strike_count=max(1, off_topic_streak),
+        )
+        db.add(OridMessage(session_id=session.id, stage=current_stage_before, sender="ai", text=final_ai_text))
+        await db.commit()
+        await db.refresh(session)
+        return OridChatResponse(
+            session_id=session.id,
+            stage=session.current_stage,
+            ai_reply=final_ai_text,
+            current_stage=session.current_stage,
+            stage_turn=session.stage_turn,
+            pass_ok=False,
+            reason=reason,
+            next_suggested=session.current_stage,
+        )
+
+    if low_effort_input:
+        pass_ok = False
+        reason = "可以再補一點內容"
+        final_ai_text = await generate_natural_redirect(
+            student_text=student_text,
+            fallback_q=fallback_q,
+            category="low_effort",
+            current_stage=current_stage_before,
+            book_pack=book_pack,
+            strike_count=max(1, low_effort_streak),
         )
         db.add(OridMessage(session_id=session.id, stage=current_stage_before, sender="ai", text=final_ai_text))
         await db.commit()
@@ -1490,16 +1762,41 @@ async def chat(
         )
 
     min_ai_turns_same_stage = get_min_ai_turns(current_stage_before)
-    raw_ai = await llm_generate_reply(
-        stage=current_stage_before,
-        history=history,
-        book_pack=book_pack,
-        stage_turn=session.stage_turn,
-        required_pass=required_pass,
-        ai_turn_count_same_stage=ai_count_same_stage,
-        min_ai_turns_same_stage=min_ai_turns_same_stage,
-        fallback_question=fallback_q,
-    )
+    try:
+        raw_ai = await llm_generate_reply(
+            stage=current_stage_before,
+            history=history,
+            book_pack=book_pack,
+            stage_turn=session.stage_turn,
+            required_pass=required_pass,
+            ai_turn_count_same_stage=ai_count_same_stage,
+            min_ai_turns_same_stage=min_ai_turns_same_stage,
+            fallback_question=fallback_q,
+            prior_stage_summary=prior_stage_summary,
+            latest_student_text=student_text,
+        )
+    except Exception:
+        final_ai_text = await generate_natural_redirect(
+            student_text=student_text,
+            fallback_q=fallback_q,
+            category="fallback",
+            current_stage=current_stage_before,
+            book_pack=book_pack,
+            strike_count=1,
+        )
+        db.add(OridMessage(session_id=session.id, stage=current_stage_before, sender="ai", text=final_ai_text))
+        await db.commit()
+        await db.refresh(session)
+        return OridChatResponse(
+            session_id=session.id,
+            stage=session.current_stage,
+            ai_reply=final_ai_text,
+            current_stage=session.current_stage,
+            stage_turn=session.stage_turn,
+            pass_ok=False,
+            reason="目前有點忙，先慢慢聊這一題",
+            next_suggested=session.current_stage,
+        )
 
     pass_ok, next_suggest, reason, clean_ai, has_tags = parse_control_tags(raw_ai)
 
@@ -1571,6 +1868,8 @@ async def chat(
                 custom_hint=short_reason,
                 anchor_student_text=not obvious_offtopic,
                 current_stage=current_stage_before,
+                book_pack=book_pack,
+                strike_count=max(1, off_topic_streak if obvious_offtopic else low_effort_streak),
             )
 
     ai_stage_for_save = session.current_stage if will_advance else current_stage_before
@@ -1578,6 +1877,27 @@ async def chat(
 
     await db.commit()
     await db.refresh(session)
+    print(
+        "[orid_chat_log]",
+        json.dumps(
+            {
+                "session_id": str(session.id),
+                "user_id": str(user.id),
+                "stage_before": current_stage_before,
+                "stage_after": session.current_stage,
+                "pass_ok": bool(pass_ok),
+                "reason": reason or "",
+                "off_topic_streak": off_topic_streak,
+                "unsafe_streak": unsafe_streak,
+                "meta_streak": meta_streak,
+                "low_effort_streak": low_effort_streak,
+                "model": OPENAI_MODEL,
+                "prompt_version": ORID_CHAT_PROMPT_VERSION,
+                "temperature": OPENAI_TEMPERATURE if OPENAI_TEMPERATURE is not None else ORID_MAIN_FALLBACK_TEMPERATURE,
+            },
+            ensure_ascii=False,
+        ),
+    )
 
     response_stage = session.current_stage
     return OridChatResponse(

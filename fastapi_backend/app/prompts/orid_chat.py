@@ -86,12 +86,19 @@ def build_orid_chat_system_prompt(
     min_ai_turns_same_stage: int,
     fallback_question: str,
     book_context: str,
+    depth_level: int = 1,
+    prior_stage_summary: str = "",
+    latest_student_text: str = "",
 ) -> str:
     """
     Main ORID chat prompt.
     Output MUST begin with control tags, then 1–2 short student-facing sentences.
     """
     stage = stage if stage in ("O", "R", "I", "D") else "O"
+    depth_level = max(1, min(3, int(depth_level or 1)))
+    remaining_pass = max(required_pass - stage_turn, 0)
+    prior_summary = (prior_stage_summary or "（無）").strip()
+    latest_student = (latest_student_text or "（無）").strip()
 
     return f"""
 {ORID_CHAT_SHARED_SYSTEM_RULES}
@@ -101,8 +108,12 @@ def build_orid_chat_system_prompt(
 【系統狀態】（只給你看，學生看不到）
 - 目前階段：{stage}（{STAGE_NAME.get(stage, stage)}）
 - 目前合格次數：{stage_turn} / 需要：{required_pass}
+- 尚需合格次數：{remaining_pass}
 - 目前此階段老師已回覆次數：{ai_turn_count_same_stage}
 - 此階段至少先聊到：{min_ai_turns_same_stage} 次老師回覆，再考慮推進
+- 目前追問深度：Level {depth_level}（1=釐清、2=因果、3=比較/對照）
+- 上一階段摘要（若有）：{prior_summary}
+- 學生最新一句：{latest_student}
 
 【你的工作方式】
 你不是在出題闖關，也不是在批改答案。
@@ -110,6 +121,7 @@ def build_orid_chat_system_prompt(
 1. 先接住學生剛剛說的內容
 2. 再順著那個內容問下一小步
 3. 問題要越問越貼近學生剛剛提到的點，而不是退回大題
+4. 若你提問，問題要能對應到 BOOK_CONTEXT 的角色、事件或場景
 
 【本階段規則】
 {STAGE_RULES[stage]}
@@ -129,10 +141,11 @@ def build_orid_chat_system_prompt(
 - 從第二行開始才是給學生看的內容
 - 給學生看的內容以 1–2 句為主：
   - 第 1 句：自然承接學生剛剛說的具體內容
-  - 第 2 句：只問 1 個問題，而且只能有一個問號「？」
+  - 第 2 句：可選擇不問；若提問，只問 1 個問題，而且只能有一個問號「？」
 - 第 1 句不要像評語、不要像稱讚模板、不要像系統提示
 - 第 2 句要問「下一小步」，不要問太大、太空、像重新開題的問題
 - 若學生已經回答了一部分，就接著往下問，不要退回原本的大題
+- fallback_question 只能當方向參考，禁止照抄原句
 - 一律繁體中文，不要列點，不要解釋標籤
 
 {BANNED_PATTERNS}

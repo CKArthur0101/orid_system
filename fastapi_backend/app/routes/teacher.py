@@ -94,6 +94,7 @@ async def teacher_class_overview(
     if not classroom:
         raise HTTPException(status_code=404, detail="Class not found")
 
+    # ── 1. All students in class (single query) ──────────────────────────────
     student_rows = await db.execute(
         select(User)
         .join(StudentClassMembership, StudentClassMembership.student_id == User.id)
@@ -101,50 +102,116 @@ async def teacher_class_overview(
         .order_by(User.email.asc())
     )
     students = student_rows.scalars().all()
+    if not students:
+        return TeacherClassOverview(
+            class_id=classroom.id,
+            class_name=classroom.name,
+            week=week,
+            total_students=0,
+            active_students=0,
+            completion_rate=0.0,
+            stage_distribution={"O": 0, "R": 0, "I": 0, "D": 0},
+            students=[],
+        )
+
+    student_ids = [s.id for s in students]
     reading_title = READING_TITLE_TEMPLATE.format(week=week)
+
+    # ── 2. Latest session per student (single query with row_number) ─────────
+    # Use a subquery: rank sessions by created_at desc per user, pick rank=1
+    from sqlalchemy import over, cast
+    from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+
+    subq = (
+        select(
+            OridSession,
+            func.row_number()
+            .over(
+                partition_by=OridSession.user_id,
+                order_by=OridSession.created_at.desc(),
+            )
+            .label("rn"),
+        )
+        .join(Reading, OridSession.reading_id == Reading.id)
+        .where(
+            OridSession.user_id.in_(student_ids),
+            Reading.title == reading_title,
+        )
+        .subquery()
+    )
+    latest_sessions_res = await db.execute(
+        select(subq).where(subq.c.rn == 1)
+    )
+    session_rows = latest_sessions_res.mappings().all()
+
+    # Map student_id → session info
+    session_by_student: dict[UUID, dict] = {}
+    session_ids: list[UUID] = []
+    for row in session_rows:
+        uid = row["user_id"]
+        sid = row["id"]
+        session_by_student[uid] = {
+            "id": sid,
+            "current_stage": row["current_stage"] or "O",
+        }
+        session_ids.append(sid)
+
+    # ── 3. Message counts per session (single GROUP BY query) ────────────────
+    msg_counts: dict[UUID, int] = {}
+    last_activity: dict[UUID, object] = {}
+    if session_ids:
+        mc_res = await db.execute(
+            select(
+                OridMessage.session_id,
+                func.count(OridMessage.id).label("cnt"),
+                func.max(OridMessage.created_at).label("last_at"),
+            )
+            .where(OridMessage.session_id.in_(session_ids))
+            .group_by(OridMessage.session_id)
+        )
+        for mc_row in mc_res.mappings().all():
+            msg_counts[mc_row["session_id"]] = int(mc_row["cnt"])
+            last_activity[mc_row["session_id"]] = mc_row["last_at"]
+
+    # ── 4. Latest writing per student (single query with row_number) ─────────
+    writing_stages: dict[UUID, int] = {}
+    if session_ids:
+        wsubq = (
+            select(
+                OridWriting,
+                func.row_number()
+                .over(
+                    partition_by=OridWriting.user_id,
+                    order_by=OridWriting.created_at.desc(),
+                )
+                .label("rn"),
+            )
+            .where(
+                OridWriting.user_id.in_(student_ids),
+                OridWriting.session_id.in_(session_ids),
+                OridWriting.week == week,
+            )
+            .subquery()
+        )
+        w_res = await db.execute(select(wsubq).where(wsubq.c.rn == 1))
+        for w_row in w_res.mappings().all():
+            uid = w_row["user_id"]
+            writing_stages[uid] = _count_completed_stages(w_row.get("content"))
+
+    # ── 5. Assemble results ──────────────────────────────────────────────────
     stage_distribution = {"O": 0, "R": 0, "I": 0, "D": 0}
     rows: list[TeacherStudentRow] = []
 
     for student in students:
-        s_res = await db.execute(
-            select(OridSession)
-            .join(Reading, OridSession.reading_id == Reading.id)
-            .where(OridSession.user_id == student.id, Reading.title == reading_title)
-            .order_by(OridSession.created_at.desc())
-            .limit(1)
-        )
-        session = s_res.scalars().first()
-        stage = (session.current_stage if session else "O") or "O"
+        sess = session_by_student.get(student.id)
+        stage = (sess["current_stage"] if sess else "O") or "O"
         stage = stage if stage in stage_distribution else "O"
         stage_distribution[stage] += 1
 
-        interaction_count = 0
-        last_activity_at = None
-        writing_completed_stages = 0
-
-        if session:
-            msg_count_res = await db.execute(
-                select(func.count(OridMessage.id)).where(OridMessage.session_id == session.id)
-            )
-            interaction_count = int(msg_count_res.scalar() or 0)
-
-            last_activity_res = await db.execute(
-                select(func.max(OridMessage.created_at)).where(OridMessage.session_id == session.id)
-            )
-            last_activity_at = last_activity_res.scalar()
-
-            writing_res = await db.execute(
-                select(OridWriting)
-                .where(
-                    OridWriting.user_id == student.id,
-                    OridWriting.session_id == session.id,
-                    OridWriting.week == week,
-                )
-                .order_by(OridWriting.created_at.desc())
-                .limit(1)
-            )
-            writing = writing_res.scalars().first()
-            writing_completed_stages = _count_completed_stages(writing.content if writing else None)
+        sid = sess["id"] if sess else None
+        interaction_count = msg_counts.get(sid, 0) if sid else 0
+        last_at = last_activity.get(sid) if sid else None
+        completed = writing_stages.get(student.id, 0)
 
         rows.append(
             TeacherStudentRow(
@@ -152,8 +219,8 @@ async def teacher_class_overview(
                 student_email=student.email,
                 current_stage=stage,
                 interaction_count=interaction_count,
-                writing_completed_stages=writing_completed_stages,
-                last_activity_at=last_activity_at,
+                writing_completed_stages=completed,
+                last_activity_at=last_at,
             )
         )
 
@@ -216,15 +283,16 @@ async def teacher_student_summary(
     last_activity_at = None
 
     if session:
-        msg_count_res = await db.execute(
-            select(func.count(OridMessage.id)).where(OridMessage.session_id == session.id)
+        mc_res = await db.execute(
+            select(
+                func.count(OridMessage.id).label("cnt"),
+                func.max(OridMessage.created_at).label("last_at"),
+            ).where(OridMessage.session_id == session.id)
         )
-        interaction_count = int(msg_count_res.scalar() or 0)
-
-        last_activity_res = await db.execute(
-            select(func.max(OridMessage.created_at)).where(OridMessage.session_id == session.id)
-        )
-        last_activity_at = last_activity_res.scalar()
+        mc_row = mc_res.mappings().first()
+        if mc_row:
+            interaction_count = int(mc_row["cnt"] or 0)
+            last_activity_at = mc_row["last_at"]
 
         writing_res = await db.execute(
             select(OridWriting)
