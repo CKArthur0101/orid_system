@@ -1,15 +1,11 @@
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-export default function WeekBookPage({
-  params,
-}: {
-  params: { week: string };
-}) {
+export default function WeekBookPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">本週教材：{params.week}</h1>
+        <h1 className="text-2xl font-semibold">本週教材</h1>
         <p className="text-sm text-muted-foreground">
           這一頁之後會放：閱讀內容 + 進度條 + 聊天 + 寫作（同一個畫面）
         </p>

@@ -1,0 +1,72 @@
+{
+  "schema": "orid_faiss_meta_v1",
+  "bundle_id": "week_1",
+  "embedding_provider": "hash",
+  "embedding_model": "hash",
+  "embedding_dim": 256,
+  "metric": "cosine_via_inner_product",
+  "version": 3,
+  "source_path": "..\\local-shared-data\\book_pack_week1.json",
+  "chunks": [
+    {
+      "chunk_id": "event_0001",
+      "text": "阿松爺爺家的柿子很甜，但他一直想把柿子獨占起來，不想分給別人。",
+      "page": null,
+      "source": "key_events"
+    },
+    {
+      "chunk_id": "event_0002",
+      "text": "阿松爺爺在大家面前吃柿子、炫耀柿子有多好，旁人只能羨慕地看著。",
+      "page": null,
+      "source": "key_events"
+    },
+    {
+      "chunk_id": "event_0003",
+      "text": "隔壁搬來新鄰居「哎喲奶奶」，她覺得柿子看起來很好吃；阿松爺爺把自己吃完柿子剩下的「柿子蒂」給她。",
+      "page": null,
+      "source": "key_events"
+    },
+    {
+      "chunk_id": "event_0004",
+      "text": "哎喲奶奶拿到柿子蒂很開心；隔天她和小朋友用柿子蒂玩陀螺，大家覺得很厲害，還想要更多。",
+      "page": null,
+      "source": "key_events"
+    },
+    {
+      "chunk_id": "event_0005",
+      "text": "阿松爺爺擔心大家來要柿子蒂，急忙把柿子樹上的柿子都採下來藏到屋後倉庫，結果小朋友來要時樹上已沒有柿子。",
+      "page": null,
+      "source": "key_events"
+    },
+    {
+      "chunk_id": "event_0006",
+      "text": "阿松爺爺改拿出採柿子時掉下來的一片「柿子葉」給大家，哎喲奶奶和小朋友很開心並帶回去。",
+      "page": null,
+      "source": "key_events"
+    },
+    {
+      "chunk_id": "event_0007",
+      "text": "隔天小朋友用柿子葉做出好玩的東西（例如飾品、娃娃等），又想要更多葉子；阿松爺爺急忙把葉子打下來藏起來，大家來要時又撲空。",
+      "page": null,
+      "source": "key_events"
+    },
+    {
+      "chunk_id": "event_0008",
+      "text": "阿松爺爺再改拿出打葉子時掉落的一根「樹枝」給大家；隔天哎喲奶奶和小朋友用樹枝烤麵包、吃得很開心，還說樹枝快不夠用。",
+      "page": null,
+      "source": "key_events"
+    },
+    {
+      "chunk_id": "event_0009",
+      "text": "阿松爺爺為了不讓大家再拿到，急忙砍樹枝，最後發現自己竟把整棵柿子樹弄到只剩樹椿，後悔大哭。",
+      "page": null,
+      "source": "key_events"
+    },
+    {
+      "chunk_id": "event_0010",
+      "text": "阿松爺爺想起倉庫裡還藏著很多柿子；大家一起把柿子拿出來吃，並把柿子裡的種子到處撒開，準備種出新的柿子樹，讓甜柿子變成大家的甜柿子。",
+      "page": null,
+      "source": "key_events"
+    }
+  ]
+}

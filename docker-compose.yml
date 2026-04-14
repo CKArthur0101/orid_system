@@ -55,7 +55,8 @@ services:
     user: node
     ports:
       - "127.0.0.1:3100:3000" # ✅ 用 3100 避開 3000 被佔用/被擋
-    command: npm run dev -- --hostname 0.0.0.0 --port 3000
+    # Next 16 會寫入 .next/dev/logs；bind mount 常無此路徑，需先建立否則 ENOENT
+    command: sh -c "mkdir -p /app/.next/dev/logs && npm run dev -- --hostname 0.0.0.0 --port 3000"
     networks:
       - my_network
     environment:

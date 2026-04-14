@@ -21,7 +21,7 @@ export default function DashboardLayout({
     <div className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-amber-50/30">
       {/* Top navigation */}
       <header className="sticky top-0 z-30 border-b bg-white/80 backdrop-blur-md shadow-sm">
-        <div className="mx-auto flex h-14 max-w-[1440px] items-center justify-between px-6">
+        <div className="mx-auto flex h-14 w-full max-w-[min(100vw-1.5rem,1920px)] items-center justify-between px-4 sm:px-6">
           <div className="flex items-center gap-6">
             <Link href="/dashboard" className="flex items-center gap-2">
               <span className="text-xl">📖</span>
@@ -63,7 +63,9 @@ export default function DashboardLayout({
       </header>
 
       {/* Content */}
-      <main className="mx-auto max-w-[1440px] px-6 py-6">{children}</main>
+      <main className="mx-auto w-full max-w-[min(100vw-1.5rem,1920px)] px-4 py-4 sm:px-6 sm:py-6">
+        {children}
+      </main>
     </div>
   );
 }

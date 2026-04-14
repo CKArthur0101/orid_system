@@ -1,9 +1,10 @@
 import uuid
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi_users import schemas
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ----------------------------
@@ -100,6 +101,27 @@ class OridChatResponse(BaseModel):
     reason: str | None = None
     next_suggested: str | None = None
 
+
+class WritingCoachChatRequest(BaseModel):
+    session_id: UUID
+    student_text: str
+    stage: str = Field(..., pattern="^(O|R|I|D)$")
+    draft: str = Field("d1", pattern="^(d1|d2)$")
+    source: str = Field(..., pattern="^(free_text|feedback_button)$")
+    week: int = Field(1, ge=1, le=6)
+    save_feedback: bool = True
+
+
+class WritingCoachChatResponse(BaseModel):
+    session_id: UUID
+    ai_reply: str
+    stage: str
+    feedback_ok: bool | None = None
+    feedback_missing: list[str] = []
+    feedback_suggestions: list[str] = []
+    feedback_example: str | None = None
+    feedback_improved: str | None = None
+    meta: dict[str, Any] = {}
 
 
 # ----------------------------

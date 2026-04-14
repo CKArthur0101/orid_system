@@ -5,6 +5,7 @@ Prompt bank for AI–ORID system.
 - orid_chat.py: ORID chat system prompt builder (O/R/I/D)
 - writing_feedback.py: genai writing feedback prompt builder (Draft1->Draft2)
 - writing_assist.py: one-click draft generation prompt builder (Draft1/Draft2)
+- writing_coach_chat.py: writing-coach persona + control reply templates
 """
 
 from .shared import ORID_CHAT_SHARED_SYSTEM_RULES, build_book_context_block

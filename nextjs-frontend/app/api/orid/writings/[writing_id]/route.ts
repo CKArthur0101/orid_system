@@ -22,10 +22,10 @@ function forwardHeaders(req: NextRequest) {
 
 export async function PUT(
   req: NextRequest,
-  { params }: { params: { writing_id: string } }
+  { params }: { params: Promise<{ writing_id: string }> }
 ) {
   try {
-    const writingId = params.writing_id;
+    const { writing_id: writingId } = await params;
 
     // 你前端通常送 { content: "..." }
     const bodyText = await req.text();

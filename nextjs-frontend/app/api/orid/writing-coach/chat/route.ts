@@ -10,7 +10,7 @@ function jsonOrDetailResponse(status: number, text: string) {
   try {
     return NextResponse.json(JSON.parse(text), { status });
   } catch {
-    return NextResponse.json({ detail: text || `chat failed (${status})` }, { status });
+    return NextResponse.json({ detail: text || `writing-coach chat failed (${status})` }, { status });
   }
 }
 
@@ -20,7 +20,7 @@ export async function POST(req: Request) {
 
   const rawBody = await req.text();
 
-  const r = await fetch(`${API_BASE_URL}/orid/chat`, {
+  const r = await fetch(`${API_BASE_URL}/orid/writing-coach/chat`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

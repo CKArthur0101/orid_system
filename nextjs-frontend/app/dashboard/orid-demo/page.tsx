@@ -70,16 +70,24 @@ export default function Page() {
 
     setLoading(true);
     try {
-      const res = await fetch("/api/orid/chat", {
+      const res = await fetch("/api/orid/writing-coach/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId, student_text: input }),
+        body: JSON.stringify({
+          session_id: sessionId,
+          student_text: input,
+          stage: "O",
+          draft: "d1",
+          source: "free_text",
+          week: 1,
+          save_feedback: false,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.detail || "chat failed");
 
-      setStage(data.current_stage ?? data.stage ?? "-");
-      setStageTurn(data.stage_turn ?? 0);
+      setStage(data.stage ?? "-");
+      setStageTurn(0);
       setMessages((prev) => [...prev, { role: "ai", text: data.ai_reply }]);
     } catch (e: any) {
       setErr(e.message || "error");

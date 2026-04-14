@@ -829,6 +829,800 @@
           }
         }
       }
+    },
+    "/orid/readings": {
+      "post": {
+        "tags": [
+          "orid"
+        ],
+        "summary": "Create Reading",
+        "operationId": "create_reading",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadingCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadingRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/orid/readings/{reading_id}": {
+      "get": {
+        "tags": [
+          "orid"
+        ],
+        "summary": "Get Reading",
+        "operationId": "get_reading",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "reading_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Reading Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadingRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orid/sessions": {
+      "post": {
+        "tags": [
+          "orid"
+        ],
+        "summary": "Create Session",
+        "operationId": "create_session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OridSessionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OridSessionRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/orid/sessions/ensure": {
+      "post": {
+        "tags": [
+          "orid"
+        ],
+        "summary": "Ensure Session",
+        "operationId": "ensure_session",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "week",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 6,
+              "minimum": 1,
+              "title": "Week"
+            }
+          },
+          {
+            "name": "condition",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Condition"
+            }
+          },
+          {
+            "name": "force_new",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "true \u6642\u5f37\u5236\u5efa\u7acb\u65b0 session\uff1bfalse \u53d6\u6700\u8fd1\u4e00\u6b21\u3002",
+              "default": false,
+              "title": "Force New"
+            },
+            "description": "true \u6642\u5f37\u5236\u5efa\u7acb\u65b0 session\uff1bfalse \u53d6\u6700\u8fd1\u4e00\u6b21\u3002"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OridSessionRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orid/writing-coach/chat": {
+      "post": {
+        "tags": [
+          "orid"
+        ],
+        "summary": "Writing Coach Chat",
+        "operationId": "writing_coach_chat",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WritingCoachChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WritingCoachChatResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/orid/writings/assist": {
+      "post": {
+        "tags": [
+          "orid"
+        ],
+        "summary": "Writing Assist",
+        "operationId": "writing_assist",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WritingAssistRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WritingAssistResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/orid/writings/feedback": {
+      "post": {
+        "tags": [
+          "orid"
+        ],
+        "summary": "Writing Feedback",
+        "operationId": "writing_feedback",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WritingFeedbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WritingFeedbackResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/orid/writings": {
+      "post": {
+        "tags": [
+          "orid"
+        ],
+        "summary": "Create Writing",
+        "operationId": "create_writing",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OridWritingCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OridWritingRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "orid"
+        ],
+        "summary": "List Writings",
+        "operationId": "list_writings",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "reading_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Reading Id"
+            }
+          },
+          {
+            "name": "week",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Week"
+            }
+          },
+          {
+            "name": "latest",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Latest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OridWritingRead"
+                  },
+                  "title": "Response Orid-List Writings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orid/writings/{writing_id}": {
+      "put": {
+        "tags": [
+          "orid"
+        ],
+        "summary": "Update Writing",
+        "operationId": "update_writing",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "writing_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Writing Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OridWritingUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OridWritingRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orid/messages": {
+      "get": {
+        "tags": [
+          "orid"
+        ],
+        "summary": "List Messages",
+        "operationId": "list_messages",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(asc|desc)$",
+              "default": "asc",
+              "title": "Order"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "default": 200,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OridMessageRead"
+                  },
+                  "title": "Response Orid-List Messages"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/teacher/me/classes": {
+      "get": {
+        "tags": [
+          "teacher"
+        ],
+        "summary": "Teacher Me Classes",
+        "operationId": "teacher_me_classes",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TeacherClassRead"
+                  },
+                  "type": "array",
+                  "title": "Response Teacher-Teacher Me Classes"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/teacher/classes/{class_id}/overview": {
+      "get": {
+        "tags": [
+          "teacher"
+        ],
+        "summary": "Teacher Class Overview",
+        "operationId": "teacher_class_overview",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "class_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Class Id"
+            }
+          },
+          {
+            "name": "week",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 6,
+              "minimum": 1,
+              "default": 1,
+              "title": "Week"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeacherClassOverview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/teacher/classes/{class_id}/students/{student_id}/summary": {
+      "get": {
+        "tags": [
+          "teacher"
+        ],
+        "summary": "Teacher Student Summary",
+        "operationId": "teacher_student_summary",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "class_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Class Id"
+            }
+          },
+          {
+            "name": "student_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Student Id"
+            }
+          },
+          {
+            "name": "week",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 6,
+              "minimum": 1,
+              "default": 1,
+              "title": "Week"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeacherStudentSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1028,6 +1822,222 @@
         ],
         "title": "ItemRead"
       },
+      "OridMessageRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "sender": {
+            "type": "string",
+            "title": "Sender"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "session_id",
+          "stage",
+          "sender",
+          "text",
+          "created_at"
+        ],
+        "title": "OridMessageRead"
+      },
+      "OridSessionCreate": {
+        "properties": {
+          "reading_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Reading Id"
+          },
+          "condition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Condition"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reading_id"
+        ],
+        "title": "OridSessionCreate"
+      },
+      "OridSessionRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "reading_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Reading Id"
+          },
+          "condition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Condition"
+          },
+          "current_stage": {
+            "type": "string",
+            "title": "Current Stage"
+          },
+          "stage_turn": {
+            "type": "integer",
+            "title": "Stage Turn"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "reading_id",
+          "condition",
+          "current_stage",
+          "stage_turn",
+          "created_at"
+        ],
+        "title": "OridSessionRead"
+      },
+      "OridWritingCreate": {
+        "properties": {
+          "reading_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Reading Id"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "week": {
+            "type": "integer",
+            "title": "Week"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reading_id",
+          "session_id",
+          "week",
+          "content"
+        ],
+        "title": "OridWritingCreate"
+      },
+      "OridWritingRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "User Id"
+          },
+          "reading_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Reading Id"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "week": {
+            "type": "integer",
+            "title": "Week"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "user_id",
+          "reading_id",
+          "session_id",
+          "week",
+          "content",
+          "created_at"
+        ],
+        "title": "OridWritingRead"
+      },
+      "OridWritingUpdate": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "title": "OridWritingUpdate"
+      },
       "Page_ItemRead_": {
         "properties": {
           "items": {
@@ -1094,6 +2104,247 @@
         ],
         "title": "Page[ItemRead]"
       },
+      "ReadingCreate": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "content"
+        ],
+        "title": "ReadingCreate"
+      },
+      "ReadingRead": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "content",
+          "id",
+          "created_at"
+        ],
+        "title": "ReadingRead"
+      },
+      "TeacherClassOverview": {
+        "properties": {
+          "class_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Class Id"
+          },
+          "class_name": {
+            "type": "string",
+            "title": "Class Name"
+          },
+          "week": {
+            "type": "integer",
+            "title": "Week"
+          },
+          "total_students": {
+            "type": "integer",
+            "title": "Total Students"
+          },
+          "active_students": {
+            "type": "integer",
+            "title": "Active Students"
+          },
+          "completion_rate": {
+            "type": "number",
+            "title": "Completion Rate"
+          },
+          "stage_distribution": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Stage Distribution"
+          },
+          "students": {
+            "items": {
+              "$ref": "#/components/schemas/TeacherStudentRow"
+            },
+            "type": "array",
+            "title": "Students"
+          }
+        },
+        "type": "object",
+        "required": [
+          "class_id",
+          "class_name",
+          "week",
+          "total_students",
+          "active_students",
+          "completion_rate",
+          "stage_distribution",
+          "students"
+        ],
+        "title": "TeacherClassOverview"
+      },
+      "TeacherClassRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "year": {
+            "type": "integer",
+            "title": "Year"
+          },
+          "external_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "year"
+        ],
+        "title": "TeacherClassRead"
+      },
+      "TeacherStudentRow": {
+        "properties": {
+          "student_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Student Id"
+          },
+          "student_email": {
+            "type": "string",
+            "title": "Student Email"
+          },
+          "current_stage": {
+            "type": "string",
+            "title": "Current Stage"
+          },
+          "interaction_count": {
+            "type": "integer",
+            "title": "Interaction Count"
+          },
+          "writing_completed_stages": {
+            "type": "integer",
+            "title": "Writing Completed Stages"
+          },
+          "last_activity_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Activity At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "student_id",
+          "student_email",
+          "current_stage",
+          "interaction_count",
+          "writing_completed_stages"
+        ],
+        "title": "TeacherStudentRow"
+      },
+      "TeacherStudentSummary": {
+        "properties": {
+          "class_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Class Id"
+          },
+          "student_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Student Id"
+          },
+          "student_email": {
+            "type": "string",
+            "title": "Student Email"
+          },
+          "week": {
+            "type": "integer",
+            "title": "Week"
+          },
+          "current_stage": {
+            "type": "string",
+            "title": "Current Stage"
+          },
+          "interaction_count": {
+            "type": "integer",
+            "title": "Interaction Count"
+          },
+          "writing_completed_stages": {
+            "type": "integer",
+            "title": "Writing Completed Stages"
+          },
+          "last_activity_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Activity At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "class_id",
+          "student_id",
+          "student_email",
+          "week",
+          "current_stage",
+          "interaction_count",
+          "writing_completed_stages"
+        ],
+        "title": "TeacherStudentSummary"
+      },
       "UserCreate": {
         "properties": {
           "email": {
@@ -1140,6 +2391,11 @@
             ],
             "title": "Is Verified",
             "default": false
+          },
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "default": "student"
           }
         },
         "type": "object",
@@ -1175,6 +2431,11 @@
             "type": "boolean",
             "title": "Is Verified",
             "default": false
+          },
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "default": "student"
           }
         },
         "type": "object",
@@ -1241,6 +2502,17 @@
               }
             ],
             "title": "Is Verified"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
           }
         },
         "type": "object",
@@ -1278,6 +2550,334 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "WritingAssistRequest": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "week": {
+            "type": "integer",
+            "maximum": 6.0,
+            "minimum": 1.0,
+            "title": "Week"
+          },
+          "stage": {
+            "type": "string",
+            "pattern": "^(O|R|I|D)$",
+            "title": "Stage"
+          },
+          "draft": {
+            "type": "string",
+            "pattern": "^(d1|d2)$",
+            "title": "Draft",
+            "default": "d1"
+          },
+          "base_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Text"
+          },
+          "context_draft": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Draft"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "week",
+          "stage"
+        ],
+        "title": "WritingAssistRequest"
+      },
+      "WritingAssistResponse": {
+        "properties": {
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "draft": {
+            "type": "string",
+            "title": "Draft"
+          },
+          "draft_text": {
+            "type": "string",
+            "title": "Draft Text"
+          },
+          "tips": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tips",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "stage",
+          "draft",
+          "draft_text"
+        ],
+        "title": "WritingAssistResponse"
+      },
+      "WritingCoachChatRequest": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "student_text": {
+            "type": "string",
+            "title": "Student Text"
+          },
+          "stage": {
+            "type": "string",
+            "pattern": "^(O|R|I|D)$",
+            "title": "Stage"
+          },
+          "draft": {
+            "type": "string",
+            "pattern": "^(d1|d2)$",
+            "title": "Draft",
+            "default": "d1"
+          },
+          "source": {
+            "type": "string",
+            "pattern": "^(free_text|feedback_button)$",
+            "title": "Source"
+          },
+          "week": {
+            "type": "integer",
+            "maximum": 6.0,
+            "minimum": 1.0,
+            "title": "Week",
+            "default": 1
+          },
+          "save_feedback": {
+            "type": "boolean",
+            "title": "Save Feedback",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "student_text",
+          "stage",
+          "source"
+        ],
+        "title": "WritingCoachChatRequest"
+      },
+      "WritingCoachChatResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "ai_reply": {
+            "type": "string",
+            "title": "Ai Reply"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "feedback_ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback Ok"
+          },
+          "feedback_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Feedback Missing",
+            "default": []
+          },
+          "feedback_suggestions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Feedback Suggestions",
+            "default": []
+          },
+          "feedback_example": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback Example"
+          },
+          "feedback_improved": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback Improved"
+          },
+          "meta": {
+            "type": "object",
+            "title": "Meta",
+            "default": {}
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "ai_reply",
+          "stage"
+        ],
+        "title": "WritingCoachChatResponse"
+      },
+      "WritingFeedbackRequest": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "week": {
+            "type": "integer",
+            "maximum": 6.0,
+            "minimum": 1.0,
+            "title": "Week"
+          },
+          "stage": {
+            "type": "string",
+            "pattern": "^(O|R|I|D)$",
+            "title": "Stage"
+          },
+          "draft": {
+            "type": "string",
+            "pattern": "^(d1|d2)$",
+            "title": "Draft",
+            "default": "d1"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "save": {
+            "type": "boolean",
+            "title": "Save",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "week",
+          "stage"
+        ],
+        "title": "WritingFeedbackRequest"
+      },
+      "WritingFeedbackResponse": {
+        "properties": {
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "draft": {
+            "type": "string",
+            "title": "Draft"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing",
+            "default": []
+          },
+          "suggestions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Suggestions",
+            "default": []
+          },
+          "example": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Example"
+          },
+          "improved": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Improved"
+          },
+          "meta": {
+            "type": "object",
+            "title": "Meta",
+            "default": {}
+          }
+        },
+        "type": "object",
+        "required": [
+          "stage",
+          "draft",
+          "ok"
+        ],
+        "title": "WritingFeedbackResponse"
       },
       "login": {
         "properties": {

@@ -27,10 +27,17 @@ _GENERIC_Q_PATTERNS = [
 _DAILY_LIFE_KEYWORDS = [
     "今天", "昨天", "明天", "早餐", "午餐", "晚餐", "便當", "飲料", "咖啡", "手機", "遊戲",
     "睡覺", "起床", "上課", "下課", "回家", "逛街", "天氣", "考試", "排骨", "雞排", "奶茶",
+    "ktv", "唱歌", "夜店", "酒吧", "球賽", "nba", "wnba", "演唱會", "打電動",
 ]
 _STORY_CUE_KEYWORDS = [
     "故事", "書裡", "一開始", "後來", "接著", "最後", "改變", "分享", "柿子", "種子",
     "爺爺", "奶奶", "孩子", "小朋友", "大家一起", "不想分", "提醒", "誤會",
+]
+_COMMON_STORY_ANCHORS = {
+    "故事", "書裡", "阿松", "爺爺", "奶奶", "小朋友", "孩子", "柿子", "樹", "分享", "最後",
+}
+_ABSURD_MISMATCH_KEYWORDS = [
+    "火箭", "外星人", "魔法", "飛船", "超能力", "機器人", "總統", "炸彈", "核彈", "穿越",
 ]
 
 
@@ -61,11 +68,13 @@ def _one_question(text: str) -> str:
 def _extract_anchor(student_text: str) -> str:
     t = re.sub(r"[「」『』\"'，。！？：；、（）()\[\]{}\s]+", " ", (student_text or "").strip())
     parts = [p.strip() for p in t.split(" ") if p.strip()]
+    # Only use CJK anchors to avoid echoing gibberish/latin noise.
     for p in parts:
-        if 2 <= len(p) <= 8:
+        if re.search(r"[一-龥]", p) and 2 <= len(p) <= 8:
             return p
     t2 = re.sub(r"\s+", "", t)
-    return t2[:6]
+    m = re.search(r"[一-龥]{2,8}", t2)
+    return m.group(0) if m else ""
 
 
 def _anchor_is_daily_life(anchor: str) -> bool:
@@ -147,11 +156,89 @@ def looks_obviously_offtopic(student_text: str, book_pack: Optional[dict[str, An
     if any(k in text_norm for k in _DAILY_LIFE_KEYWORDS):
         return True
 
+    # Standalone Latin/number tokens (e.g. "NBA", random gibberish) should be
+    # treated as off-topic unless they match book terms.
+    if re.fullmatch(r"[A-Za-z0-9_]{2,40}", text_norm):
+        return True
+
+    # Common mixed CJK+Latin daily topics that often bypass the strict patterns.
+    if re.search(r"(唱歌|去唱|ktv|nba|wnba|夜店|酒吧)", text_norm, flags=re.IGNORECASE):
+        return True
+
+    # Mixed-symbol/no-CJK short nonsense often appears in student noise input.
+    if (not re.search(r"[一-龥]", student_text or "")) and re.fullmatch(r"[A-Za-z0-9_\-\+\=\.\, ]{4,60}", student_text.strip()):
+        return True
+
     daily_patterns = [
         r"我(要|想|去|在).{0,8}(吃|買|玩|睡|上課|下課|回家)",
         r"(午餐|早餐|晚餐|便當|手機|遊戲|天氣)",
     ]
     return any(re.search(p, text_norm) for p in daily_patterns)
+
+
+def _extract_story_reference_blob(book_pack: Optional[dict[str, Any]]) -> str:
+    if not isinstance(book_pack, dict):
+        return ""
+    parts: list[str] = []
+    for x in (book_pack.get("key_events") or [])[:20]:
+        s = str(x or "").strip()
+        if s:
+            parts.append(s)
+    for x in (book_pack.get("story_excerpts") or [])[:20]:
+        s = str(x or "").strip()
+        if s:
+            parts.append(s)
+    return _normalize_match_text(" ".join(parts))
+
+
+def _extract_cjk_tokens(text: str) -> list[str]:
+    raw = re.findall(r"[一-龥]{2,5}", _normalize_match_text(text))
+    # preserve order while removing duplicates
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in raw:
+        if t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+    return out
+
+
+def looks_likely_factual_mismatch(student_text: str, book_pack: Optional[dict[str, Any]]) -> bool:
+    """
+    Detect "story-related but factually off" messages.
+    This is intentionally conservative: only returns True on clear mismatch signs.
+    """
+    text = (student_text or "").strip()
+    if len(text) < 4:
+        return False
+    if not looks_story_related_to_book(text, book_pack):
+        return False
+    if looks_obviously_offtopic(text, book_pack):
+        return False
+
+    text_norm = _normalize_match_text(text)
+    if any(k in text_norm for k in _ABSURD_MISMATCH_KEYWORDS):
+        return True
+
+    reference_blob = _extract_story_reference_blob(book_pack)
+    if not reference_blob:
+        return False
+
+    tokens = _extract_cjk_tokens(text)
+    if not tokens:
+        return False
+    content_tokens = [t for t in tokens if t not in _COMMON_STORY_ANCHORS]
+    if not content_tokens:
+        return False
+
+    matched = [t for t in content_tokens if t in reference_blob]
+    if matched:
+        return False
+
+    # If student uses many concrete tokens that do not appear in story content,
+    # treat it as likely mismatch and force gentle correction.
+    return len(content_tokens) >= 2
 
 
 def _looks_generic_question(text: str) -> bool:
