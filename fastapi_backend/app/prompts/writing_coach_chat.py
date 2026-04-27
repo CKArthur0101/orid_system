@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 def _stage_name_zh(stage: str) -> str:
     s = (stage or "O").strip().upper()
     return {"O": "客觀", "R": "感受", "I": "意義", "D": "行動"}.get(s, "這一段")
@@ -31,23 +32,25 @@ def build_writing_coach_system_prompt(
 
     source_note = ""
     if src == "feedback_button":
-        source_note = "學生剛按下「取得回饋」，並附上該格草稿；請先針對草稿給具體、溫和的寫作回饋，最後可留一個很小的追問。"
+        source_note = (
+            "學生剛按「取得回饋」並貼上該格草稿；請用**短、自然、國小高年級能懂**的話，"
+            "像短卡片，不要長篇分析、不要論文口氣；**不要**幫他寫完整答案。"
+        )
     else:
-        source_note = "學生自由輸入；請延續對話，協助修改草稿或釐清思路，不要改成故事問答闖關。"
+        source_note = "學生自由輸入；請延續對話協助草稿，不要改成故事問答闖關。"
 
     return f"""
 你是國小高年級學生的「ORID 寫作回饋同伴」。
 {source_note}
 
 【要做的事】
-- 聚焦目前討論的 ORID 段：{stage}（{stage_zh}）。{focus}
-- 語氣鼓勵、具體、口語；2～5 句為主；不要列點標題、不要像報告。
-- 至少一句要明確扣回教材摘要裡「已有」的事件或角色；不要編造書中沒有的細節。
-- 不要進行「O→R→I→D 順序聊書」或故事闖關；不要說「現在進入下一階段」。
+- 只談目前段：{stage}（{stage_zh}）。{focus}
+- 至少一句要扣回教材底下已出現的角色或事件；不要編造書裡沒有的細節。
+- 若內容與教材明顯不符，先溫和說明再引導對齊摘要。
+- 不要說「現在進入下一階段」或帶闖關。
 
 【不要做】
-- 不要批改語氣羞辱或全盤否定。
-- 不要要求學生重述整本故事當唯一任務。
+- 不要羞辱、不要一次列很多缺點、不要代寫整段。
 
 【教材】
 {book_context or "（未提供）"}
@@ -59,18 +62,55 @@ def build_feedback_narration_prompt(
     stage: str,
     feedback_json_summary: str,
 ) -> tuple[str, str]:
-    """Second-pass LLM: turn structured feedback into a short chat message."""
+    """第二段 LLM：把 JSON 變成三段式短訊息（與使用者可讀格式一致）。"""
     focus = _stage_focus_line(stage)
     sys = f"""
-你是寫作回饋同伴。請把下列「結構化回饋」改寫成給國小生的 2～4 句聊天訊息。
-- 繁體中文、口語、鼓勵
-- 不要列點、不要標題、不要 JSON
-- 內容必須與結構化回饋一致，不可新增矛盾建議
-- 語氣與重點要符合目前 ORID 段：{focus}
-目前段落代號：{stage}
+你是寫作回饋同伴。下面是一份「結構化回饋」JSON。請改寫成給**國小高年級**讀的訊息，**剛好三段**，標題必須是（字可微調，但三段結構與順序不變）：
+
+你已經做到：
+你可以再加強：
+試試看這樣寫：
+
+【品質（務必遵守）】
+- 繁體中文；**整體偏短**，三段加起來不要像作文批改，**不要超過約 15 行**。
+- 第一段（你已經做到）：**必須**讓人覺得你有讀學生草稿，盡量點出原文裡的人、事、感受或行動；**禁止**只有「你有先寫下想法／你很努力」這類空泛句（若 JSON 的 praise 已有具體內容，請保留並潤飾得更口語）。
+- 第二段（你可以再加強）：**只一個**主點，符合 {stage} 段目標（{focus}）；不要列兩三個缺點；**禁止**出現「深化內容、增加完整度、補充細節」但不說要補什麼的那種空話；若內容偏短，要**說出還差哪一類內容**（例如還沒寫是誰、還沒寫因為、還沒寫怎麼做），不要只寫「太短」兩字結束。
+- 第三段（試試看）：要是**學生接下去就能寫的**口語，優先像「故事裡先發生的是……」「我覺得……，因為……」「這件事讓我明白……」「下次遇到……，我會……」**禁止**只寫「請補充更多細節、請用句號寫出一件事、試著增加內容完整度」這類難以接寫的指令。
+- 不要產生一整段可交作業的範文；不要輸出 JSON、不要 ```。
+- 本段代號：{stage}
 """.strip()
-    user = f"結構化回饋（請全部涵蓋重點，但用自然話說）：\n{feedback_json_summary}"
+    user = f"結構化回饋 JSON：\n{feedback_json_summary}"
     return sys, user
+
+
+def _praise_line_from_draft(t: str, stage: str) -> str:
+    """從學生草稿截一小段用於稱讚，避免全篇罐頭句（無 LLM 或 praise 不具體時）。"""
+    t = (t or "").strip()
+    s = (stage or "O").strip().upper()
+    stage_zh = _stage_name_zh(s)
+    if not t:
+        return "你願意寫，我已經看到了，我們一起再補一小步就好。"
+
+    one = t.replace("\n", " ")
+    for sep in ("。", "！", "？", "，"):
+        if sep in one:
+            one = one.split(sep, 1)[0].strip()
+            break
+    if len(one) > 36:
+        one = one[:36] + "…"
+    return f"你有寫到「{one}」，看得出你在寫「{stage_zh}」這一段囉。"
+
+
+def _is_generic_praise(p: str) -> bool:
+    p = (p or "").strip()
+    if not p:
+        return True
+    if "先把想法寫在紙上" in p:
+        return True
+    # 舊控制組 ok 用語：你「客觀」…有寫到重點
+    if "有寫到重點" in p and "不錯喔" in p and "你「" in p:
+        return True
+    return False
 
 
 def format_control_feedback_reply(
@@ -80,39 +120,58 @@ def format_control_feedback_reply(
     suggestions: list[str],
     stage: str,
     book_anchor: str = "",
+    praise: str | None = None,
+    student_draft: str = "",
 ) -> str:
-    """Deterministic chat bubble for control condition (feedback_button path)."""
-    stage_zh = _stage_name_zh(stage)
+    """控制組／無第二段 LLM 時的確定性三段式；語意貼近 GenAI 規則。"""
+    m0 = (missing[0] if missing else "").strip()
+    s0 = (suggestions[0] if suggestions else "").strip()
     anchor = (book_anchor or "").strip()
     nudge = ""
     if anchor:
-        s = (stage or "O").strip().upper()
-        if s == "O":
-            nudge = f"故事裡像「{anchor}」這樣的順序，你可以寫進去讓讀的人更跟得上。"
-        elif s == "R":
-            nudge = f"你可以想著「{anchor}」那一幕，把感受和原因連在一起。"
-        elif s == "I":
-            nudge = f"若要寫道理，可以用「{anchor}」當例子，說你學到什麼。"
+        s_up = (stage or "O").strip().upper()
+        if s_up == "O":
+            nudge = f"還能想一想摘要裡像「{anchor}」先後怎麼發生，照順序寫一句就更好懂。"
+        elif s_up == "R":
+            nudge = f"從故事裡「{anchor}」想起某一幕，用「我覺得……，因為……」接下去寫也可以。"
+        elif s_up == "I":
+            nudge = f"用「{anchor}」帶出一句你學到什麼，再補一個小理由就好。"
         else:
-            nudge = f"若要寫行動，可以想如果是「{anchor}」那種情境，你會先做哪一件小事。"
+            nudge = f"想成「{anchor}」那種情況時，你下次會多做的那一個小行動是什麼？"
+
+    pr = (praise or "").strip()
+    if "對齊教材" in m0:
+        line1 = "你有試著寫出人物和事件，這是 O 段需要的方向；只是情節要再對回書裡。"
+    elif _is_generic_praise(pr) and (student_draft or "").strip():
+        line1 = _praise_line_from_draft(student_draft, stage)
+    elif pr and not _is_generic_praise(pr):
+        line1 = pr
+    else:
+        line1 = _praise_line_from_draft(student_draft, stage) if (student_draft or "").strip() else (pr or "你有試著寫，我已經看到了。")
 
     if ok:
-        core = (
-            f"你{stage_zh}這一段已經有抓到重點了，很棒！"
-            "如果想再完整一點，可以試著多補一個小細節或一句話，讓讀的人更清楚。"
-        )
-        return core + (f" {nudge}" if nudge else "")
+        line2 = m0 if m0 else "如果想再寫好一點，只要多一個小重點就好。"
+    else:
+        line2 = m0 if m0 else "我們只先改一處，就會有幫助。"
 
-    parts = []
-    if missing:
-        parts.append("目前可以再補強的方向：" + "、".join(missing[:3]) + "。")
-    if suggestions:
-        parts.append("你可以試著：" + "；".join(suggestions[:3]) + "。")
-    body = "".join(parts) if parts else "先多寫一點想法，再按一次取得回饋也可以。"
-    out = f"我看完你{stage_zh}這一段了。" + body
-    if nudge:
-        out += " " + nudge
-    return out
+    if s0 and "用。結尾" in s0:
+        line3 = "故事裡先發生的是……，你再用一句寫出後來又怎樣，就很清楚了。"
+    elif "對齊教材" in m0:
+        line3 = "故事裡先發生的是……，後來……；請用書中真的人物和事件接下去。"
+    elif s0 and not any(
+        x in s0 for x in ("補充更多細節", "內容完整度", "深化內容", "增加完整度")
+    ):
+        line3 = s0
+    elif nudge:
+        line3 = nudge
+    else:
+        line3 = "用一句你平常會說的話起頭，再補兩三個字就夠了。"
+
+    return (
+        f"你已經做到：\n{line1}\n\n"
+        f"你可以再加強：\n{line2}\n\n"
+        f"試試看這樣寫：\n{line3}"
+    ).strip()
 
 
 def format_control_free_text_reply(stage: str) -> str:

@@ -39,6 +39,30 @@ _COMMON_STORY_ANCHORS = {
 _ABSURD_MISMATCH_KEYWORDS = [
     "火箭", "外星人", "魔法", "飛船", "超能力", "機器人", "總統", "炸彈", "核彈", "穿越",
 ]
+_UNSUPPORTED_EVENT_KEYWORDS = [
+    "過世",
+    "去世",
+    "死亡",
+    "死掉",
+    "死了",
+    "生病",
+    "住院",
+    "車禍",
+    "結婚",
+    "離婚",
+    "搬家",
+    "旅行",
+]
+_ACTION_EVENT_KEYWORDS = [
+    "打",
+    "揍",
+    "毆",
+    "踢",
+    "砍",
+    "殺",
+    "欺負",
+    "霸凌",
+]
 
 
 def _looks_unsafe_by_structure(text: str) -> bool:
@@ -85,7 +109,8 @@ def _anchor_is_daily_life(anchor: str) -> bool:
 
 
 def _normalize_match_text(text: str) -> str:
-    return re.sub(r"[\s「」『』\"'，。！？：；、（）()\[\]{}、]+", "", (text or "").strip())
+    t = re.sub(r"[\s「」『』\"'，。！？：；、（）()\[\]{}、]+", "", (text or "").strip())
+    return t.replace("\u4f54", "\u5360")
 
 
 def _extract_book_terms(book_pack: Optional[dict[str, Any]]) -> set[str]:
@@ -188,7 +213,123 @@ def _extract_story_reference_blob(book_pack: Optional[dict[str, Any]]) -> str:
         s = str(x or "").strip()
         if s:
             parts.append(s)
+    for x in (book_pack.get("core_theme") or [])[:20]:
+        s = str(x or "").strip()
+        if s:
+            parts.append(s)
+    for x in (book_pack.get("setting") or [])[:12]:
+        s = str(x or "").strip()
+        if s:
+            parts.append(s)
+    t = (book_pack.get("book_title") or "")
+    if str(t).strip():
+        parts.append(str(t).strip())
+    for item in (book_pack.get("characters") or [])[:12]:
+        if isinstance(item, dict):
+            for k in ("name", "role"):
+                s = str(item.get(k) or "").strip()
+                if s:
+                    parts.append(s)
+        else:
+            s = str(item or "").strip()
+            if s:
+                parts.append(s)
     return _normalize_match_text(" ".join(parts))
+
+
+def _strip_story_framing_for_grounding(text: str) -> str:
+    """
+    Remove common student framing words before grounding token checks.
+    Otherwise "故事裡先發生了爺爺..." gets greedily tokenized into unsupported
+    chunks like "故事裡先發".
+    """
+    t = _normalize_match_text(text)
+    prefixes = (
+        "故事裡先發生了",
+        "故事裡先發生",
+        "故事先發生了",
+        "故事先發生",
+        "書裡先發生了",
+        "書裡先發生",
+        "書中先發生了",
+        "書中先發生",
+        "先發生了",
+        "先發生",
+        "一開始",
+        "後來",
+        "接著",
+        "最後",
+        "然後",
+    )
+    changed = True
+    while changed:
+        changed = False
+        for p in prefixes:
+            if t.startswith(p):
+                t = t[len(p) :]
+                changed = True
+    return t
+
+
+def _has_unsupported_event_keyword(text_norm: str, reference_blob: str) -> bool:
+    """
+    Character overlap alone is not enough. If a student adds a concrete event
+    keyword that is absent from the book context (e.g. "爺爺過世"), treat it as
+    an unsupported story event rather than praising the content.
+    """
+    if not text_norm or not reference_blob:
+        return False
+    for kw in _UNSUPPORTED_EVENT_KEYWORDS:
+        k = _normalize_match_text(kw)
+        if k and k in text_norm and k not in reference_blob:
+            return True
+    return False
+
+
+def _has_unsupported_action_event_claim(text_norm: str, reference_blob: str) -> bool:
+    """
+    Catch fabricated action claims like "爺爺打奶奶" that may share character words
+    with the book but do not appear as an actual event relation in BOOK_CONTEXT.
+    """
+    if not text_norm or not reference_blob:
+        return False
+    spans = re.findall(r"[一-龥]{0,4}(?:打|揍|毆|踢|砍|殺|欺負|霸凌)[一-龥]{0,4}", text_norm)
+    for sp in spans:
+        s = _normalize_match_text(sp)
+        if len(s) < 3:
+            continue
+        if s in reference_blob:
+            continue
+        # If both sides around the verb relation are unseen in reference, treat as unsupported.
+        if any(k in s for k in _ACTION_EVENT_KEYWORDS):
+            m = re.search(r"(打|揍|毆|踢|砍|殺|欺負|霸凌)", s)
+            if not m:
+                continue
+            i = m.start()
+            left = s[max(0, i - 2) : i + 1]   # e.g. 爺爺打
+            right = s[i : min(len(s), i + 3)]  # e.g. 打奶奶
+            if left and right and left not in reference_blob and right not in reference_blob:
+                return True
+    return False
+
+
+def _cjk_token_grounded_in_reference(token: str, reference_blob: str) -> bool:
+    """
+    嚴格子字串 t in ref 容易因 2–5 字斷詞切壞人名/詞組而誤判。
+    改為：整段命中，或以「二字組」在教材字串中的覆蓋率推斷是否扣得回教材。
+    """
+    t = (token or "").strip()
+    if not t or not reference_blob:
+        return False
+    if t in reference_blob:
+        return True
+    if len(t) < 2:
+        return t in reference_blob
+    bigrams = [t[i : i + 2] for i in range(len(t) - 1)]
+    hits = sum(1 for g in bigrams if g in reference_blob)
+    if hits == 0:
+        return False
+    return (hits / len(bigrams)) >= 0.25
 
 
 def _extract_cjk_tokens(text: str) -> list[str]:
@@ -202,6 +343,49 @@ def _extract_cjk_tokens(text: str) -> list[str]:
         seen.add(t)
         out.append(t)
     return out
+
+
+_LATIN_HALLUC_ALLOWLIST = frozenset(
+    {
+        "orid",
+        "nba",
+        "wnba",
+        "ktv",
+        "www",
+        "com",
+        "pdf",
+        "url",
+        "app",
+        "gpt",
+    }
+)
+
+
+def looks_likely_latin_hallucination(
+    student_text: str, book_pack: Optional[dict[str, Any]]
+) -> bool:
+    """
+    Mixed Chinese + Latin proper nouns (e.g. celebrity names) often bypass CJK-only
+    token overlap. Flag Latin runs that do not appear anywhere in the book reference.
+    """
+    s = (student_text or "").strip()
+    if not s or not isinstance(book_pack, dict):
+        return False
+    if not re.search(r"[A-Za-z]{3,}", s):
+        return False
+    reference_blob = _extract_story_reference_blob(book_pack)
+    if not reference_blob:
+        return False
+    blob_lower = reference_blob.lower()
+    blob_compact = _normalize_match_text(reference_blob).lower()
+    for m in re.finditer(r"[A-Za-z]{3,}", s):
+        w = m.group(0).lower()
+        if w in _LATIN_HALLUC_ALLOWLIST:
+            continue
+        if w in blob_lower or w in blob_compact:
+            continue
+        return True
+    return False
 
 
 def looks_likely_factual_mismatch(student_text: str, book_pack: Optional[dict[str, Any]]) -> bool:
@@ -224,6 +408,10 @@ def looks_likely_factual_mismatch(student_text: str, book_pack: Optional[dict[st
     reference_blob = _extract_story_reference_blob(book_pack)
     if not reference_blob:
         return False
+    if _has_unsupported_event_keyword(text_norm, reference_blob):
+        return True
+    if _has_unsupported_action_event_claim(text_norm, reference_blob):
+        return True
 
     tokens = _extract_cjk_tokens(text)
     if not tokens:
@@ -232,13 +420,129 @@ def looks_likely_factual_mismatch(student_text: str, book_pack: Optional[dict[st
     if not content_tokens:
         return False
 
-    matched = [t for t in content_tokens if t in reference_blob]
+    matched = [t for t in content_tokens if _cjk_token_grounded_in_reference(t, reference_blob)]
     if matched:
         return False
 
     # If student uses many concrete tokens that do not appear in story content,
     # treat it as likely mismatch and force gentle correction.
     return len(content_tokens) >= 2
+
+
+_STRONG_STORY_SURFACE_CUES = (
+    "看到",
+    "聽見",
+    "聽到",
+    "書裡",
+    "書中",
+    "故事",
+    "一開始",
+    "後來",
+    "接著",
+    "最後",
+)
+
+
+def _has_strong_story_surface_cues(text: str) -> bool:
+    t = _normalize_match_text(text)
+    return any(c in t for c in _STRONG_STORY_SURFACE_CUES)
+
+
+def _eligible_for_grounding_overlap_check(
+    student_text: str, book_pack: Optional[dict[str, Any]]
+) -> bool:
+    if looks_story_related_to_book(student_text, book_pack):
+        return True
+    return _has_strong_story_surface_cues(student_text)
+
+
+def _split_story_grounding_clauses(text: str) -> list[str]:
+    raw = (text or "").strip()
+    if not raw:
+        return []
+    # Treat "，然後…" as a new clause so tails are checked even without "。"
+    marked = re.sub(
+        r"(?<![。！？；\n])，(?=然後|接著|另外|結果)",
+        "。",
+        raw,
+    )
+    parts = re.split(r"[。！？；\n]+", marked)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _clause_looks_ungrounded_vs_reference(clause: str, reference_blob: str) -> bool:
+    """Per-clause CJK grounding so a correct quote does not excuse a fabricated tail."""
+    c = (clause or "").strip()
+    if len(c) < 3:
+        return False
+    c_norm = _strip_story_framing_for_grounding(c)
+    if _has_unsupported_event_keyword(c_norm, reference_blob):
+        return True
+    if _has_unsupported_action_event_claim(c_norm, reference_blob):
+        return True
+    tokens = _extract_cjk_tokens(c_norm)
+    content_tokens = [t for t in tokens if t not in _COMMON_STORY_ANCHORS]
+    if not content_tokens:
+        return False
+    matched = [t for t in content_tokens if _cjk_token_grounded_in_reference(t, reference_blob)]
+    unmatched = [t for t in content_tokens if not _cjk_token_grounded_in_reference(t, reference_blob)]
+    if not unmatched:
+        return False
+    max_u = max(len(x) for x in unmatched)
+    if not matched and max_u >= 3:
+        return True
+    if matched and unmatched and max_u >= 4:
+        return True
+    return False
+
+
+def looks_likely_ungrounded_in_book(
+    student_text: str,
+    book_pack: Optional[dict[str, Any]],
+    stage: str = "O",
+) -> bool:
+    """
+    Student writes as if describing the story (or quotes book-like scenes), but
+    some concrete CJK runs are not supported by key_events/excerpts — including
+    a correct quote followed by a fabricated tail sentence.
+
+    Skips obviously off-topic daily-life lines. Uses per-clause checks so one
+    matched phrase does not excuse the rest of the draft.
+    """
+    _ = (stage or "O").strip().upper()
+    text = (student_text or "").strip()
+    if len(text) >= 3 and looks_likely_latin_hallucination(text, book_pack):
+        return True
+    if looks_likely_factual_mismatch(student_text, book_pack):
+        return True
+
+    if len(text) < 4:
+        return False
+    if looks_obviously_offtopic(text, book_pack):
+        return False
+
+    reference_blob = _extract_story_reference_blob(book_pack)
+    if not reference_blob:
+        return False
+    if not _eligible_for_grounding_overlap_check(text, book_pack):
+        return False
+
+    for clause in _split_story_grounding_clauses(text):
+        if _clause_looks_ungrounded_vs_reference(clause, reference_blob):
+            return True
+
+    tokens = _extract_cjk_tokens(text)
+    if not tokens:
+        return False
+    content_tokens = [t for t in tokens if t not in _COMMON_STORY_ANCHORS]
+    if len(content_tokens) < 2:
+        return False
+
+    matched = [t for t in content_tokens if _cjk_token_grounded_in_reference(t, reference_blob)]
+    if matched:
+        return False
+
+    return True
 
 
 def _looks_generic_question(text: str) -> bool:
@@ -361,6 +665,70 @@ BOOK_CONTEXT：
 """.strip()
 
     return sys, user
+
+
+def build_book_grounding_checker_prompts(
+    *,
+    student_text: str,
+    book_pack: Optional[dict[str, Any]],
+    stage: Stage,
+) -> Tuple[str, str]:
+    """
+    LLM grounding checker:
+    Decide whether the student's claim is supported by BOOK_CONTEXT facts.
+    """
+    stage = (stage or "O").strip().upper()
+    if stage not in {"O", "R", "I", "D"}:
+        stage = "O"
+    book_context = build_book_context_block(book_pack, max_events=8, max_chars=1500)
+    sys = f"""
+你是「教材事實核對器」。
+你的任務：判斷學生這句話是否可由 BOOK_CONTEXT 支持。
+只允許根據 BOOK_CONTEXT 判斷，不可編造或腦補。
+
+判斷原則（很重要）：
+- O 段：最嚴格。若寫了書裡沒有的具體事件（誰做了什麼），grounded=false。
+- R/I/D 段：若學生是感受、想法、行動，且沒有捏造新事件，可 grounded=true；
+  但只要把「書裡沒有發生」的事件當成事實，就 grounded=false。
+- 太短或資訊不足時，優先 grounded=true，reason 寫「資訊不足但未見明顯衝突」。
+
+輸出必須是純 JSON，不要多餘文字：
+{{
+  "grounded": boolean,
+  "reason": string,
+  "unsupported_span": string
+}}
+
+欄位規範：
+- reason：20 字內，簡短說明（例：教材可支持 / 疑似新增書外事件）
+- unsupported_span：若 grounded=false，填學生原句中的關鍵片段；否則填空字串。
+
+目前階段：{stage}
+BOOK_CONTEXT：
+{book_context}
+""".strip()
+    user = f"學生句子：\n{student_text}"
+    return sys, user
+
+
+def parse_book_grounding_checker_json(raw: str) -> Dict[str, Any]:
+    if raw is None:
+        return {}
+    s = str(raw).strip()
+    if not s:
+        return {}
+    try:
+        obj = json.loads(s)
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        m = _JSON_RE.search(s)
+        if not m:
+            return {}
+        try:
+            obj = json.loads(m.group(0))
+            return obj if isinstance(obj, dict) else {}
+        except Exception:
+            return {}
 
 
 def parse_orid_checker_json(raw: str) -> Dict[str, Any]:

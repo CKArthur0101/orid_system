@@ -11,6 +11,7 @@ type ConditionKey = "genai" | "template" | "control";
 
 type WritingFeedback = {
   ok: boolean;
+  praise?: string | null;
   missing: string[];
   suggestions: string[];
   example?: string | null;
@@ -42,6 +43,11 @@ const UUID_RE =
 
 function isUuid(v?: string | null): v is string {
   return !!v && UUID_RE.test(v);
+}
+
+function formatApiError(status: number, body: string, fallback: string) {
+  if (status === 401) return "登入狀態失效，請重新登入後再試一次。";
+  return body || `${fallback}（${status}）`;
 }
 
 const STAGES: { key: StageKey; label: string }[] = [
@@ -101,6 +107,7 @@ function normalizeFeedbackObject(input: any): WritingFeedback | null {
   if (!input || typeof input !== "object") return null;
   return {
     ok: !!input.ok,
+    praise: input.praise != null && input.praise !== "" ? String(input.praise) : null,
     missing: Array.isArray(input.missing) ? input.missing.map(String).filter(Boolean).slice(0, 3) : [],
     suggestions: Array.isArray(input.suggestions)
       ? input.suggestions.map(String).filter(Boolean).slice(0, 3)
@@ -256,7 +263,12 @@ export default function WeekBookPage() {
       cache: "no-store",
     });
     const text = await res.text();
-    if (!res.ok) throw new Error(`ensure 失敗：${res.status} ${text}`);
+    if (!res.ok) {
+      if (res.status === 401 && typeof window !== "undefined") {
+        window.location.href = "/login";
+      }
+      throw new Error(formatApiError(res.status, text, "初始化失敗"));
+    }
     return text ? JSON.parse(text) : null;
   }
 
@@ -493,6 +505,9 @@ export default function WeekBookPage() {
     try {
       setFbLoading(true);
       setFbError(null);
+      const draftLabel = draft === "d2" ? "草稿2" : "草稿1";
+      const optimisticStudent = `[${stage} ${draftLabel}]\n${text}`;
+      setMessages((prev) => [...prev, { role: "student", text: optimisticStudent }]);
 
       const r = await fetch("/api/orid/writing-coach/chat", {
         method: "POST",
@@ -510,7 +525,7 @@ export default function WeekBookPage() {
       });
 
       const raw = await r.text();
-      if (!r.ok) throw new Error(`回饋失敗：${r.status} ${raw}`);
+      if (!r.ok) throw new Error(formatApiError(r.status, raw, "回饋失敗"));
 
       const data = raw ? JSON.parse(raw) : {};
       const outStage = coerceStageKey(data?.stage, stage);
@@ -519,6 +534,7 @@ export default function WeekBookPage() {
       const normalizedCondition = String(data?.meta?.condition ?? condition).toLowerCase();
       const fb: WritingFeedback = {
         ok: !!data?.feedback_ok,
+        praise: data?.feedback_praise ?? null,
         missing: Array.isArray(data?.feedback_missing) ? data.feedback_missing.map(String) : [],
         suggestions: Array.isArray(data?.feedback_suggestions) ? data.feedback_suggestions.map(String) : [],
         example: isControlConditionValue(normalizedCondition) ? null : (data?.feedback_example ?? null),
@@ -576,7 +592,7 @@ export default function WeekBookPage() {
       });
 
       const text = await r.text();
-      if (!r.ok) throw new Error(text || `寫作送出失敗（${r.status}）`);
+      if (!r.ok) throw new Error(formatApiError(r.status, text, "寫作送出失敗"));
 
       const data = text ? JSON.parse(text) : null;
       if (isUuid(data?.id)) setWritingId(String(data.id));
@@ -589,9 +605,6 @@ export default function WeekBookPage() {
     }
   }
 
-  const PANEL_H =
-    "min-h-[min(42vh,280px)] max-h-[min(72vh,780px)] h-[calc(100vh-13rem)] sm:h-[calc(100vh-11.5rem)] md:h-[calc(100vh-12rem)]";
-
   const STAGE_COLORS: Record<StageKey, string> = {
     O: "from-sky-400 to-sky-500",
     R: "from-amber-400 to-orange-500",
@@ -602,9 +615,9 @@ export default function WeekBookPage() {
   const STAGE_EMOJI: Record<StageKey, string> = { O: "👀", R: "💭", I: "💡", D: "🎯" };
 
   return (
-    <div className="space-y-5">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 sm:gap-5">
       {/* Hero banner */}
-      <div className="rounded-2xl bg-gradient-to-r from-sky-500 to-blue-600 px-8 py-6 text-white shadow-lg sm:px-10">
+      <div className="shrink-0 rounded-2xl bg-gradient-to-r from-sky-500 to-blue-600 px-6 py-5 text-white shadow-lg sm:px-10 sm:py-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl font-bold sm:text-3xl">📖 AI–ORID 反思寫作</h1>
@@ -655,10 +668,10 @@ export default function WeekBookPage() {
         </div>
       </div>
 
-      {/* 平板 md 起雙欄；手機直向先寫作再聊天 */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-5">
-        <div className="kid-shell flex min-h-0 flex-col overflow-hidden md:order-1">
-          <div className="kid-section-header justify-between">
+      {/* 佔滿 main 剩餘高度；md+ 雙欄等高 */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 md:grid-cols-2 md:grid-rows-1 md:gap-5 md:items-stretch md:h-[calc(100dvh-15.5rem)] md:max-h-[900px] md:min-h-[620px]">
+        <div className="kid-shell flex min-h-0 flex-col overflow-hidden md:order-1 md:h-full">
+          <div className="kid-section-header shrink-0 justify-between">
             <div className="flex items-center gap-2">
               <span className="text-xl">✍️</span>
               <span className="text-base font-bold">反思寫作</span>
@@ -680,8 +693,9 @@ export default function WeekBookPage() {
             </div>
           </div>
 
-          <div className={`${PANEL_H} flex-1 overflow-auto`}>
-            <div className="grid grid-cols-1 gap-3 p-3 sm:gap-4 sm:p-4 md:grid-cols-2">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <div className="grid min-h-0 grid-cols-1 gap-3 p-3 sm:gap-4 sm:p-4 md:min-h-full md:grid-cols-2 md:grid-rows-2 md:gap-4 md:[grid-template-rows:minmax(0,1fr)_minmax(0,1fr)]">
               {STAGES.map((s) => {
                 const stage = s.key;
                 const isFocused = focusStage === stage;
@@ -690,7 +704,7 @@ export default function WeekBookPage() {
                   <div
                     key={stage}
                     className={[
-                      "flex min-h-0 flex-col rounded-xl border p-3 sm:p-4",
+                      "flex min-h-0 flex-col rounded-xl border p-3 sm:p-4 md:h-full md:min-h-0",
                       isFocused
                         ? "border-sky-300 bg-sky-50/40 shadow-sm ring-1 ring-sky-200"
                         : "border-slate-200 bg-white hover:border-sky-200",
@@ -718,7 +732,7 @@ export default function WeekBookPage() {
                     </div>
 
                     <textarea
-                      className="mt-2 min-h-[72px] w-full flex-1 rounded-lg border border-slate-200 bg-white p-2.5 text-[15px] leading-relaxed outline-none placeholder:text-slate-400 focus:border-sky-400 focus:ring-2 focus:ring-sky-400/20 sm:min-h-[88px] sm:p-3 md:min-h-[100px]"
+                      className="mt-2 w-full min-h-[5rem] flex-1 rounded-lg border border-slate-200 bg-white p-2.5 text-[15px] leading-relaxed outline-none placeholder:text-slate-400 focus:border-sky-400 focus:ring-2 focus:ring-sky-400/20 sm:min-h-[6rem] sm:p-3 md:min-h-0 md:flex-1 md:resize-none"
                       placeholder={STAGE_PLACEHOLDER[stage]}
                       value={writingData.stages[stage][draftView]}
                       onFocus={() => setFocusStage(stage)}
@@ -735,9 +749,10 @@ export default function WeekBookPage() {
                   </div>
                 );
               })}
+              </div>
             </div>
 
-            <div className="border-t border-slate-100 px-3 pb-3 pt-2 sm:px-4 sm:pb-4">
+            <div className="shrink-0 border-t border-slate-100 px-3 pb-3 pt-2 sm:px-4 sm:pb-4">
               <div className="flex flex-col gap-2 sm:flex-row sm:gap-3">
                 <button
                   type="button"
@@ -763,17 +778,15 @@ export default function WeekBookPage() {
           </div>
         </div>
 
-        <div className="kid-shell flex min-h-0 flex-col overflow-hidden md:order-2">
-          <div className="kid-section-header">
+        <div className="kid-shell flex min-h-0 flex-col overflow-hidden md:order-2 md:h-full">
+          <div className="kid-section-header shrink-0">
             <span className="text-xl">💬</span>
             <span className="text-base font-bold">寫作回饋夥伴</span>
           </div>
 
-          <div
-            className={`${PANEL_H} flex-1 overflow-auto bg-gradient-to-b from-slate-50 to-white p-4 sm:p-5 space-y-3`}
-          >
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-gradient-to-b from-slate-50 to-white p-4 sm:p-5">
             {messages.length === 0 ? (
-              <div className="flex h-full min-h-[12rem] items-center justify-center px-2 text-center text-sm text-slate-400">
+              <div className="flex flex-1 flex-col items-center justify-center px-2 py-6 text-center text-sm text-slate-400">
                 {!historyLoaded
                   ? "載入中…"
                   : seededInitial && !readingContentReady
@@ -783,7 +796,8 @@ export default function WeekBookPage() {
                       : "尚無訊息"}
               </div>
             ) : (
-              messages.map((m, idx) => {
+              <div className="flex flex-1 flex-col space-y-3">
+              {messages.map((m, idx) => {
                 const isStudent = m.role === "student";
                 return (
                   <div
@@ -809,7 +823,8 @@ export default function WeekBookPage() {
                     )}
                   </div>
                 );
-              })
+              })}
+              </div>
             )}
             {showAiTyping && (
               <div className="flex items-end gap-2.5 justify-start" aria-live="polite" aria-label="機器人正在輸入">
@@ -829,7 +844,7 @@ export default function WeekBookPage() {
             <div ref={chatEndRef} />
           </div>
 
-          <div className="border-t border-slate-200 bg-slate-50/80 px-4 py-3 text-center text-xs text-slate-500">
+          <div className="shrink-0 border-t border-slate-200 bg-slate-50/80 px-4 py-3 text-center text-xs text-slate-500">
             點左側任一格的「取得回饋」，回覆會出現在這裡（目前：{draftView === "d1" ? "草稿 1" : "草稿 2"}）。
           </div>
         </div>

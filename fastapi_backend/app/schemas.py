@@ -117,6 +117,7 @@ class WritingCoachChatResponse(BaseModel):
     ai_reply: str
     stage: str
     feedback_ok: bool | None = None
+    feedback_praise: str | None = None
     feedback_missing: list[str] = []
     feedback_suggestions: list[str] = []
     feedback_example: str | None = None

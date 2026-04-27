@@ -32,6 +32,7 @@ def upsert_feedback_into_stage(
     example: str | None,
     improved: str | None,
     empty_factory,
+    praise: str | None = None,
 ) -> dict[str, Any]:
     stages = obj.get("stages")
     if not isinstance(stages, dict):
@@ -51,6 +52,7 @@ def upsert_feedback_into_stage(
             "suggestions": suggestions,
             "example": example,
             "improved": improved,
+            "praise": praise,
         }
 
     if draft == "d1":

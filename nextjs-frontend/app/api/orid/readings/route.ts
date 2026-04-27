@@ -1,9 +1,10 @@
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
+import { getBearerAuthorization } from "@/lib/orid-bff-auth";
+
 export async function POST(req: Request) {
-  const token = (await cookies()).get("accessToken")?.value;
-  if (!token) return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
+  const auth = await getBearerAuthorization(req);
+  if (!auth) return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
   const base = process.env.API_BASE_URL ?? "http://backend:8000";
@@ -12,7 +13,7 @@ export async function POST(req: Request) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
+      Authorization: auth,
     },
     body: JSON.stringify(body),
   });

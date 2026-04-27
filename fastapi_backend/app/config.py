@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     RESET_PASSWORD_SECRET_KEY: str
     VERIFICATION_SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_SECONDS: int = 3600
+    ACCESS_TOKEN_EXPIRE_SECONDS: int = 60 * 60 * 24 * 365
 
     # Email
     MAIL_USERNAME: str | None = None

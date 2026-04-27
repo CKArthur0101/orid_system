@@ -1,12 +1,13 @@
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
+import { getBearerAuthorization } from "@/lib/orid-bff-auth";
+
 export async function GET(
-  _req: Request,
+  req: Request,
   ctx: { params: any } // ✅ Next 15 可能是 Promise
 ) {
-  const token = (await cookies()).get("accessToken")?.value;
-  if (!token) return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
+  const auth = await getBearerAuthorization(req);
+  if (!auth) return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
 
   // ✅ Next 15：params 可能是 Promise，先 await
   const p = await ctx.params;
@@ -25,7 +26,7 @@ export async function GET(
     method: "GET",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
+      Authorization: auth,
     },
     cache: "no-store",
   });

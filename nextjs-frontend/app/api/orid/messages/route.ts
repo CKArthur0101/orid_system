@@ -1,9 +1,10 @@
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
+import { getBearerAuthorization } from "@/lib/orid-bff-auth";
+
 export async function GET(req: Request) {
-  const token = (await cookies()).get("accessToken")?.value;
-  if (!token) return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
+  const auth = await getBearerAuthorization(req);
+  if (!auth) return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
 
   const { searchParams } = new URL(req.url);
   const qs = searchParams.toString();
@@ -13,7 +14,7 @@ export async function GET(req: Request) {
     method: "GET",
     headers: {
       Accept: "application/json",
-      Authorization: `Bearer ${token}`,
+      Authorization: auth,
     },
     cache: "no-store",
   });

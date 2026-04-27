@@ -1,5 +1,6 @@
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+
+import { getBearerAuthorization } from "@/lib/orid-bff-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,13 +21,8 @@ function passthrough(r: Response, text: string) {
   });
 }
 
-async function authHeader() {
-  const token = (await cookies()).get("accessToken")?.value;
-  return token ? `Bearer ${token}` : "";
-}
-
 export async function GET(req: Request) {
-  const auth = await authHeader();
+  const auth = await getBearerAuthorization(req);
   if (!auth) return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
 
   const url = new URL(req.url);
@@ -43,7 +39,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const auth = await authHeader();
+  const auth = await getBearerAuthorization(req);
   if (!auth) return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
 
   const body = await req.text();
@@ -70,7 +66,7 @@ export async function POST(req: Request) {
  * 3) PATCH /orid/writings body:{id, content}
  */
 export async function PUT(req: Request) {
-  const auth = await authHeader();
+  const auth = await getBearerAuthorization(req);
   if (!auth) return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
 
   const json = await req.json().catch(() => ({} as any));

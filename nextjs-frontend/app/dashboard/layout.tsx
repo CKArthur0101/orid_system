@@ -18,9 +18,9 @@ export default function DashboardLayout({
   const pathname = usePathname();
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-amber-50/30">
+    <div className="flex min-h-screen min-h-dvh flex-col bg-gradient-to-br from-sky-50 via-white to-amber-50/30">
       {/* Top navigation */}
-      <header className="sticky top-0 z-30 border-b bg-white/80 backdrop-blur-md shadow-sm">
+      <header className="sticky top-0 z-30 shrink-0 border-b bg-white/80 backdrop-blur-md shadow-sm">
         <div className="mx-auto flex h-14 w-full max-w-[min(100vw-1.5rem,1920px)] items-center justify-between px-4 sm:px-6">
           <div className="flex items-center gap-6">
             <Link href="/dashboard" className="flex items-center gap-2">
@@ -62,8 +62,8 @@ export default function DashboardLayout({
         </div>
       </header>
 
-      {/* Content */}
-      <main className="mx-auto w-full max-w-[min(100vw-1.5rem,1920px)] px-4 py-4 sm:px-6 sm:py-6">
+      {/* Content：flex-1 讓子頁面可撐滿剩餘視窗高度 */}
+      <main className="mx-auto flex w-full max-w-[min(100vw-1.5rem,1920px)] flex-1 flex-col min-h-0 px-4 py-4 sm:px-6 sm:py-6">
         {children}
       </main>
     </div>

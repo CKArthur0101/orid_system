@@ -9,6 +9,9 @@ import { getErrorMessage } from "@/lib/utils";
 
 const API_BASE_URL = process.env.API_BASE_URL ?? "http://backend:8000";
 
+/** Long-lived login: keep until manual logout (practically long max-age). */
+const ACCESS_TOKEN_COOKIE_MAX_AGE_SEC = 60 * 60 * 24 * 365;
+
 export async function login(prevState: unknown, formData: FormData) {
   const validatedFields = loginSchema.safeParse({
     username: formData.get("username") as string,
@@ -37,7 +40,14 @@ export async function login(prevState: unknown, formData: FormData) {
     if (error) {
       return { server_validation_error: getErrorMessage(error) };
     }
-    (await cookies()).set("accessToken", data.access_token);
+    const secure = process.env.NODE_ENV === "production";
+    (await cookies()).set("accessToken", data.access_token, {
+      path: "/",
+      sameSite: "lax",
+      httpOnly: true,
+      secure,
+      maxAge: ACCESS_TOKEN_COOKIE_MAX_AGE_SEC,
+    });
     try {
       const meRes = await fetch(`${API_BASE_URL}/users/me`, {
         headers: { Authorization: `Bearer ${data.access_token}` },

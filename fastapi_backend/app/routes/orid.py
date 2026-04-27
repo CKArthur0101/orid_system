@@ -39,7 +39,6 @@ CHECKER_OK = True
 CHECKER_IMPORT_ERROR: Optional[str] = None
 
 from app.prompts.shared import build_book_context_block
-from app.prompts.orid_chat import build_orid_chat_system_prompt
 from app.prompts.writing_feedback import build_genai_feedback_prompts
 from app.prompts.writing_assist import (
     ASSIST_TEXT_SPLIT,
@@ -53,21 +52,17 @@ from app.prompts.writing_coach_chat import (
     format_control_free_text_reply,
 )
 from app.prompts.orid_checker import (
-    build_orid_checker_prompts,
-    parse_orid_checker_json,
-    clamp_checker_output,
+    build_book_grounding_checker_prompts,
     looks_story_related_to_book,
     looks_obviously_offtopic,
     looks_likely_factual_mismatch,
-    quick_unsafe_check,
+    looks_likely_ungrounded_in_book,
+    parse_book_grounding_checker_json,
 )
 from app.services.safety import check_safety
 from app.services.orid_condition import normalize_orid_condition, is_control_condition
 from app.services.orid_stage import build_stage_history, decide_stage_progress, resolve_stage_thresholds
 from app.services.orid_writing_store import ensure_orid_writing_obj, upsert_feedback_into_stage
-from app.services.rag import get_relevant_context
-
-
 # ----------------------------
 # OpenAI settings (from env)
 # ----------------------------
@@ -171,13 +166,24 @@ ORID_GUIDED_RELAX_MIN_TURNS = int(os.getenv("ORID_GUIDED_RELAX_MIN_TURNS", "0"))
 
 ORID_FOLLOWUP_MAX_COMPLETION_TOKENS = int(os.getenv("ORID_FOLLOWUP_MAX_COMPLETION_TOKENS", "120"))
 ORID_FOLLOWUP_TEMPERATURE = float(os.getenv("ORID_FOLLOWUP_TEMPERATURE", "0.7"))
+ORID_FEEDBACK_MAX_COMPLETION_TOKENS = int(
+    os.getenv(
+        "ORID_FEEDBACK_MAX_COMPLETION_TOKENS",
+        str(max(int(OPENAI_MAX_COMPLETION_TOKENS or 0), 1800)),
+    )
+)
+ORID_FEEDBACK_RETRY_MAX_COMPLETION_TOKENS = int(
+    os.getenv(
+        "ORID_FEEDBACK_RETRY_MAX_COMPLETION_TOKENS",
+        str(max(ORID_FEEDBACK_MAX_COMPLETION_TOKENS, 3000)),
+    )
+)
 ORID_OFFTOPIC_STRICT = _env_bool("ORID_OFFTOPIC_STRICT", False)
 ORID_CHAT_PROMPT_VERSION = os.getenv("ORID_CHAT_PROMPT_VERSION", "orid-chat-v2.2")
 ORID_LIMIT_PER_MINUTE = int(os.getenv("ORID_LIMIT_PER_MINUTE", "30"))
 ORID_LIMIT_WINDOW_SECONDS = int(os.getenv("ORID_LIMIT_WINDOW_SECONDS", "60"))
 ORID_MAIN_FALLBACK_TEMPERATURE = float(os.getenv("ORID_MAIN_FALLBACK_TEMPERATURE", "0.9"))
 
-ORID_CHECKER_DEBUG = _env_bool("ORID_CHECKER_DEBUG", False)
 ORID_ALLOW_HEURISTIC_PASS = _env_bool("ORID_ALLOW_HEURISTIC_PASS", False)
 ORID_ENABLE_RATE_LIMIT = _env_bool("ORID_ENABLE_RATE_LIMIT", True)
 
@@ -733,39 +739,6 @@ def _split_sentences(text: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
-def _normalize_first_sentence(text: str) -> str:
-    t = (text or "").strip()
-    t = PASS_RE.sub("", t)
-    t = NEXT_RE.sub("", t)
-    t = REASON_RE.sub("", t)
-    t = re.sub(r"\s+", " ", t).strip()
-    if not t:
-        return ""
-
-    first = ""
-    for s in _split_sentences(t):
-        if "？" not in s and "?" not in s:
-            first = s
-            break
-    if not first:
-        first = _split_sentences(t)[0] if _split_sentences(t) else ""
-
-    first = first.replace("?", "？")
-    first = first.split("？", 1)[0].strip()
-    first = re.sub(
-        r"^(你說得很好|很好喔|懂了|我知道了|我有聽到|這個觀察很有意思|這個觀察很關鍵|這個地方很重要|我們先回到故事|我們先把故事說清楚一點)[，、 ]*",
-        "",
-        first,
-    )
-    first = re.sub(r"(現在進入下一階段|這一題|本階段|ORID)", "", first).strip(" ，、")
-    first = re.sub(r"^你先用.?1.?2.?句話", "", first).strip(" ，、")
-    if not first:
-        return ""
-    if not first.endswith(("。", "！", "～")):
-        first += "。"
-    return first
-
-
 def _looks_glitched_text(text: str) -> bool:
     t = (text or "").strip()
     if not t:
@@ -1020,202 +993,6 @@ def _cross_stage_ack(current_stage: str, student_text: str) -> Optional[str]:
     return str(obj.get("ack") or "").strip() or None
 
 
-def _should_avoid_student_anchor_for_pullback(student_text: str, anchor_student_text: bool) -> bool:
-    if not anchor_student_text:
-        return True
-    return looks_obviously_offtopic(student_text, None)
-
-
-def _choose_question_from_candidates(*candidates: str) -> str:
-    for c in candidates:
-        if not c:
-            continue
-        q = _sanitize_one_question(c)
-        if q and (not _looks_glitched_question(q)):
-            return q
-    return "你可以再說清楚一點嗎？"
-
-
-def _book_anchor_from_pack(book_pack: Optional[dict[str, Any]], seed: str) -> str:
-    if not isinstance(book_pack, dict):
-        return ""
-    pool: list[str] = []
-    title = str(book_pack.get("book_title") or "").strip()
-    if title:
-        pool.append(title)
-    for c in (book_pack.get("characters") or [])[:6]:
-        if isinstance(c, dict):
-            name = str(c.get("name") or "").strip()
-            if name:
-                pool.append(name)
-    for e in (book_pack.get("key_events") or [])[:8]:
-        s = str(e or "").strip()
-        if s:
-            short = re.sub(r"[，。；、].*$", "", s).strip()
-            pool.append(short or s[:14])
-    pool = [x[:14] for x in pool if x]
-    if not pool:
-        return ""
-    return _pick_variant(pool, seed)
-
-
-_LOW_EFFORT_FOLLOWUP_BY_STAGE: dict[str, list[str]] = {
-    "O": [
-        "故事裡哪一段讓你印象最深",
-        "你記得故事裡有哪些角色嗎，他們在做什麼",
-        "故事一開始發生了什麼事",
-        "你剛剛說的那段之後，接著故事裡又發生了什麼",
-    ],
-    "R": [
-        "如果你是故事裡的那個角色，遇到同樣的事你會有什麼感覺",
-        "故事裡哪個畫面讓你心裡有感覺",
-        "你覺得故事裡誰最讓你同情",
-    ],
-    "I": [
-        "你覺得故事裡最重要的那個轉折是想告訴我們什麼",
-        "如果要用一句話說這個故事的道理，你會怎麼說",
-        "這個故事最讓你想記住的是哪一件事",
-    ],
-    "D": [
-        "如果明天在學校遇到類似的事，你會先做什麼",
-        "你說的那個做法，第一步會是什麼",
-        "怎樣算是真的做到了",
-    ],
-}
-
-
-def _book_low_effort_candidates(stage: str, book_pack: Optional[dict[str, Any]]) -> list[str]:
-    s = (stage or "O").strip().upper()
-    if s not in {"O", "R", "I", "D"}:
-        s = "O"
-
-    events = [str(x or "").strip() for x in ((book_pack or {}).get("key_events") or []) if str(x or "").strip()]
-    excerpts = [str(x or "").strip() for x in ((book_pack or {}).get("story_excerpts") or []) if str(x or "").strip()]
-    chars: list[str] = []
-    for c in (book_pack or {}).get("characters") or []:
-        if isinstance(c, dict):
-            name = str(c.get("name") or "").strip()
-            if name:
-                chars.append(name)
-
-    e1 = re.sub(r"[，。；、].*$", "", events[0]).strip() if len(events) > 0 else "故事開頭"
-    e2 = re.sub(r"[，。；、].*$", "", events[1]).strip() if len(events) > 1 else "中間那個轉折"
-    e3 = re.sub(r"[，。；、].*$", "", events[2]).strip() if len(events) > 2 else "後來那一幕"
-    ex1 = excerpts[0][:20] if excerpts else "那個關鍵畫面"
-    c1 = chars[0] if len(chars) > 0 else "主角"
-    c2 = chars[1] if len(chars) > 1 else "另一位角色"
-
-    if s == "O":
-        return [
-            f"先選一個講就好：你想先說「{e1}」還是「{e2}」",
-            f"我們先抓一小段，你記得{c1}那時候先做了什麼",
-            f"回到{ex1}那段，接下來故事裡誰先有動作",
-            f"你先補一句就好：在「{e3}」之前，故事裡先發生什麼",
-        ]
-    if s == "R":
-        return [
-            f"你先選一個感覺也可以：看到「{e1}」時，你比較像失望、緊張，還是生氣",
-            f"如果你是{c2}，遇到那一幕你當下最明顯的心情是什麼",
-            f"回到{ex1}那段，你心裡第一個冒出的感覺是什麼",
-            f"你先說一個情緒詞就好，哪一個最接近你看完{e2}的感覺",
-        ]
-    if s == "I":
-        return [
-            f"我們先用一句話，你覺得「{e2}」最提醒我們什麼",
-            f"你先選一個方向：這段比較像在提醒分享、先問清楚，還是同理別人",
-            f"回到{ex1}那段，你覺得作者最想讓我們記住哪件事",
-            f"你剛剛的想法很接近了，這件事背後的道理你會怎麼說",
-        ]
-    return [
-        f"先說第一步就好：如果明天遇到像「{e3}」的情況，你會先做什麼",
-        f"你先選一個小行動：先停一下深呼吸，還是先把話問清楚",
-        f"如果你是{c1}，下次你想先改哪一個小動作",
-        f"你說一個做得到的行動就好，今天放學前你會怎麼練習",
-    ]
-
-
-def _pick_non_repeating_question(candidates: list[str], recent_questions_block: str, seed: str) -> str:
-    if not candidates:
-        return ""
-    ordered = sorted(
-        [c for c in candidates if c and c.strip()],
-        key=lambda c: sum(ord(ch) for ch in f"{seed}:{c}"),
-    )
-    for c in ordered:
-        q = _sanitize_one_question(c)
-        if q and not _question_similar_to_recent(q, recent_questions_block):
-            return q
-    return _sanitize_one_question(ordered[0])
-
-
-def _force_book_anchored_question(
-    *,
-    stage: str,
-    fallback_q: str,
-    book_pack: Optional[dict[str, Any]],
-    student_text: str,
-    category: str,
-    recent_questions_block: str = "",
-    strike_count: int = 1,
-) -> str:
-    q = _sanitize_one_question(fallback_q)
-    if (
-        q
-        and (not _looks_generic_question(q))
-        and (not _question_similar_to_recent(q, recent_questions_block))
-        and (not _looks_glitched_question(q))
-    ):
-        return q
-
-    s = (stage or "O").upper()
-    if s not in _LOW_EFFORT_FOLLOWUP_BY_STAGE:
-        s = "O"
-
-    if category == "low_effort":
-        pool = _LOW_EFFORT_FOLLOWUP_BY_STAGE[s]
-        pool = _book_low_effort_candidates(s, book_pack) + pool
-        chosen = _pick_non_repeating_question(pool, recent_questions_block, f"{category}:{s}:{strike_count}:{student_text}")
-        if chosen:
-            return chosen
-
-    anchor = _book_anchor_from_pack(book_pack, f"{category}:{stage}:{student_text}")
-    if s == "R":
-        return _sanitize_one_question(f"回到故事裡的{anchor or '那個畫面'}，你當下最明顯的感覺是什麼")
-    if s == "I":
-        return _sanitize_one_question(f"根據{anchor or '故事裡這個轉折'}，你覺得它最提醒我們什麼")
-    if s == "D":
-        return _sanitize_one_question(f"如果再遇到{anchor or '類似情況'}，你會先做哪一個小步驟")
-    return _sanitize_one_question(
-        _pick_variant(
-            [
-                f"回到{anchor or '故事內容'}，照順序接下來是誰先做了什麼",
-                f"在{anchor or '故事'}那一段之後，下一幕關鍵發生了什麼",
-                f"從{anchor or '故事'}接著往下看，你還注意到哪個轉折",
-            ],
-            f"anchorO:{category}:{student_text}:{anchor}",
-        )
-    )
-
-
-def _compose_reply_from_model(
-    *,
-    clean_ai: str,
-    student_text: str,
-    fallback_q: str,
-    fallback_kind: str = "followup",
-) -> str:
-    ack = _normalize_first_sentence(clean_ai)
-    if (not ack) or _looks_glitched_text(ack):
-        ack = _focus_ack(student_text, fallback_kind)
-
-    model_q = _extract_question_sentence(clean_ai)
-    if _looks_generic_question(model_q) or _looks_glitched_question(model_q):
-        model_q = ""
-
-    q = _choose_question_from_candidates(model_q, fallback_q)
-    return _two_sentence_ack_then_question(ack, q)
-
-
 def _stage_recent_lines(msgs: list[OridMessage], stage: str, limit: int = 8) -> list[str]:
     out: list[str] = []
     for m in msgs:
@@ -1234,36 +1011,6 @@ def _recent_session_lines(msgs: list[OridMessage], limit: int = 12) -> list[str]
         if t:
             out.append(f"{prefix}：{t}")
     return out
-
-
-def _effective_depth_level(stage_turn: int, required_pass: int) -> int:
-    if required_pass <= 1:
-        return 3
-    ratio = max(0.0, min(float(stage_turn) / float(required_pass), 1.0))
-    if ratio < 0.34:
-        return 1
-    if ratio < 0.67:
-        return 2
-    return 3
-
-
-def _previous_stage_summary(msgs: list[OridMessage], current_stage: str, limit: int = 2) -> str:
-    stage = (current_stage or "O").strip().upper()
-    prev_map = {"R": "O", "I": "R", "D": "I"}
-    prev = prev_map.get(stage)
-    if not prev:
-        return ""
-    lines: list[str] = []
-    for m in reversed(msgs):
-        if (m.stage or "").strip().upper() != prev:
-            continue
-        role = "學生" if m.sender == "student" else "老師"
-        text = (m.text or "").strip()
-        if text:
-            lines.append(f"{role}:{text}")
-        if len(lines) >= limit:
-            break
-    return " | ".join(reversed(lines))
 
 
 def _is_meta_or_injection_text(text: str) -> bool:
@@ -1356,112 +1103,6 @@ def _allow_chat_message(user_id: str) -> bool:
     return True
 
 
-async def _generate_first_sentence(
-    *,
-    student_text: str,
-    system_prompt: str,
-    fallback_first: str,
-    temperature: Optional[float] = None,
-) -> str:
-    if client is None:
-        return fallback_first
-
-    try:
-        raw = await _chat_completion(
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"學生剛剛說：{student_text}"},
-            ],
-            max_completion_tokens=ORID_FOLLOWUP_MAX_COMPLETION_TOKENS,
-            temperature=temperature if temperature is not None else ORID_FOLLOWUP_TEMPERATURE,
-        )
-        first = _normalize_first_sentence(raw)
-        if first and (not _looks_glitched_text(first)):
-            return first
-    except Exception:
-        pass
-
-    return fallback_first
-
-
-async def llm_generate_reply(
-    stage: str,
-    history: list[dict],
-    book_pack: Optional[dict[str, Any]],
-    stage_turn: int,
-    required_pass: int,
-    ai_turn_count_same_stage: int,
-    min_ai_turns_same_stage: int,
-    fallback_question: str,
-    prior_stage_summary: str = "",
-    latest_student_text: str = "",
-    rag_context: str = "",
-    recent_ai_questions: str = "",
-) -> str:
-    book_context = build_book_context_block(book_pack)
-    depth_level = _effective_depth_level(stage_turn=stage_turn, required_pass=required_pass)
-    system_prompt = build_orid_chat_system_prompt(
-        stage=stage,
-        stage_turn=stage_turn,
-        required_pass=required_pass,
-        ai_turn_count_same_stage=ai_turn_count_same_stage,
-        min_ai_turns_same_stage=min_ai_turns_same_stage,
-        fallback_question=_sanitize_one_question(fallback_question),
-        book_context=book_context,
-        depth_level=depth_level,
-        prior_stage_summary=prior_stage_summary,
-        latest_student_text=latest_student_text,
-        rag_context=rag_context,
-        recent_ai_questions=recent_ai_questions,
-    )
-
-    messages = [{"role": "system", "content": system_prompt}]
-    messages.extend(history)
-
-    return await _chat_completion(
-        messages,
-        max_completion_tokens=OPENAI_MAX_COMPLETION_TOKENS,
-        temperature=OPENAI_TEMPERATURE if OPENAI_TEMPERATURE is not None else ORID_MAIN_FALLBACK_TEMPERATURE,
-    )
-
-
-async def run_orid_checker(
-    *,
-    student_text: str,
-    book_pack: Optional[dict[str, Any]],
-    stage: str,
-    msg_texts: list[str],
-) -> dict[str, Any]:
-    if not CHECKER_OK:
-        return {}
-
-    sys, user_msg = build_orid_checker_prompts(
-        student_text=student_text,
-        book_pack=book_pack,
-        stage=stage,
-        message_history=msg_texts,
-        max_history=6,
-    )
-
-    raw = await _chat_completion(
-        [
-            {"role": "system", "content": sys},
-            {"role": "user", "content": user_msg},
-        ],
-        max_completion_tokens=min(220, OPENAI_MAX_COMPLETION_TOKENS),
-        temperature=OPENAI_TEMPERATURE,
-    )
-
-    obj = clamp_checker_output(
-        parse_orid_checker_json(raw),
-        stage=stage,
-        student_text=student_text,
-    )
-    if ORID_CHECKER_DEBUG:
-        print("[ORID_CHECKER]", obj)
-    return obj or {}
-
-
 # ----------------------------
 # Writing assist (one-click draft)
 # ----------------------------
@@ -1550,6 +1191,7 @@ class WritingFeedbackResponse(BaseModel):
     stage: str
     draft: str
     ok: bool
+    praise: Optional[str] = None
     missing: list[str] = []
     suggestions: list[str] = []
     example: Optional[str] = None
@@ -1557,75 +1199,298 @@ class WritingFeedbackResponse(BaseModel):
     meta: dict[str, Any] = {}
 
 
-def _control_feedback(stage: str, text: str) -> Tuple[bool, list[str], list[str], Optional[str]]:
+async def _llm_book_grounding_supported(
+    *,
+    student_text: str,
+    stage: str,
+    book_pack: Optional[dict[str, Any]],
+) -> Optional[bool]:
+    """
+    Semantic checker: ask LLM if student's claim is supported by BOOK_CONTEXT.
+    Returns True/False when parse succeeds; otherwise None for fallback heuristics.
+    """
+    if client is None:
+        return None
+    t = (student_text or "").strip()
+    if len(t) < 2 or not isinstance(book_pack, dict):
+        return None
+    sys, user_msg = build_book_grounding_checker_prompts(
+        student_text=t,
+        book_pack=book_pack,
+        stage=stage,
+    )
+    try:
+        raw = await _chat_completion(
+            [
+                {"role": "system", "content": sys},
+                {"role": "user", "content": user_msg},
+            ],
+            max_completion_tokens=min(200, OPENAI_MAX_COMPLETION_TOKENS),
+            temperature=0,
+        )
+        obj = parse_book_grounding_checker_json(raw)
+        grounded = obj.get("grounded")
+        if isinstance(grounded, bool):
+            return grounded
+        if isinstance(grounded, str):
+            g = grounded.strip().lower()
+            if g in {"true", "1", "yes"}:
+                return True
+            if g in {"false", "0", "no"}:
+                return False
+    except Exception as e:
+        print("[book_grounding_checker_failed]", repr(e))
+    return None
+
+
+async def _enforce_feedback_book_grounding(
+    student_text: str,
+    book_pack: Optional[dict[str, Any]],
+    stage: str,
+    ok: bool,
+    missing: list[str],
+    suggestions: list[str],
+    *,
+    use_llm_checker: bool = False,
+) -> Tuple[bool, list[str], list[str]]:
+    """
+    Ensure feedback path flags likely hallucinations vs book_pack.
+    When enabled and available, run semantic LLM checker first; fallback to
+    deterministic rules to keep behavior stable without LLM.
+    """
+    t = (student_text or "").strip()
+    if not t or not book_pack:
+        return ok, missing, suggestions
+
+    bad = False
+    # Deterministic rules decide blocking first. This keeps normal paraphrases
+    # from being over-blocked by an LLM grounding false positive.
+    bad = looks_likely_factual_mismatch(t, book_pack) or looks_likely_ungrounded_in_book(
+        t, book_pack, stage=stage
+    )
+    if (not bad) and use_llm_checker:
+        # LLM checker is advisory for very suspicious story-like claims only.
+        suspicious = any(
+            k in t
+            for k in (
+                "死",
+                "過世",
+                "打",
+                "揍",
+                "踢",
+                "殺",
+                "火箭",
+                "外星",
+                "機器人",
+                "總統",
+                "Curry",
+                "curry",
+            )
+        )
+        if suspicious:
+            grounded = await _llm_book_grounding_supported(
+                student_text=t,
+                stage=stage,
+                book_pack=book_pack,
+            )
+            if grounded is False:
+                bad = True
+    if not bad:
+        return ok, missing, suggestions
+    miss = list(missing)
+    sug = list(suggestions)
+    anchor = "對齊教材"
+    if not any(anchor in (m or "") for m in miss):
+        miss.insert(
+            0,
+            "內容需對齊教材：你剛寫的情節不像書裡發生的",
+        )
+    s0 = (
+        "請對照故事摘要，"
+        "改用書中真實的人與事件重寫"
+    )
+    if s0 not in sug:
+        sug.insert(0, s0)
+    return False, miss[:1], sug[:1]
+
+
+def _has_feedback_book_grounding_issue(missing: list[str]) -> bool:
+    return any("對齊教材" in (m or "") for m in (missing or []))
+
+
+def _book_grounding_praise(stage: str) -> str:
+    s = (stage or "O").strip().upper()
+    if s == "O":
+        return "你有試著寫出人物和事件，這是 O 段需要的方向；只是情節要再對回書裡。"
+    if s == "R":
+        return "你有試著寫出自己的感受，這很好；只是原因要再連回書裡真的發生的事。"
+    if s == "I":
+        return "你有試著寫出想法，這很好；只是道理要再接回書裡真的發生的事。"
+    if s == "D":
+        return "你有試著寫出下一步，這很好；只是行動要再接回這本書提醒你的地方。"
+    return "你有試著寫，我已經看到了；只是內容要再對回書裡。"
+
+
+
+
+def _draft_praise_line(t: str, stage: str) -> str:
+    """稱讚要看得出有讀到原文（人／事／感受／行動片語），避免空泛句。"""
+    t = (t or "").strip()
+    s = (stage or "O").strip().upper()
+    zh = _stage_name_zh_for_feedback(s)
+    if not t:
+        return "願意下筆就很棒，我們先寫一點點。"
+    one = t.replace("\n", " ")
+    for sep in ("。", "！", "？", "，"):
+        if sep in one:
+            one = one.split(sep, 1)[0].strip()
+            break
+    if len(one) > 36:
+        one = one[:36] + "…"
+    return f"你有寫到「{one}」，看得出你在寫「{zh}」這一段囉。"
+
+
+def _control_feedback(stage: str, text: str) -> Tuple[bool, list[str], list[str], Optional[str], Optional[str]]:
+    """
+    無 LLM 時的規則回饋：只給一組「一個主點」的 missing + suggestion，加一句句型支架（example）。
+    回傳：(ok, missing[:1], suggestions[:1], example_stem, praise)
+    """
     t = (text or "").strip()
-    missing: list[str] = []
-    suggestions: list[str] = []
+    s = (stage or "O").strip().upper()
 
     def _has_sentence() -> bool:
         return "。" in t or "！" in t or "？" in t
 
-    if len(t) < 12:
-        missing.append("字數偏短")
-        suggestions.append("至少寫 2 句、每句說清楚一件事")
+    stem = {
+        "O": "故事裡先發生的是……，後來……",
+        "R": "我覺得……，因為……",
+        "I": "這件事讓我明白……，因為故事裡……",
+        "D": "下次遇到……，我會先……",
+    }.get(s, "先寫一句你的想法，再補一個小細節。")
 
-    if stage == "O":
-        if not _has_sentence():
-            missing.append("缺少完整句子")
-            suggestions.append("用角色加事件寫成完整句子")
-        if len(t) < 25:
-            missing.append("事件描述不夠")
-            suggestions.append("補上先發生什麼、後來怎樣")
-        example = "故事裡，阿松爺爺很珍惜柿子樹，所以一開始不想把柿子分給孩子們。後來奶奶提醒可以留下種子，大家一起處理和播種，爺爺的想法也慢慢改變。"
+    if not t:
+        return (
+            False,
+            ["這一格還是空白喔"],
+            ["你可以先從句型起頭，寫一句就好"],
+            stem,
+            "願意下筆就很棒，我們先寫一點點。",
+        )
 
-    elif stage == "R":
-        emo_kw = ["開心", "難過", "生氣", "害怕", "擔心", "緊張", "失望", "感動", "驚訝", "不公平"]
+    prior: list[tuple[str, str]] = []
+
+    if s == "O":
+        _feel = ("我覺得", "感到", "很溫暖", "很感人", "感動", "很好", "我喜歡", "讓人")
+        _plot = (
+            "把",
+            "分給",
+            "藏",
+            "做",
+            "最後",
+            "然後",
+            "一開始",
+            "接著",
+            "看到",
+            "聽到",
+            "做了",
+            "主角",
+            "同學",
+            "爺",
+            "柿",
+        )
+        if any(f in t for f in _feel) and not any(p in t for p in _plot) and len(t) < 55:
+            prior.append(
+                (
+                    "這段讀起來比較像感覺；O 段要先把故事裡實際發生的事寫出來",
+                    "試試寫：故事裡先發生的是……，他做了……",
+                )
+            )
+        elif len(t) < 12:
+            prior.append(("內容還有點短，讀者會看不出故事在演什麼", "多寫一句：是誰？做了什麼？"))
+        elif not _has_sentence():
+            prior.append(("讀起來還沒用一句話說完一件事", "試著用句號收尾，讓讀者聽得懂一件事講完"))
+        elif len(t) < 25:
+            prior.append(("事件順序還能再清楚一點", "先發生什麼，後來又怎樣，寫清楚一點"))
+    elif s == "R":
+        emo_kw = ["開心", "難過", "生氣", "害怕", "擔心", "緊張", "失望", "感動", "驚訝", "不公平", "高興", "難受"]
         if not any(k in t for k in emo_kw):
-            missing.append("缺少感受詞")
-            suggestions.append("加上一個明確的感受詞")
-        if "因為" not in t:
-            missing.append("缺少原因")
-            suggestions.append("用因為把感受連回故事")
-        example = "我覺得很失望，因為孩子們只能看著柿子卻吃不到，好像被排除在外。看到後來大家一起處理種子時，我又覺得比較安心。"
-
-    elif stage == "I":
-        if not any(k in t for k in ["我覺得", "提醒", "學到", "道理", "價值", "重要", "意義"]):
-            missing.append("缺少道理")
-            suggestions.append("寫出你學到或提醒到的事")
-        if "因為" not in t and "所以" not in t:
-            missing.append("缺少理由")
-            suggestions.append("補一句故事裡的理由")
-        example = "我覺得這個故事提醒我們要學會分享，因為只想把好東西留給自己，最後不會真的更快樂。當大家一起處理種子時，事情反而變得更好。"
-
+            prior.append(("還幾乎沒有寫到心情", "用「我覺得__________」寫一個感覺，再接原因也可以"))
+        elif "因為" not in t:
+            prior.append(("還沒有寫「為什麼」會這樣想", "我覺得__________，因為故事裡__________"))
+    elif s == "I":
+        meaning = ["學到", "明白", "代表", "提醒", "意義", "價值", "道理", "重要"]
+        if any(k in t for k in ["很難過", "很開心", "生氣", "害怕", "高興"]) and "因為" not in t and not any(
+            k in t for k in meaning
+        ) and len(t) < 40:
+            prior.append(
+                (
+                    "這比較像寫感覺；I 段要寫你從故事裡「明白或學到」什麼",
+                    "這件事讓我明白__________，因為__________",
+                )
+            )
+        elif not any(
+            k in t for k in ["我覺得", "提醒", "學到", "明白", "道理", "價值", "重要", "意義", "應該"]
+        ):
+            prior.append(("還沒有寫出你學到或明白什麼", "我學到__________，因為故事裡__________"))
+        elif "因為" not in t and "所以" not in t:
+            prior.append(("你想到的這個道理，還能加一個小理由", "我會這樣想，是因為故事裡……"))
     else:
-        if "我會" not in t and "下次" not in t:
-            missing.append("缺少行動句")
-            suggestions.append("用下次我會開頭寫行動")
-        if len(t) < 25:
-            missing.append("行動不夠具體")
-            suggestions.append("補上第一步和怎麼做到")
-        example = "下次我也很想獨占時，我會先停一下深呼吸，再想想可不可以和別人一起分享。如果我誤會別人，我會先問清楚，不會急著生氣。"
+        if any(w in t for w in ("更好的人", "變更好", "變成更好", "要更好", "變成好人", "變一個好")) and (
+            "我會" not in t
+        ) and len(t) < 45:
+            prior.append(
+                (
+                    "這比較像心願；D 段要寫一個你下次能做得出來的小行動",
+                    "下次當__________的時候，我會先__________",
+                )
+            )
+        elif "我會" not in t and "下次" not in t:
+            prior.append(("還沒有寫出要怎麼做", "用「下次遇到……，我會先……」寫一個小動作"))
+        elif len(t) < 20:
+            prior.append(
+                (
+                    "行動還可以更具體一點",
+                    "寫一個能馬上做的「第一步」：我打算先……",
+                )
+            )
 
-    ok = len(missing) == 0
-    return ok, missing[:3], suggestions[:3], example
+    if prior:
+        m0, s0 = prior[0]
+        miss = [m0]
+        sug = [s0]
+        ok = False
+        praise = _draft_praise_line(t, s)
+    else:
+        miss = []
+        sug = []
+        ok = True
+        praise = _draft_praise_line(t, s)
+
+    return ok, miss, sug, stem, praise
+
+
+def _stage_name_zh_for_feedback(stage: str) -> str:
+    s = (stage or "O").strip().upper()
+    return {"O": "客觀", "R": "感受", "I": "意義", "D": "行動"}.get(s, "這一段")
 
 
 class GenAIFeedbackOutput(BaseModel):
     ok: bool
-    missing: list[str]
-    suggestions: list[str]
-    example: Optional[str]
-    improved: Optional[str]
+    praise: Optional[str] = None
+    missing: list[str] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
+    example: Optional[str] = None
+    improved: Optional[str] = None
 
 
-def _normalize_feedback_list(value: Any) -> list[str]:
+def _normalize_feedback_list(value: Any, *, max_items: int = 3) -> list[str]:
     if isinstance(value, list):
         out: list[str] = []
         for x in value:
             s = str(x).strip()
             if s:
                 out.append(s)
-        return out[:3]
+        return out[:max_items]
     if isinstance(value, str) and value.strip():
         return [value.strip()]
     return []
@@ -1660,28 +1525,42 @@ def _feedback_from_obj(
     stage: str,
     text: str,
     obj: dict[str, Any],
-) -> Tuple[bool, list[str], list[str], Optional[str], Optional[str]]:
+) -> Tuple[bool, list[str], list[str], Optional[str], Optional[str], Optional[str]]:
     ok = bool(obj.get("ok", False))
-    missing = _normalize_feedback_list(obj.get("missing"))
-    suggestions = _normalize_feedback_list(obj.get("suggestions"))
+    missing = _normalize_feedback_list(obj.get("missing"), max_items=1)
+    suggestions = _normalize_feedback_list(obj.get("suggestions"), max_items=1)
+
+    pr_raw = obj.get("praise")
+    praise = str(pr_raw).strip() if pr_raw else None
 
     example_raw = obj.get("example")
     improved_raw = obj.get("improved")
 
-    example = str(example_raw).strip() if example_raw else None
-    improved = str(improved_raw).strip() if improved_raw else None
+    example = str(example_raw).strip() if example_raw not in (None, "") else None
+    improved = str(improved_raw).strip() if improved_raw not in (None, "") else None
 
+    ctrl: Optional[Tuple[bool, list[str], list[str], Optional[str], Optional[str]]] = None
     if (not missing) and (not suggestions):
-        ok2, miss2, sug2, ex2 = _control_feedback(stage, text)
+        ok2, miss2, sug2, ex2, pr2 = _control_feedback(stage, text)
         ok = ok or ok2
         missing = missing or miss2
         suggestions = suggestions or sug2
-        example = example or ex2
+        if not example:
+            example = ex2
+        if not praise:
+            praise = pr2
+        ctrl = (ok2, miss2, sug2, ex2, pr2)
+    if not praise:
+        if ctrl:
+            praise = ctrl[4]
+        else:
+            *_, pr2 = _control_feedback(stage, text)
+            praise = pr2
 
-    if not improved:
-        improved = example or text
+    if improved and len(improved) > 120:
+        improved = None
 
-    return ok, missing[:3], suggestions[:3], example, improved
+    return ok, missing[:1], suggestions[:1], example, improved, praise
 
 
 async def _genai_feedback(
@@ -1689,12 +1568,19 @@ async def _genai_feedback(
     stage: str,
     text: str,
     book_pack: Optional[dict[str, Any]],
-) -> Tuple[bool, list[str], list[str], Optional[str], Optional[str]]:
+) -> Tuple[bool, list[str], list[str], Optional[str], Optional[str], Optional[str]]:
     sys, user_msg = build_genai_feedback_prompts(stage=stage, text=text, book_pack=book_pack)
+    if looks_likely_ungrounded_in_book(text, book_pack, stage=stage):
+        user_msg = (
+            "【系統提示：教材核對】學生草稿中的具體人、事、物看起來無法由故事摘要／摘錄支持。"
+            "請將 ok 設為 false；missing 須溫和說明須對齊教材、勿使用書中未出現的人或情節；"
+            "suggestions 要引導學生改用摘要已列事件；example 只給問句或句型起頭，improved 填 null，不要代寫整段。\n\n"
+            + user_msg
+        )
 
     if client is None:
-        ok2, miss2, sug2, ex2 = _control_feedback(stage, text)
-        return ok2, miss2, sug2, ex2, ex2
+        ok2, miss2, sug2, ex2, pr2 = _control_feedback(stage, text)
+        return ok2, miss2, sug2, ex2, None, pr2
 
     kwargs = {
         "model": OPENAI_MODEL,
@@ -1704,11 +1590,11 @@ async def _genai_feedback(
         ],
         "response_format": GenAIFeedbackOutput,
     }
-    if OPENAI_MAX_COMPLETION_TOKENS is not None:
-        kwargs["max_completion_tokens"] = OPENAI_MAX_COMPLETION_TOKENS
+    kwargs["max_completion_tokens"] = ORID_FEEDBACK_MAX_COMPLETION_TOKENS
     if OPENAI_TEMPERATURE is not None:
         kwargs["temperature"] = OPENAI_TEMPERATURE
 
+    structured_length_limited = False
     try:
         try:
             resp = await client.beta.chat.completions.parse(**kwargs)
@@ -1738,14 +1624,44 @@ async def _genai_feedback(
 
     except Exception as e:
         print("[writing_feedback][structured_parse_failed]", repr(e))
+        msg = str(e)
+        if "LengthFinishReasonError" in msg or "length limit was reached" in msg:
+            structured_length_limited = True
+            retry_kwargs = dict(kwargs)
+            base_max = retry_kwargs.get("max_completion_tokens")
+            try:
+                base_val = int(base_max) if base_max is not None else 0
+            except (TypeError, ValueError):
+                base_val = 0
+            retry_kwargs["max_completion_tokens"] = max(
+                base_val,
+                ORID_FEEDBACK_RETRY_MAX_COMPLETION_TOKENS,
+            )
+            try:
+                resp2 = await client.beta.chat.completions.parse(**retry_kwargs)
+                parsed2 = resp2.choices[0].message.parsed
+                if parsed2:
+                    if hasattr(parsed2, "model_dump"):
+                        obj2 = parsed2.model_dump()
+                    elif isinstance(parsed2, dict):
+                        obj2 = parsed2
+                    else:
+                        obj2 = getattr(parsed2, "__dict__", {}) or {}
+                    return _feedback_from_obj(stage=stage, text=text, obj=obj2)
+            except Exception as e2:
+                print("[writing_feedback][structured_parse_retry_failed]", repr(e2))
 
     try:
+        manual_max = ORID_FEEDBACK_MAX_COMPLETION_TOKENS
+        if structured_length_limited:
+            base = int(manual_max) if manual_max is not None else 0
+            manual_max = max(base, ORID_FEEDBACK_RETRY_MAX_COMPLETION_TOKENS)
         raw = await _chat_completion(
             [
                 {"role": "system", "content": sys},
                 {"role": "user", "content": user_msg},
             ],
-            max_completion_tokens=OPENAI_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=manual_max,
             temperature=OPENAI_TEMPERATURE,
         )
         obj = _extract_json_object(raw)
@@ -1754,116 +1670,8 @@ async def _genai_feedback(
     except Exception as e:
         print("[writing_feedback][manual_json_failed]", repr(e))
 
-    ok2, miss2, sug2, ex2 = _control_feedback(stage, text)
-    return ok2, miss2, sug2, ex2, ex2
-
-
-async def generate_natural_redirect(
-    *,
-    student_text: str,
-    fallback_q: str,
-    category: str,
-    current_stage: str,
-    book_pack: Optional[dict[str, Any]],
-    strike_count: int = 1,
-    recent_questions_block: str = "",
-) -> str:
-    safe_category = category if category in {"unsafe", "off_topic", "low_effort", "meta", "rate_limit", "factual_mismatch"} else "fallback"
-    fallback_first_map = {
-        "unsafe": _focus_ack(student_text, "unsafe"),
-        "off_topic": _offtopic_bridge_ack(student_text),
-        "low_effort": _focus_ack(student_text, "low_effort"),
-        "meta": "我們先把重點放在這本故事的討論。",
-        "rate_limit": "我們慢慢來，你每次說一個重點就好。",
-        "factual_mismatch": "我先幫你對齊一下，這段在故事裡沒有出現。",
-        "fallback": _focus_ack(student_text, "pullback"),
-    }
-    fallback_first = fallback_first_map.get(safe_category, _focus_ack(student_text, "pullback"))
-    anchored_q = _force_book_anchored_question(
-        stage=current_stage,
-        fallback_q=fallback_q,
-        book_pack=book_pack,
-        student_text=student_text,
-        category=safe_category,
-        recent_questions_block=recent_questions_block,
-        strike_count=strike_count,
-    )
-
-    # Hard-route factual/off-topic pullback to avoid echoing student's wrong details.
-    if safe_category == "factual_mismatch":
-        first = "這本書裡沒有這段情節，我們先對齊故事內容。"
-        return _two_sentence_ack_then_question(first, anchored_q)
-    if safe_category == "off_topic":
-        first = _neutral_pullback_ack(student_text)
-        return _two_sentence_ack_then_question(first, anchored_q)
-
-    # 其餘類別不用 LLM 產生第一句：模型容易固定成「帶你回到故事一開始…」等長套話。
-    first = fallback_first
-    if not (first or "").strip():
-        first = _focus_ack(student_text, "pullback")
-    return _two_sentence_ack_then_question(first.strip(), anchored_q)
-
-
-async def generate_natural_pullback(
-    student_text: str,
-    fallback_q: str,
-    custom_hint: Optional[str] = None,
-    *,
-    anchor_student_text: bool = True,
-    current_stage: Optional[str] = None,
-    book_pack: Optional[dict[str, Any]] = None,
-    strike_count: int = 1,
-    recent_questions_block: str = "",
-) -> str:
-    if custom_hint and "語氣" in custom_hint:
-        category = "unsafe"
-    elif _should_avoid_student_anchor_for_pullback(student_text, anchor_student_text):
-        category = "off_topic"
-    elif _is_low_effort_text(student_text):
-        category = "low_effort"
-    else:
-        category = "fallback"
-    return await generate_natural_redirect(
-        student_text=student_text,
-        fallback_q=fallback_q,
-        category=category,
-        current_stage=(current_stage or "O").upper(),
-        book_pack=book_pack,
-        strike_count=strike_count,
-        recent_questions_block=recent_questions_block,
-    )
-
-
-async def generate_stage_transition_reply(
-    *,
-    student_text: str,
-    from_stage: str,
-    to_stage: str,
-    next_q: str,
-) -> str:
-    fallback_first = _focus_ack(student_text, "transition")
-
-    sys = f"""
-你是一位自然、親切的國小閱讀老師。
-學生剛剛的回答已經足夠，現在準備從 {from_stage} 自然接到 {to_stage}。
-輸出必須是台灣繁體中文（正體字），禁止使用簡體中文。
-
-請只輸出第一句，不要輸出第二句，不要列點：
-- 這一句要自然回應學生剛剛說的內容，讓他感覺有被接住
-- 不要寫成系統轉場
-- 不要說現在進入下一階段
-- 不要說 O / R / I / D
-- 不要用模板稱讚
-- 不要做心理推測
-- 12 到 28 個字左右
-""".strip()
-
-    first = await _generate_first_sentence(
-        student_text=student_text,
-        system_prompt=sys,
-        fallback_first=fallback_first,
-    )
-    return _two_sentence_ack_then_question(first, next_q)
+    ok2, miss2, sug2, ex2, pr2 = _control_feedback(stage, text)
+    return ok2, miss2, sug2, ex2, None, pr2
 
 
 def _ensure_orid_writing_v1(week: int) -> dict[str, Any]:
@@ -2052,71 +1860,95 @@ async def writing_coach_chat(
     fb_sug: list[str] = []
     fb_ex: Optional[str] = None
     fb_imp: Optional[str] = None
+    fb_praise: Optional[str] = None
     coach_meta: dict[str, Any] = {}
 
     if source == "feedback_button":
         anchor_line = book_anchor_one_line(book_pack)
         if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
-            fb_ok, fb_missing, fb_sug, fb_ex = _control_feedback(stage_ctx, body)
+            fb_ok, fb_missing, fb_sug, fb_ex, fb_praise = _control_feedback(stage_ctx, body)
             fb_imp = None
+        else:
+            fb_ok, fb_missing, fb_sug, fb_ex, fb_imp, fb_praise = await _genai_feedback(
+                stage=stage_ctx, text=body, book_pack=book_pack
+            )
+
+        fb_ok, fb_missing, fb_sug = await _enforce_feedback_book_grounding(
+            body,
+            book_pack,
+            stage_ctx,
+            bool(fb_ok),
+            fb_missing,
+            fb_sug,
+            use_llm_checker=(not is_control_condition(condition, default=DEFAULT_ORID_CONDITION)),
+        )
+        if _has_feedback_book_grounding_issue(fb_missing):
+            fb_praise = _book_grounding_praise(stage_ctx)
+
+        if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
             ai_reply = format_control_feedback_reply(
                 ok=bool(fb_ok),
                 missing=fb_missing,
                 suggestions=fb_sug,
                 stage=stage_ctx,
                 book_anchor=anchor_line,
+                praise=fb_praise,
+                student_draft=body,
+            )
+        elif client is None:
+            ai_reply = format_control_feedback_reply(
+                ok=bool(fb_ok),
+                missing=fb_missing,
+                suggestions=fb_sug,
+                stage=stage_ctx,
+                book_anchor=anchor_line,
+                praise=fb_praise,
+                student_draft=body,
             )
         else:
-            fb_ok, fb_missing, fb_sug, fb_ex, fb_imp = await _genai_feedback(
-                stage=stage_ctx, text=body, book_pack=book_pack
+            summary = json.dumps(
+                {
+                    "ok": fb_ok,
+                    "praise": fb_praise,
+                    "missing": fb_missing,
+                    "suggestions": fb_sug,
+                    "example": fb_ex,
+                    "improved": fb_imp,
+                },
+                ensure_ascii=False,
             )
-            if client is None:
+            sys_n, user_n = build_feedback_narration_prompt(
+                stage=stage_ctx, feedback_json_summary=summary
+            )
+            try:
+                ai_reply = await _chat_completion(
+                    [
+                        {"role": "system", "content": sys_n},
+                        {"role": "user", "content": user_n},
+                    ],
+                    max_completion_tokens=min(400, OPENAI_MAX_COMPLETION_TOKENS),
+                    temperature=ORID_FOLLOWUP_TEMPERATURE,
+                )
+            except Exception:
                 ai_reply = format_control_feedback_reply(
                     ok=bool(fb_ok),
                     missing=fb_missing,
                     suggestions=fb_sug,
                     stage=stage_ctx,
                     book_anchor=anchor_line,
+                    praise=fb_praise,
+                    student_draft=body,
                 )
-            else:
-                summary = json.dumps(
-                    {
-                        "ok": fb_ok,
-                        "missing": fb_missing,
-                        "suggestions": fb_sug,
-                        "example": fb_ex,
-                        "improved": fb_imp,
-                    },
-                    ensure_ascii=False,
+            if not (ai_reply or "").strip():
+                ai_reply = format_control_feedback_reply(
+                    ok=bool(fb_ok),
+                    missing=fb_missing,
+                    suggestions=fb_sug,
+                    stage=stage_ctx,
+                    book_anchor=anchor_line,
+                    praise=fb_praise,
+                    student_draft=body,
                 )
-                sys_n, user_n = build_feedback_narration_prompt(
-                    stage=stage_ctx, feedback_json_summary=summary
-                )
-                try:
-                    ai_reply = await _chat_completion(
-                        [
-                            {"role": "system", "content": sys_n},
-                            {"role": "user", "content": user_n},
-                        ],
-                        max_completion_tokens=min(400, OPENAI_MAX_COMPLETION_TOKENS),
-                        temperature=ORID_FOLLOWUP_TEMPERATURE,
-                    )
-                except Exception:
-                    ai_reply = format_control_feedback_reply(
-                        ok=bool(fb_ok),
-                        missing=fb_missing,
-                        suggestions=fb_sug,
-                        stage=stage_ctx,
-                        book_anchor=anchor_line,
-                    )
-                if not (ai_reply or "").strip():
-                    ai_reply = format_control_feedback_reply(
-                        ok=bool(fb_ok),
-                        missing=fb_missing,
-                        suggestions=fb_sug,
-                        stage=stage_ctx,
-                        book_anchor=anchor_line,
-                    )
 
         if data.save_feedback:
             w_stmt = (
@@ -2147,6 +1979,7 @@ async def writing_coach_chat(
                 example=fb_ex,
                 improved=fb_imp,
                 empty_factory=_ensure_orid_writing_v1,
+                praise=fb_praise,
             )
             content_str = json.dumps(obj, ensure_ascii=False)
             saved_wid: Optional[str] = None
@@ -2218,6 +2051,7 @@ async def writing_coach_chat(
         ai_reply=ai_reply.strip(),
         stage=stage_ctx,
         feedback_ok=fb_ok,
+        feedback_praise=fb_praise,
         feedback_missing=fb_missing,
         feedback_suggestions=fb_sug,
         feedback_example=fb_ex,
@@ -2285,14 +2119,27 @@ async def writing_feedback(
 
     condition = normalize_orid_condition(session.condition, default=DEFAULT_ORID_CONDITION)
 
+    praise: Optional[str] = None
     if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
-        ok, missing, suggestions, example = _control_feedback(data.stage, text)
+        ok, missing, suggestions, _, praise = _control_feedback(data.stage, text)
         example = None
         improved = None
     else:
-        ok, missing, suggestions, example, improved = await _genai_feedback(
+        ok, missing, suggestions, example, improved, praise = await _genai_feedback(
             stage=data.stage, text=text, book_pack=book_pack
         )
+
+    ok, missing, suggestions = await _enforce_feedback_book_grounding(
+        text,
+        book_pack,
+        data.stage,
+        bool(ok),
+        missing,
+        suggestions,
+        use_llm_checker=(not is_control_condition(condition, default=DEFAULT_ORID_CONDITION)),
+    )
+    if _has_feedback_book_grounding_issue(missing):
+        praise = _book_grounding_praise(data.stage)
 
     saved_to: Optional[str] = None
     if data.save:
@@ -2325,6 +2172,7 @@ async def writing_feedback(
             example=example,
             improved=improved,
             empty_factory=_ensure_orid_writing_v1,
+            praise=praise,
         )
 
         content_str = json.dumps(obj, ensure_ascii=False)
@@ -2351,6 +2199,7 @@ async def writing_feedback(
         stage=data.stage,
         draft=data.draft,
         ok=ok,
+        praise=praise,
         missing=missing,
         suggestions=suggestions,
         example=example,

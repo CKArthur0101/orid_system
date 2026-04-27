@@ -1,5 +1,6 @@
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+
+import { getBearerAuthorization } from "@/lib/orid-bff-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,8 +16,8 @@ function jsonOrDetailResponse(status: number, text: string) {
 }
 
 export async function POST(req: Request) {
-  const token = (await cookies()).get("accessToken")?.value;
-  if (!token) return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
+  const auth = await getBearerAuthorization(req);
+  if (!auth) return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
 
   const rawBody = await req.text();
 
@@ -24,7 +25,7 @@ export async function POST(req: Request) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
+      Authorization: auth,
     },
     body: rawBody,
     cache: "no-store",

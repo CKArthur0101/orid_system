@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { parseAccessTokenFromCookieHeader } from "@/lib/orid-bff-auth";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -11,7 +13,8 @@ const API_BASE_URL =
 function forwardHeaders(req: NextRequest) {
   const cookie = req.headers.get("cookie") ?? "";
   const headerAuth = req.headers.get("authorization") ?? "";
-  const token = req.cookies.get("accessToken")?.value ?? "";
+  let token = req.cookies.get("accessToken")?.value ?? "";
+  if (!token) token = parseAccessTokenFromCookieHeader(cookie) ?? "";
   const authorization = headerAuth || (token ? `Bearer ${token}` : "");
 
   return {

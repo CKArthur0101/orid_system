@@ -33,7 +33,9 @@ def test_upsert_feedback_syncs_current_draft_text():
         example=None,
         improved=None,
         empty_factory=_empty,
+        praise="你有寫到重點",
     )
     assert out["stages"]["R"]["d1"] == "最新草稿內容"
     assert out["stages"]["R"]["feedback"]["d1"]["missing"] == ["缺少原因"]
+    assert out["stages"]["R"]["feedback"]["d1"]["praise"] == "你有寫到重點"
 
