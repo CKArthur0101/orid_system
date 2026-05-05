@@ -1,0 +1,30 @@
+﻿             /orid/readings/8d187633-3346-472e-aaab-63ebd0f8b331 HTTP/1.1" 200
+      INFO   172.18.0.6:49756 - "GET 
+             /orid/writings?session_id=164b1fe5-e11c-4f64-b033-b892b85f66cb&week
+             =1&latest=true HTTP/1.1" 200
+[writing_feedback][structured_parse_failed] LengthFinishReasonError('Could not parse response content as the length limit was reached - CompletionUsage(completion_tokens=1800, prompt_tokens=4396, total_tokens=6196, completion_tokens_details=CompletionTokensDetails(accepted_prediction_tokens=0, audio_tokens=0, reasoning_tokens=1800, rejected_prediction_tokens=0), prompt_tokens_details=PromptTokensDetails(audio_tokens=0, cached_tokens=0))')
+[writing_coach_chat] {"session_id": "164b1fe5-e11c-4f64-b033-b892b85f66cb", "stage": "O", "source": "feedback_button", "condition": "genai"}
+      INFO   172.18.0.6:37628 - "POST /orid/writing-coach/chat HTTP/1.1" 200
+      INFO   172.18.0.6:37628 - "GET 
+             /orid/messages?session_id=164b1fe5-e11c-4f64-b033-b892b85f66cb&orde
+             r=asc&limit=200 HTTP/1.1" 200
+      INFO   172.18.0.6:35186 - "PUT 
+             /orid/writings/df54cc96-27ae-4912-9273-61e7875faf06 HTTP/1.1" 200
+      INFO   172.18.0.6:35186 - "GET /users/me HTTP/1.1" 200
+      INFO   172.18.0.6:35196 - "POST /auth/jwt/logout HTTP/1.1" 204
+      INFO   172.18.0.6:35196 - "POST /auth/jwt/login HTTP/1.1" 200
+      INFO   172.18.0.6:35186 - "GET /users/me HTTP/1.1" 200
+      INFO   172.18.0.6:35186 - "GET /users/me HTTP/1.1" 200
+      INFO   172.18.0.6:39912 - "GET /teacher/me/classes HTTP/1.1" 200
+      INFO   172.18.0.6:39892 - "GET /teacher/rubric?week=1 HTTP/1.1" 200
+      INFO   172.18.0.6:39908 - "GET /teacher/rubric?week=1 HTTP/1.1" 200
+      INFO   172.18.0.6:39884 - "GET /teacher/me/classes HTTP/1.1" 200
+      INFO   172.18.0.6:39892 - "GET 
+             /teacher/classes/8b293d75-20b9-458c-95f1-4c067ddcce70/overview?week
+             =1 HTTP/1.1" 200
+      INFO   172.18.0.6:39908 - "GET 
+             /teacher/classes/8b293d75-20b9-458c-95f1-4c067ddcce70/overview?week
+             =1 HTTP/1.1" 200
+      INFO   172.18.0.6:39884 - "GET 
+             /teacher/classes/8b293d75-20b9-458c-95f1-4c067ddcce70/overview?week
+             =1 HTTP/1.1" 200

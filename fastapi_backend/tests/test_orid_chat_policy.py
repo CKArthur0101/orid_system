@@ -1,4 +1,5 @@
 from app.prompts import orid_checker
+from app.prompts.writing_coach_chat import detect_feedback_strength, normalize_feedback_focus
 from app.routes import orid
 
 
@@ -158,3 +159,89 @@ def test_story_framing_prefix_does_not_trigger_ungrounded_false_positive():
     }
     t = "故事裡先發生了爺爺很小氣，然後只給奶奶柿子蒂"
     assert orid_checker.looks_likely_ungrounded_in_book(t, book_pack, "O") is False
+
+
+def test_grounding_checker_does_not_false_positive_on_correct_book_paraphrase():
+    """
+    Regress: checker was flagging valid O-stage drafts as 'ungrounded' because
+    greedy 5-char token extraction produced tokens like '給任何人' whose bigrams
+    don't appear in the reference blob, even though 3/4 tokens were correctly grounded.
+    Fix: only flag when unmatched tokens outnumber matched ones.
+    """
+    from app.routes.orid import BOOK_PACK_BY_WEEK
+
+    book_pack = BOOK_PACK_BY_WEEK[1]
+
+    # Both of these are factually correct descriptions of the book's content.
+    correct_1 = "阿松爺爺一開始獨占所有柿子，不分給任何人。後來哎唷奶奶搬來，他只給她柿子蒂，沒給真的柿子。"
+    correct_2 = "故事裡先發生的事情是爺爺不想給柿子，然後只給哎唷奶奶柿子蒂。"
+
+    assert orid_checker.looks_likely_ungrounded_in_book(correct_1, book_pack, "O") is False, (
+        "正確描述書本內容卻被誤判為 ungrounded（false positive）"
+    )
+    assert orid_checker.looks_likely_factual_mismatch(correct_1, book_pack) is False
+
+    assert orid_checker.looks_likely_ungrounded_in_book(correct_2, book_pack, "O") is False
+
+    # These should still be caught.
+    fabricated = "阿松爺爺一開始獨占所有柿子，然後爺爺去殺奶奶。"
+    assert orid_checker.looks_likely_ungrounded_in_book(fabricated, book_pack, "O") is True
+
+
+def test_normalize_feedback_focus_rewrites_vague_feedback():
+    missing, suggestions = normalize_feedback_focus(
+        stage="I",
+        missing=["請再增加完整度"],
+        suggestions=["補充更多細節"],
+    )
+    assert len(missing) == 1
+    assert len(suggestions) == 1
+    assert ("想法" in missing[0] or "學到" in missing[0] or "提醒" in missing[0])
+    assert ("因為" in suggestions[0] and ("明白" in suggestions[0] or "學到" in suggestions[0] or "提醒" in suggestions[0]))
+
+
+def test_feedback_narration_validation_requires_three_sections():
+    ok_text = (
+        "你已經做到：\n有提到故事角色。\n\n"
+        "你可以再加強：\n補一個原因。\n\n"
+        "試試看這樣寫：\n我覺得……，因為……"
+    )
+    bad_text = "你寫得不錯，請再補充內容。"
+    assert orid._looks_valid_feedback_narration(ok_text) is True
+    assert orid._looks_valid_feedback_narration(bad_text) is False
+
+
+def test_normalize_feedback_focus_strength_tone_changes_with_draft_quality():
+    low_missing, _ = normalize_feedback_focus(
+        stage="R",
+        missing=[""],
+        suggestions=[""],
+        student_text="難過",
+    )
+    high_missing, _ = normalize_feedback_focus(
+        stage="R",
+        missing=[""],
+        suggestions=[""],
+        student_text="我覺得很難過，因為看到他把柿子都藏起來了。",
+    )
+    assert "先把感受說出來" in low_missing[0]
+    assert ("你的感受和原因都有了" in high_missing[0]) or ("你有情緒方向了" in high_missing[0])
+    assert low_missing[0] != high_missing[0]
+
+
+def test_detect_feedback_strength_levels():
+    assert detect_feedback_strength("O", "柿子") == "low"
+    assert detect_feedback_strength("R", "我很難過") in {"mid", "low"}
+    assert detect_feedback_strength("R", "我覺得很難過，因為看到他把柿子都藏起來了。") == "high"
+
+
+def test_normalize_feedback_focus_uses_child_friendly_wording():
+    missing, _ = normalize_feedback_focus(
+        stage="O",
+        missing=[""],
+        suggestions=[""],
+        student_text="一開始爺爺把柿子藏起來，後來大家一起吃。",
+    )
+    txt = missing[0]
+    assert "精準" not in txt
+    assert "潤一下" not in txt

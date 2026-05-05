@@ -18,7 +18,7 @@ from openai import AsyncOpenAI, BadRequestError
 
 from app.database import get_async_session, User
 from app.users import current_active_user
-from app.models import Reading, OridSession, OridMessage, OridWriting
+from app.models import Reading, OridSession, OridMessage, OridWriting, OridStageAttempt, OridFeedbackEvent
 from app.schemas import (
     ReadingCreate, ReadingRead,
     OridSessionCreate, OridSessionRead,
@@ -48,8 +48,10 @@ from app.prompts.writing_assist import (
 from app.prompts.writing_coach_chat import (
     build_feedback_narration_prompt,
     build_writing_coach_system_prompt,
+    detect_feedback_strength,
     format_control_feedback_reply,
     format_control_free_text_reply,
+    normalize_feedback_focus,
 )
 from app.prompts.orid_checker import (
     build_book_grounding_checker_prompts,
@@ -439,7 +441,7 @@ DEFAULT_READING_TITLE_TEMPLATE = "第 {week} 週（暫定教材）"
 BOOK_PACK_BY_WEEK: dict[int, dict[str, Any]] = {
     1: {
         "schema": "book_pack_v1",
-        "version": 3,
+        "version": 4,
         "rag_source": "file",
         "embedding_bundle_id": "week_1",
         "full_text_path": "/app/shared-data/book_pack_week1.json",
@@ -529,6 +531,60 @@ BOOK_PACK_BY_WEEK: dict[int, dict[str, Any]] = {
             "I": "意義：提出一個提醒/道理，並用故事中的一個轉折當理由。",
             "D": "行動：寫一個可執行的小步驟（下次我會…在…先…再…）。",
         },
+        "writing_rubric": {
+            "schema": "writing_rubric_v1",
+            "version": 2,
+            "by_stage": {
+                "O": [
+                    {
+                        "id": "O1",
+                        "name": "事實描述",
+                        "levels": [
+                            {"label": "1 起步", "desc": "只有感想或空洞述說，未寫出書中具體人物與事件，或事件明顯與書不符。"},
+                            {"label": "2 接近", "desc": "提到書中人物或事件，但缺少重要細節，或只寫了結局而跳過中間衝突，或順序不清楚。"},
+                            {"label": "3 達標", "desc": "正確寫出書中真實的人物＋至少一件完整事件，大致順序清楚，無明顯事實錯誤。"},
+                            {"label": "4 精進", "desc": "清楚描述至少兩件有前後關聯的事件，人物正確，順序清楚，細節到位（如：哎喲奶奶、柿子蒂→陀螺）。"},
+                        ],
+                    }
+                ],
+                "R": [
+                    {
+                        "id": "R1",
+                        "name": "感受與原因",
+                        "levels": [
+                            {"label": "1 起步", "desc": "沒有感受詞，或只有「很好、很感人」等空洞詞，沒有說明原因。"},
+                            {"label": "2 接近", "desc": "有感受詞，但沒有說明原因，或原因和故事無關。"},
+                            {"label": "3 達標", "desc": "有明確感受詞＋因為＋連回故事裡的一個畫面或情節。"},
+                            {"label": "4 精進", "desc": "感受具體豐富，原因清楚連回故事，說明有深度（如：代入角色思考、對比兩個角色的不同做法）。"},
+                        ],
+                    }
+                ],
+                "I": [
+                    {
+                        "id": "I1",
+                        "name": "道理與連結",
+                        "levels": [
+                            {"label": "1 起步", "desc": "只有感受，或只有空洞的道理（如「要善良」），沒有說明為什麼。"},
+                            {"label": "2 接近", "desc": "有道理，但缺乏「為什麼」的說明，或道理與書中故事無連結。"},
+                            {"label": "3 達標", "desc": "說出一個具體道理＋說明為什麼，可以連回書中某個情節（不一定要引文）。"},
+                            {"label": "4 精進", "desc": "道理清楚且有深度，明確連回書中一個具體情節作為支持，說明讓人覺得「說得很有道理」。"},
+                        ],
+                    }
+                ],
+                "D": [
+                    {
+                        "id": "D1",
+                        "name": "具體行動",
+                        "levels": [
+                            {"label": "1 起步", "desc": "只有空洞願望（如「我要更好」「我要改變」），沒有說明要做什麼。"},
+                            {"label": "2 接近", "desc": "有行動方向，但不夠具體，缺少情境或具體做法。"},
+                            {"label": "3 達標", "desc": "提出一個在現實生活中做得到的具體行動，包含情境或對象（如「下次同學來要東西，我會先說好，但留一份給自己」）。"},
+                            {"label": "4 精進", "desc": "行動具體清楚（有情境、對象、做法），並說明和書的啟發的關聯，讓人看了覺得「這真的做得到、也有意義」。"},
+                        ],
+                    }
+                ],
+            },
+        },
     }
 }
 
@@ -583,6 +639,10 @@ def resolve_book_pack(pack: Optional[dict[str, Any]]) -> Optional[dict[str, Any]
     merged = dict(pack)
     merged["story_excerpts"] = list(default.get("story_excerpts") or [])
     merged["orid_prompt_bank"] = dict(default.get("orid_prompt_bank") or {})
+    if default.get("writing_rubric"):
+        merged["writing_rubric"] = default["writing_rubric"]
+    if default.get("writing_guide"):
+        merged["writing_guide"] = default["writing_guide"]
     if default.get("rag_source") and not merged.get("rag_source"):
         merged["rag_source"] = default.get("rag_source")
     if default.get("embedding_bundle_id") and not merged.get("embedding_bundle_id"):
@@ -1262,6 +1322,12 @@ async def _enforce_feedback_book_grounding(
     if not t or not book_pack:
         return ok, missing, suggestions
 
+    # D stage is the student's personal action plan — it does NOT need to describe
+    # book events, so grounding checks are irrelevant and cause false positives.
+    stage_upper = (stage or "O").strip().upper()
+    if stage_upper == "D":
+        return ok, missing, suggestions
+
     bad = False
     # Deterministic rules decide blocking first. This keeps normal paraphrases
     # from being over-blocked by an LLM grounding false positive.
@@ -1299,18 +1365,17 @@ async def _enforce_feedback_book_grounding(
         return ok, missing, suggestions
     miss = list(missing)
     sug = list(suggestions)
-    anchor = "對齊教材"
-    if not any(anchor in (m or "") for m in miss):
+    # If GenAI already gave a specific missing message, trust it (don't prepend a
+    # generic fallback that would push the specific one out when truncated to [:1]).
+    # Only insert the generic fallback when the GenAI gave no missing at all.
+    if not miss:
         miss.insert(
             0,
             "內容需對齊教材：你剛寫的情節不像書裡發生的",
         )
-    s0 = (
-        "請對照故事摘要，"
-        "改用書中真實的人與事件重寫"
-    )
-    if s0 not in sug:
-        sug.insert(0, s0)
+        sug_fallback = "請對照故事摘要，改用書中真實的人與事件重寫"
+        if not sug:
+            sug.insert(0, sug_fallback)
     return False, miss[:1], sug[:1]
 
 
@@ -1481,6 +1546,9 @@ class GenAIFeedbackOutput(BaseModel):
     suggestions: list[str] = Field(default_factory=list)
     example: Optional[str] = None
     improved: Optional[str] = None
+    # 與 book_pack.writing_rubric 對齊，供後測／分析（可為 null）
+    rubric_focus: Optional[str] = None
+    rubric_level_estimate: Optional[str] = None
 
 
 def _normalize_feedback_list(value: Any, *, max_items: int = 3) -> list[str]:
@@ -1520,15 +1588,32 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
     return {}
 
 
+def _rubric_meta_from_obj(obj: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    rf = obj.get("rubric_focus")
+    rl = obj.get("rubric_level_estimate")
+    if rf is not None and str(rf).strip():
+        out["rubric_focus"] = str(rf).strip()
+    if rl is not None and str(rl).strip():
+        out["rubric_level_estimate"] = str(rl).strip()
+    return out
+
+
 def _feedback_from_obj(
     *,
     stage: str,
     text: str,
     obj: dict[str, Any],
-) -> Tuple[bool, list[str], list[str], Optional[str], Optional[str], Optional[str]]:
+) -> Tuple[bool, list[str], list[str], Optional[str], Optional[str], Optional[str], dict[str, Any]]:
     ok = bool(obj.get("ok", False))
     missing = _normalize_feedback_list(obj.get("missing"), max_items=1)
     suggestions = _normalize_feedback_list(obj.get("suggestions"), max_items=1)
+    missing, suggestions = normalize_feedback_focus(
+        stage=stage,
+        missing=missing,
+        suggestions=suggestions,
+        student_text=text,
+    )
 
     pr_raw = obj.get("praise")
     praise = str(pr_raw).strip() if pr_raw else None
@@ -1560,7 +1645,16 @@ def _feedback_from_obj(
     if improved and len(improved) > 120:
         improved = None
 
-    return ok, missing[:1], suggestions[:1], example, improved, praise
+    return ok, missing[:1], suggestions[:1], example, improved, praise, _rubric_meta_from_obj(obj)
+
+
+def _looks_valid_feedback_narration(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return False
+    # Keep narration stable: must contain all three required sections.
+    required = ("你已經做到", "你可以再加強", "試試看")
+    return all(x in t for x in required)
 
 
 async def _genai_feedback(
@@ -1568,7 +1662,7 @@ async def _genai_feedback(
     stage: str,
     text: str,
     book_pack: Optional[dict[str, Any]],
-) -> Tuple[bool, list[str], list[str], Optional[str], Optional[str], Optional[str]]:
+) -> Tuple[bool, list[str], list[str], Optional[str], Optional[str], Optional[str], dict[str, Any]]:
     sys, user_msg = build_genai_feedback_prompts(stage=stage, text=text, book_pack=book_pack)
     if looks_likely_ungrounded_in_book(text, book_pack, stage=stage):
         user_msg = (
@@ -1580,7 +1674,7 @@ async def _genai_feedback(
 
     if client is None:
         ok2, miss2, sug2, ex2, pr2 = _control_feedback(stage, text)
-        return ok2, miss2, sug2, ex2, None, pr2
+        return ok2, miss2, sug2, ex2, None, pr2, {}
 
     kwargs = {
         "model": OPENAI_MODEL,
@@ -1671,7 +1765,7 @@ async def _genai_feedback(
         print("[writing_feedback][manual_json_failed]", repr(e))
 
     ok2, miss2, sug2, ex2, pr2 = _control_feedback(stage, text)
-    return ok2, miss2, sug2, ex2, None, pr2
+    return ok2, miss2, sug2, ex2, None, pr2, {}
 
 
 def _ensure_orid_writing_v1(week: int) -> dict[str, Any]:
@@ -1685,6 +1779,132 @@ def _ensure_orid_writing_v1(week: int) -> dict[str, Any]:
             "D": {"d1": "", "d2": ""},
         },
     }
+
+
+async def _maybe_advance_stage(
+    db: AsyncSession,
+    session_id: UUID,
+    stage: str,
+) -> bool:
+    """
+    After a feedback event is recorded, check if the student has accumulated
+    enough ok=True passes in `stage` to advance current_stage to the next one.
+    Does a fresh SELECT of OridSession to avoid reading an expired ORM object
+    after a prior commit. Only advances if current_stage still equals `stage`
+    (prevents double-advance from concurrent requests).
+    Returns True if the stage was advanced.
+    """
+    required = get_required_pass(stage)
+    try:
+        # Fresh load — the OridSession object in the caller may be expired
+        # after _try_dual_write_feedback's commit.
+        sess_res = await db.execute(
+            select(OridSession).where(OridSession.id == session_id)
+        )
+        live_session = sess_res.scalars().first()
+        if not live_session:
+            return False
+        if (live_session.current_stage or "O").strip().upper() != stage.strip().upper():
+            return False
+
+        res = await db.execute(
+            select(func.count(OridFeedbackEvent.id)).where(
+                OridFeedbackEvent.session_id == session_id,
+                OridFeedbackEvent.stage == stage,
+                OridFeedbackEvent.ok == True,  # noqa: E712
+            )
+        )
+        ok_count = int(res.scalar() or 0)
+    except Exception as exc:
+        print("[advance_stage_count_failed]", repr(exc))
+        return False
+
+    if ok_count >= required:
+        new_stage = next_stage(stage)
+        if new_stage != stage:
+            live_session.current_stage = new_stage
+            try:
+                await db.commit()
+                print(
+                    "[stage_advanced]",
+                    json.dumps(
+                        {
+                            "session_id": str(session_id),
+                            "from": stage,
+                            "to": new_stage,
+                            "ok_count": ok_count,
+                            "required": required,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+                return True
+            except Exception as exc:
+                print("[advance_stage_commit_failed]", repr(exc))
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
+    return False
+
+
+async def _try_dual_write_feedback(
+    db: AsyncSession,
+    *,
+    session_id: UUID,
+    user_id: UUID,
+    stage: str,
+    draft: str,
+    student_text: str,
+    feedback_strength: Optional[str],
+    condition: str,
+    source: str,
+    ok: bool,
+    praise: Optional[str],
+    missing: list[str],
+    suggestions: list[str],
+    example: Optional[str],
+) -> None:
+    """
+    Dual-write: record attempt snapshot + structured feedback into analytics tables.
+    Wrapped in try/except — never raises, never blocks the main API response.
+    """
+    try:
+        compact = re.sub(r"\s+", "", student_text or "")
+        attempt = OridStageAttempt(
+            session_id=session_id,
+            user_id=user_id,
+            stage=stage,
+            draft=draft,
+            student_text=student_text or "",
+            word_count=len(compact),
+            feedback_strength=feedback_strength,
+            condition=condition,
+            source=source,
+        )
+        db.add(attempt)
+        await db.flush()
+
+        event = OridFeedbackEvent(
+            attempt_id=attempt.id,
+            session_id=session_id,
+            user_id=user_id,
+            stage=stage,
+            draft=draft,
+            ok=ok,
+            praise=praise,
+            missing_json=json.dumps(missing, ensure_ascii=False),
+            suggestions_json=json.dumps(suggestions, ensure_ascii=False),
+            example=example,
+        )
+        db.add(event)
+        await db.commit()
+    except Exception as exc:
+        print("[dual_write_feedback_failed]", repr(exc))
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
 
 # ----------------------------
@@ -1862,14 +2082,16 @@ async def writing_coach_chat(
     fb_imp: Optional[str] = None
     fb_praise: Optional[str] = None
     coach_meta: dict[str, Any] = {}
+    feedback_strength = detect_feedback_strength(stage_ctx, body) if source == "feedback_button" else None
 
     if source == "feedback_button":
         anchor_line = book_anchor_one_line(book_pack)
+        fb_rubric: dict[str, Any] = {}
         if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
             fb_ok, fb_missing, fb_sug, fb_ex, fb_praise = _control_feedback(stage_ctx, body)
             fb_imp = None
         else:
-            fb_ok, fb_missing, fb_sug, fb_ex, fb_imp, fb_praise = await _genai_feedback(
+            fb_ok, fb_missing, fb_sug, fb_ex, fb_imp, fb_praise, fb_rubric = await _genai_feedback(
                 stage=stage_ctx, text=body, book_pack=book_pack
             )
 
@@ -1882,8 +2104,20 @@ async def writing_coach_chat(
             fb_sug,
             use_llm_checker=(not is_control_condition(condition, default=DEFAULT_ORID_CONDITION)),
         )
+        fb_missing, fb_sug = normalize_feedback_focus(
+            stage=stage_ctx,
+            missing=fb_missing,
+            suggestions=fb_sug,
+            student_text=body,
+        )
         if _has_feedback_book_grounding_issue(fb_missing):
             fb_praise = _book_grounding_praise(stage_ctx)
+
+        # Completion rule: rubric level 3+ (達標/精進) → force ok=True
+        # so the existing pass-tracking counts this turn as a pass.
+        rl_est = (fb_rubric.get("rubric_level_estimate") or "").strip()
+        if rl_est and rl_est[:1] in ("3", "4") and not _has_feedback_book_grounding_issue(fb_missing):
+            fb_ok = True
 
         if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
             ai_reply = format_control_feedback_reply(
@@ -1914,6 +2148,8 @@ async def writing_coach_chat(
                     "suggestions": fb_sug,
                     "example": fb_ex,
                     "improved": fb_imp,
+                    "rubric_focus": fb_rubric.get("rubric_focus"),
+                    "rubric_level_estimate": fb_rubric.get("rubric_level_estimate"),
                 },
                 ensure_ascii=False,
             )
@@ -1930,6 +2166,16 @@ async def writing_coach_chat(
                     temperature=ORID_FOLLOWUP_TEMPERATURE,
                 )
             except Exception:
+                ai_reply = format_control_feedback_reply(
+                    ok=bool(fb_ok),
+                    missing=fb_missing,
+                    suggestions=fb_sug,
+                    stage=stage_ctx,
+                    book_anchor=anchor_line,
+                    praise=fb_praise,
+                    student_draft=body,
+                )
+            if not _looks_valid_feedback_narration(ai_reply):
                 ai_reply = format_control_feedback_reply(
                     ok=bool(fb_ok),
                     missing=fb_missing,
@@ -1980,6 +2226,8 @@ async def writing_coach_chat(
                 improved=fb_imp,
                 empty_factory=_ensure_orid_writing_v1,
                 praise=fb_praise,
+                rubric_focus=fb_rubric.get("rubric_focus"),
+                rubric_level_estimate=fb_rubric.get("rubric_level_estimate"),
             )
             content_str = json.dumps(obj, ensure_ascii=False)
             saved_wid: Optional[str] = None
@@ -2002,6 +2250,25 @@ async def writing_coach_chat(
                 saved_wid = str(new_w.id)
             if saved_wid:
                 coach_meta["saved_to_writing_id"] = saved_wid
+
+        await _try_dual_write_feedback(
+            db,
+            session_id=session.id,
+            user_id=user.id,
+            stage=stage_ctx,
+            draft=draft_key,
+            student_text=body,
+            feedback_strength=feedback_strength,
+            condition=condition,
+            source=source,
+            ok=bool(fb_ok),
+            praise=fb_praise,
+            missing=fb_missing,
+            suggestions=fb_sug,
+            example=fb_ex,
+        )
+        if fb_ok:
+            await _maybe_advance_stage(db, session.id, stage_ctx)
     else:
         if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
             ai_reply = format_control_free_text_reply(stage_ctx)
@@ -2045,7 +2312,16 @@ async def writing_coach_chat(
         ),
     )
 
-    coach_meta.update({"condition": condition, "source": source, "draft": draft_key})
+    coach_meta.update(
+        {
+            "condition": condition,
+            "source": source,
+            "draft": draft_key,
+            "feedback_strength": feedback_strength,
+            **({"rubric_focus": rf} if (rf := (fb_rubric.get("rubric_focus") if source == "feedback_button" else None)) else {}),
+            **({"rubric_level_estimate": rl} if (rl := (fb_rubric.get("rubric_level_estimate") if source == "feedback_button" else None)) else {}),
+        }
+    )
     return WritingCoachChatResponse(
         session_id=session.id,
         ai_reply=ai_reply.strip(),
@@ -2118,14 +2394,16 @@ async def writing_feedback(
         raise HTTPException(status_code=400, detail="text is empty")
 
     condition = normalize_orid_condition(session.condition, default=DEFAULT_ORID_CONDITION)
+    feedback_strength = detect_feedback_strength(data.stage, text)
 
     praise: Optional[str] = None
+    rubric_snap: dict[str, Any] = {}
     if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
         ok, missing, suggestions, _, praise = _control_feedback(data.stage, text)
         example = None
         improved = None
     else:
-        ok, missing, suggestions, example, improved, praise = await _genai_feedback(
+        ok, missing, suggestions, example, improved, praise, rubric_snap = await _genai_feedback(
             stage=data.stage, text=text, book_pack=book_pack
         )
 
@@ -2137,6 +2415,12 @@ async def writing_feedback(
         missing,
         suggestions,
         use_llm_checker=(not is_control_condition(condition, default=DEFAULT_ORID_CONDITION)),
+    )
+    missing, suggestions = normalize_feedback_focus(
+        stage=data.stage,
+        missing=missing,
+        suggestions=suggestions,
+        student_text=text,
     )
     if _has_feedback_book_grounding_issue(missing):
         praise = _book_grounding_praise(data.stage)
@@ -2195,6 +2479,25 @@ async def writing_feedback(
             await db.refresh(new_w)
             saved_to = str(new_w.id)
 
+    await _try_dual_write_feedback(
+        db,
+        session_id=session.id,
+        user_id=user.id,
+        stage=data.stage,
+        draft=data.draft,
+        student_text=text,
+        feedback_strength=feedback_strength,
+        condition=condition,
+        source="writing_feedback_api",
+        ok=ok,
+        praise=praise,
+        missing=missing,
+        suggestions=suggestions,
+        example=example,
+    )
+    if ok:
+        await _maybe_advance_stage(db, session.id, data.stage)
+
     return WritingFeedbackResponse(
         stage=data.stage,
         draft=data.draft,
@@ -2206,6 +2509,8 @@ async def writing_feedback(
         improved=improved,
         meta={
             "condition": condition,
+            "feedback_strength": feedback_strength,
+            **rubric_snap,
             "model": OPENAI_MODEL,
             "max_completion_tokens": OPENAI_MAX_COMPLETION_TOKENS,
             "saved_to_writing_id": saved_to,

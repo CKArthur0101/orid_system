@@ -33,6 +33,8 @@ def upsert_feedback_into_stage(
     improved: str | None,
     empty_factory,
     praise: str | None = None,
+    rubric_focus: str | None = None,
+    rubric_level_estimate: str | None = None,
 ) -> dict[str, Any]:
     stages = obj.get("stages")
     if not isinstance(stages, dict):
@@ -46,7 +48,7 @@ def upsert_feedback_into_stage(
 
     stage_obj.setdefault("feedback", {})
     if isinstance(stage_obj["feedback"], dict):
-        stage_obj["feedback"][draft] = {
+        feedback_entry: dict[str, Any] = {
             "ok": ok,
             "missing": missing,
             "suggestions": suggestions,
@@ -54,6 +56,11 @@ def upsert_feedback_into_stage(
             "improved": improved,
             "praise": praise,
         }
+        if rubric_focus is not None:
+            feedback_entry["rubric_focus"] = rubric_focus
+        if rubric_level_estimate is not None:
+            feedback_entry["rubric_level_estimate"] = rubric_level_estimate
+        stage_obj["feedback"][draft] = feedback_entry
 
     if draft == "d1":
         stage_obj["d1"] = text

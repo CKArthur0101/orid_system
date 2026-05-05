@@ -182,6 +182,10 @@ class TeacherStudentRow(BaseModel):
     interaction_count: int
     writing_completed_stages: int
     last_activity_at: datetime | None = None
+    # analytics extras (None when analytics tables have no data yet)
+    feedback_click_count: int = 0
+    feedback_ok_count: int = 0
+    feedback_ok_stages: int = 0   # # of stages with ≥1 ok=true event
 
 
 class TeacherClassOverview(BaseModel):
@@ -190,7 +194,8 @@ class TeacherClassOverview(BaseModel):
     week: int
     total_students: int
     active_students: int
-    completion_rate: float
+    completion_rate: float            # has-text definition (unchanged)
+    feedback_ok_rate: float = 0.0    # fraction of students with all 4 stages ok
     stage_distribution: dict[str, int]
     students: list[TeacherStudentRow]
 
@@ -203,4 +208,34 @@ class TeacherStudentSummary(BaseModel):
     current_stage: str
     interaction_count: int
     writing_completed_stages: int
+    stages_with_draft: list[str] = []
     last_activity_at: datetime | None = None
+    feedback_click_count: int = 0
+    feedback_ok_count: int = 0
+    feedback_ok_stages: int = 0
+
+
+class PostTestScoreUpsert(BaseModel):
+    week: int
+    stage: str          # O / R / I / D / ALL
+    score: int
+    max_score: int = 3
+    rubric_id: str | None = None
+    note: str | None = None
+
+
+class PostTestScoreRead(BaseModel):
+    id: UUID
+    student_id: UUID
+    grader_id: UUID
+    class_id: UUID
+    week: int
+    stage: str
+    rubric_id: str | None = None
+    score: int
+    max_score: int
+    note: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

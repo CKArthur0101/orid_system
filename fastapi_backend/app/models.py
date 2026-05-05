@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, Text, func, String, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Text, func, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy.orm import DeclarativeBase
@@ -115,3 +115,72 @@ class TeacherClassAssignment(Base):
     teacher_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
     class_id = Column(UUID(as_uuid=True), ForeignKey("classes.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class OridStageAttempt(Base):
+    """One row per feedback-button press: the student's draft snapshot."""
+
+    __tablename__ = "orid_stage_attempts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("orid_sessions.id"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False, index=True)
+
+    stage = Column(String(1), nullable=False)       # O / R / I / D
+    draft = Column(String(4), nullable=False)        # d1 / d2
+    student_text = Column(Text, nullable=False)
+    word_count = Column(Integer, nullable=False, default=0)
+    feedback_strength = Column(String(8), nullable=True)  # low / mid / high
+    condition = Column(String(32), nullable=True)    # genai / control
+    source = Column(String(32), nullable=True)       # feedback_button / writing_feedback_api
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    feedback_events = relationship("OridFeedbackEvent", back_populates="attempt", cascade="all, delete-orphan")
+
+
+class OridFeedbackEvent(Base):
+    """One row per feedback result linked to an attempt."""
+
+    __tablename__ = "orid_feedback_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    attempt_id = Column(UUID(as_uuid=True), ForeignKey("orid_stage_attempts.id"), nullable=False, index=True)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("orid_sessions.id"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False, index=True)
+
+    stage = Column(String(1), nullable=False)
+    draft = Column(String(4), nullable=False)
+    ok = Column(Boolean, nullable=False, default=False)
+    praise = Column(Text, nullable=True)
+    missing_json = Column(Text, nullable=True)       # JSON array string
+    suggestions_json = Column(Text, nullable=True)   # JSON array string
+    example = Column(Text, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    attempt = relationship("OridStageAttempt", back_populates="feedback_events")
+
+
+class OridPostTestScore(Base):
+    """Teacher-entered post-test rubric scores per student per stage per week."""
+
+    __tablename__ = "orid_post_test_scores"
+    __table_args__ = (
+        UniqueConstraint("student_id", "week", "stage", name="uq_post_test_student_week_stage"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    student_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False, index=True)
+    grader_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False, index=True)
+    class_id = Column(UUID(as_uuid=True), ForeignKey("classes.id"), nullable=False, index=True)
+
+    week = Column(Integer, nullable=False)
+    stage = Column(String(4), nullable=False)   # O / R / I / D / ALL
+    rubric_id = Column(String(64), nullable=True)   # matches writing_rubric item id
+    score = Column(Integer, nullable=False)         # e.g. 0/1/2/3
+    max_score = Column(Integer, nullable=False, default=3)
+    note = Column(Text, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

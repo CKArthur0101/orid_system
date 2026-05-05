@@ -485,15 +485,16 @@ def _clause_looks_ungrounded_vs_reference(clause: str, reference_blob: str) -> b
     if not content_tokens:
         return False
     matched = [t for t in content_tokens if _cjk_token_grounded_in_reference(t, reference_blob)]
+    if matched:
+        # At least one clause token is grounded in the book → treat the whole
+        # clause as acceptable. Students routinely paraphrase with words that
+        # don't appear verbatim in the reference blob.
+        return False
     unmatched = [t for t in content_tokens if not _cjk_token_grounded_in_reference(t, reference_blob)]
     if not unmatched:
         return False
     max_u = max(len(x) for x in unmatched)
-    if not matched and max_u >= 3:
-        return True
-    if matched and unmatched and max_u >= 4:
-        return True
-    return False
+    return max_u >= 3
 
 
 def looks_likely_ungrounded_in_book(
