@@ -68,3 +68,17 @@ def upsert_feedback_into_stage(
         stage_obj["d2"] = text
 
     return obj
+
+
+def merge_synthesis_feedback_into_writing(
+    obj: dict[str, Any],
+    *,
+    ai_reply: str,
+    student_text: str,
+) -> dict[str, Any]:
+    """Persist Week-2 synthesis coach reply in orid_writing_v1 JSON (top-level)."""
+    obj["synthesis_feedback"] = {
+        "last_reply": ai_reply,
+        "student_text_excerpt": (student_text or "")[:2000],
+    }
+    return obj

@@ -52,6 +52,9 @@ class OridSession(Base):
     current_stage = Column(String, default="O", nullable=False)  # O/R/I/D
     stage_turn = Column(Integer, default=0, nullable=False)      # 用來控制幾輪後進下一階段
 
+    # 書單元 1–3：週 1–2→1、3–4→2、5–6→3；同單元共用一個 session 以延續聊天
+    book_unit = Column(Integer, nullable=True, index=True)
+
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     user = relationship("User")

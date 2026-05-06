@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func, and_, cast, Integer
+from sqlalchemy import func, and_, or_, cast, Integer
 
 from app.database import get_async_session
 from app.models import (
@@ -37,6 +37,43 @@ from app.users import current_active_user
 router = APIRouter(tags=["teacher"])
 
 READING_TITLE_TEMPLATE = "第 {week} 週（暫定教材）"
+
+
+def _book_unit_from_week(week: int) -> int:
+    return (week + 1) // 2
+
+
+async def _latest_orid_session_for_student_week(
+    db: AsyncSession,
+    student_id: UUID,
+    week: int,
+) -> OridSession | None:
+    """
+    book_unit 共用 session 後，reading_id 會隨學生進度指到「目前週」reading，
+    教師切到第 1 週查看時不可再用 join Reading.title == 第 1 週 當唯一條件。
+    """
+    bu = _book_unit_from_week(week)
+    title = READING_TITLE_TEMPLATE.format(week=week)
+    r1 = await db.execute(
+        select(OridSession)
+        .where(OridSession.user_id == student_id, OridSession.book_unit == bu)
+        .order_by(OridSession.created_at.desc())
+        .limit(1)
+    )
+    s = r1.scalars().first()
+    if s:
+        return s
+    r2 = await db.execute(
+        select(OridSession)
+        .join(Reading, OridSession.reading_id == Reading.id)
+        .where(
+            OridSession.user_id == student_id,
+            Reading.title == title,
+        )
+        .order_by(OridSession.created_at.desc())
+        .limit(1)
+    )
+    return r2.scalars().first()
 
 
 async def _get_allowed_class_ids(db: AsyncSession, user: User) -> set[UUID]:
@@ -67,8 +104,7 @@ def _count_completed_stages(content: str | None) -> int:
     for stage in ["O", "R", "I", "D"]:
         stage_obj = stages.get(stage, {})
         d1 = str(stage_obj.get("d1", "")).strip() if isinstance(stage_obj, dict) else ""
-        d2 = str(stage_obj.get("d2", "")).strip() if isinstance(stage_obj, dict) else ""
-        if d1 or d2:
+        if d1:
             done += 1
     return done
 
@@ -88,8 +124,7 @@ def _stages_with_draft(content: str | None) -> list[str]:
     for stage in ["O", "R", "I", "D"]:
         stage_obj = stages.get(stage, {})
         d1 = str(stage_obj.get("d1", "")).strip() if isinstance(stage_obj, dict) else ""
-        d2 = str(stage_obj.get("d2", "")).strip() if isinstance(stage_obj, dict) else ""
-        if d1 or d2:
+        if d1:
             result.append(stage)
     return result
 
@@ -145,8 +180,9 @@ async def teacher_class_overview(
 
     student_ids = [s.id for s in students]
     reading_title = READING_TITLE_TEMPLATE.format(week=week)
+    bu = _book_unit_from_week(week)
 
-    # ── 2. Latest session per student ────────────────────────────────────────
+    # ── 2. Latest session per student（book_unit 優先；舊資料 fallback title）──
     subq = (
         select(
             OridSession,
@@ -157,10 +193,16 @@ async def teacher_class_overview(
             )
             .label("rn"),
         )
-        .join(Reading, OridSession.reading_id == Reading.id)
+        .outerjoin(Reading, OridSession.reading_id == Reading.id)
         .where(
             OridSession.user_id.in_(student_ids),
-            Reading.title == reading_title,
+            or_(
+                OridSession.book_unit == bu,
+                and_(
+                    OridSession.book_unit.is_(None),
+                    Reading.title == reading_title,
+                ),
+            ),
         )
         .subquery()
     )
@@ -326,15 +368,7 @@ async def teacher_student_summary(
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    reading_title = READING_TITLE_TEMPLATE.format(week=week)
-    s_res = await db.execute(
-        select(OridSession)
-        .join(Reading, OridSession.reading_id == Reading.id)
-        .where(OridSession.user_id == student_id, Reading.title == reading_title)
-        .order_by(OridSession.created_at.desc())
-        .limit(1)
-    )
-    session = s_res.scalars().first()
+    session = await _latest_orid_session_for_student_week(db, student_id, week)
 
     stage = (session.current_stage if session else "NOT_STARTED") or "NOT_STARTED"
     interaction_count = 0

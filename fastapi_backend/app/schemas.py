@@ -22,6 +22,12 @@ class UserUpdate(schemas.BaseUserUpdate):
     role: str | None = None
 
 
+class OridMeCapabilitiesRead(BaseModel):
+    """與後端 ORID_FORCE_NEW_ALLOWLIST 一致，供前端決定是否顯示強制開新 session。"""
+
+    orid_can_force_new: bool
+
+
 # ----------------------------
 # Items (example)
 # ----------------------------
@@ -71,6 +77,7 @@ class OridSessionRead(BaseModel):
     condition: str | None
     current_stage: str
     stage_turn: int
+    book_unit: int | None = None
 
     # ✅ OpenAI Assistants thread id（每個 session 綁一個 thread）
     thread_id: str | None = None
@@ -105,9 +112,9 @@ class OridChatResponse(BaseModel):
 class WritingCoachChatRequest(BaseModel):
     session_id: UUID
     student_text: str
-    stage: str = Field(..., pattern="^(O|R|I|D)$")
+    stage: str = Field(..., pattern="^(O|R|I|D|ALL)$")
     draft: str = Field("d1", pattern="^(d1|d2)$")
-    source: str = Field(..., pattern="^(free_text|feedback_button)$")
+    source: str = Field(..., pattern="^(free_text|feedback_button|synthesis_feedback)$")
     week: int = Field(1, ge=1, le=6)
     save_feedback: bool = True
 

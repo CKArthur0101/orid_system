@@ -24,6 +24,7 @@ from app.schemas import (
     OridSessionCreate, OridSessionRead,
     OridWritingCreate, OridWritingUpdate, OridWritingRead,
     OridMessageRead,
+    OridMeCapabilitiesRead,
     WritingCoachChatRequest,
     WritingCoachChatResponse,
 )
@@ -47,6 +48,7 @@ from app.prompts.writing_assist import (
 )
 from app.prompts.writing_coach_chat import (
     build_feedback_narration_prompt,
+    build_synthesis_coach_system_prompt,
     build_writing_coach_system_prompt,
     detect_feedback_strength,
     format_control_feedback_reply,
@@ -64,7 +66,11 @@ from app.prompts.orid_checker import (
 from app.services.safety import check_safety
 from app.services.orid_condition import normalize_orid_condition, is_control_condition
 from app.services.orid_stage import build_stage_history, decide_stage_progress, resolve_stage_thresholds
-from app.services.orid_writing_store import ensure_orid_writing_obj, upsert_feedback_into_stage
+from app.services.orid_writing_store import (
+    ensure_orid_writing_obj,
+    merge_synthesis_feedback_into_writing,
+    upsert_feedback_into_stage,
+)
 # ----------------------------
 # OpenAI settings (from env)
 # ----------------------------
@@ -598,6 +604,103 @@ def _default_reading_content_for_week(week: int) -> str:
 
 DEFAULT_READING_CONTENT_BY_WEEK = {1: _default_reading_content_for_week(1)}
 DEFAULT_ORID_CONDITION = os.getenv("ORID_DEFAULT_CONDITION", "genai")
+
+
+def book_unit_from_week(week: int) -> int:
+    """週 1–2 → 1，3–4 → 2，5–6 → 3（兩週一書同一 session）。"""
+    if week < 1 or week > 6:
+        raise HTTPException(status_code=400, detail="week must be 1..6")
+    return (week + 1) // 2
+
+
+def _parse_force_new_allowlist() -> set[str]:
+    raw = os.getenv("ORID_FORCE_NEW_ALLOWLIST", "")
+    return {x.strip().lower() for x in raw.split(",") if x.strip()}
+
+
+def _email_allowed_force_new(email: str | None) -> bool:
+    """清單為空時：任何人都不可 force_new。清單非空時僅列名 email 可用。"""
+    allow = _parse_force_new_allowlist()
+    if not allow:
+        return False
+    e = (email or "").strip().lower()
+    return bool(e) and e in allow
+
+
+async def _get_or_create_reading_for_week(db: AsyncSession, week: int) -> Reading:
+    title = DEFAULT_READING_TITLE_TEMPLATE.format(week=week)
+    r_stmt = (
+        select(Reading)
+        .where(Reading.title == title)
+        .order_by(Reading.created_at.desc())
+        .limit(1)
+    )
+    r_res = await db.execute(r_stmt)
+    reading = r_res.scalars().first()
+    if reading:
+        return reading
+    content = DEFAULT_READING_CONTENT_BY_WEEK.get(week, _default_reading_content_for_week(week))
+    reading = Reading(title=title, content=content)
+    db.add(reading)
+    await db.commit()
+    await db.refresh(reading)
+    return reading
+
+
+def _week_from_reading_title(title: str | None) -> Optional[int]:
+    if not title:
+        return None
+    m = re.search(r"第\s*(\d+)\s*週", str(title))
+    if not m:
+        return None
+    try:
+        w = int(m.group(1))
+        if 1 <= w <= 6:
+            return w
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _orid_stage_d1_from_writing_content(raw: str | None) -> dict[str, str]:
+    out: dict[str, str] = {"O": "", "R": "", "I": "", "D": ""}
+    if not raw:
+        return out
+    try:
+        obj = json.loads(raw)
+    except Exception:
+        return out
+    stages = obj.get("stages") if isinstance(obj, dict) else None
+    if not isinstance(stages, dict):
+        return out
+    for k in out:
+        st = stages.get(k)
+        if isinstance(st, dict):
+            out[k] = str(st.get("d1", "") or "")
+    return out
+
+
+async def _fetch_latest_writing_content_for_week(
+    db: AsyncSession,
+    user_id: UUID,
+    session_id: UUID,
+    week: int,
+) -> Optional[str]:
+    w_stmt = (
+        select(OridWriting)
+        .where(
+            OridWriting.user_id == user_id,
+            OridWriting.session_id == session_id,
+            OridWriting.week == week,
+        )
+        .order_by(OridWriting.created_at.desc())
+        .limit(1)
+    )
+    w_res = await db.execute(w_stmt)
+    w = w_res.scalars().first()
+    if not w or w.content is None:
+        return None
+    return str(w.content)
 
 
 def parse_book_pack(content: str) -> Optional[dict[str, Any]]:
@@ -1910,6 +2013,12 @@ async def _try_dual_write_feedback(
 # ----------------------------
 # Routes
 # ----------------------------
+@router.get("/me/capabilities", response_model=OridMeCapabilitiesRead)
+async def orid_me_capabilities(user: User = Depends(current_active_user)):
+    ok = _email_allowed_force_new(getattr(user, "email", None))
+    return OridMeCapabilitiesRead(orid_can_force_new=ok)
+
+
 @router.post("/readings", response_model=ReadingRead)
 async def create_reading(
     data: ReadingCreate,
@@ -1947,6 +2056,9 @@ async def create_session(
     if not reading:
         raise HTTPException(status_code=404, detail="Reading not found")
 
+    wk = _week_from_reading_title(reading.title)
+    bu = book_unit_from_week(wk) if wk is not None else None
+
     s = OridSession(
         user_id=user.id,
         reading_id=data.reading_id,
@@ -1954,6 +2066,7 @@ async def create_session(
         current_stage="O",
         stage_turn=0,
         thread_id=None,
+        book_unit=bu,
     )
     db.add(s)
     await db.commit()
@@ -1966,46 +2079,72 @@ async def create_session(
 async def ensure_session(
     week: int = Query(..., ge=1, le=6),
     condition: Optional[str] = Query(default=None),
-    force_new: bool = Query(False, description="true 時強制建立新 session；false 取最近一次。"),
+    force_new: bool = Query(False, description="true 時強制建立新 session；false 取最近一次（同書單元）。"),
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
     title = DEFAULT_READING_TITLE_TEMPLATE.format(week=week)
+    bu = book_unit_from_week(week)
+    user_email = getattr(user, "email", None)
 
-    if not force_new:
-        s_stmt = (
-            select(OridSession)
-            .join(Reading, OridSession.reading_id == Reading.id)
-            .where(OridSession.user_id == user.id, Reading.title == title)
-            .order_by(OridSession.created_at.desc())
-            .limit(1)
+    if force_new:
+        if not _email_allowed_force_new(user_email):
+            raise HTTPException(status_code=403, detail="force_new 未授權")
+        reading = await _get_or_create_reading_for_week(db, week)
+        new_condition = normalize_orid_condition(condition, default=DEFAULT_ORID_CONDITION)
+        new_session = OridSession(
+            user_id=user.id,
+            reading_id=reading.id,
+            condition=new_condition,
+            current_stage="O",
+            stage_turn=0,
+            thread_id=None,
+            book_unit=bu,
         )
-        s_res = await db.execute(s_stmt)
-        session = s_res.scalars().first()
-        if session:
-            rr0 = await db.execute(select(Reading).filter(Reading.id == session.reading_id))
-            reading0 = rr0.scalars().first()
-            await seed_writing_coach_welcome_if_needed(db, session=session, reading=reading0)
-            return session
+        db.add(new_session)
+        await db.commit()
+        await db.refresh(new_session)
+        await seed_writing_coach_welcome_if_needed(db, session=new_session, reading=reading)
+        return new_session
 
-    r_stmt = (
-        select(Reading)
-        .where(Reading.title == title)
-        .order_by(Reading.created_at.desc())
+    # 同書單元：優先沿用已帶 book_unit 的 session
+    s_stmt = (
+        select(OridSession)
+        .where(OridSession.user_id == user.id, OridSession.book_unit == bu)
+        .order_by(OridSession.created_at.desc())
         .limit(1)
     )
-    r_res = await db.execute(r_stmt)
-    reading = r_res.scalars().first()
+    s_res = await db.execute(s_stmt)
+    session = s_res.scalars().first()
 
-    if not reading:
-        content = DEFAULT_READING_CONTENT_BY_WEEK.get(week, _default_reading_content_for_week(week))
-        reading = Reading(title=title, content=content)
-        db.add(reading)
+    reading = await _get_or_create_reading_for_week(db, week)
+
+    if session:
+        session.reading_id = reading.id
         await db.commit()
-        await db.refresh(reading)
+        await db.refresh(session)
+        await seed_writing_coach_welcome_if_needed(db, session=session, reading=reading)
+        return session
+
+    # 舊資料：依當週 reading title 找的 session（無 book_unit）
+    legacy_stmt = (
+        select(OridSession)
+        .join(Reading, OridSession.reading_id == Reading.id)
+        .where(OridSession.user_id == user.id, Reading.title == title)
+        .order_by(OridSession.created_at.desc())
+        .limit(1)
+    )
+    s2 = await db.execute(legacy_stmt)
+    session = s2.scalars().first()
+    if session:
+        session.book_unit = bu
+        session.reading_id = reading.id
+        await db.commit()
+        await db.refresh(session)
+        await seed_writing_coach_welcome_if_needed(db, session=session, reading=reading)
+        return session
 
     new_condition = normalize_orid_condition(condition, default=DEFAULT_ORID_CONDITION)
-
     new_session = OridSession(
         user_id=user.id,
         reading_id=reading.id,
@@ -2013,6 +2152,7 @@ async def ensure_session(
         current_stage="O",
         stage_turn=0,
         thread_id=None,
+        book_unit=bu,
     )
     db.add(new_session)
     await db.commit()
@@ -2036,15 +2176,30 @@ async def writing_coach_chat(
     reading = rr.scalars().first()
     book_pack = load_book_pack_from_reading(reading)
 
-    stage_ctx = (data.stage or "O").strip().upper()
+    stage_in = (data.stage or "O").strip().upper()
     draft_key = (data.draft or "d1").strip().lower()
     if draft_key not in ("d1", "d2"):
         draft_key = "d1"
     source = (data.source or "free_text").strip().lower()
     body = (data.student_text or "").strip()
 
+    fb_rubric: dict[str, Any] = {}
+
+    if source == "synthesis_feedback":
+        if stage_in != "ALL":
+            raise HTTPException(status_code=400, detail="synthesis_feedback requires stage ALL")
+        stage_ctx = "ALL"
+    else:
+        stage_ctx = stage_in if stage_in in ("O", "R", "I", "D") else "O"
+
     if source == "feedback_button" and not body:
         raise HTTPException(status_code=400, detail="student_text is empty for feedback_button")
+
+    if source == "synthesis_feedback" and not body:
+        raise HTTPException(status_code=400, detail="student_text is empty")
+
+    if source not in ("feedback_button", "synthesis_feedback") and not body:
+        raise HTTPException(status_code=400, detail="student_text is empty")
 
     if not _allow_chat_message(str(user.id)):
         msg = "請慢一點，我們一次說一個重點。"
@@ -2059,10 +2214,10 @@ async def writing_coach_chat(
 
     if source == "feedback_button":
         display_student = f"[{stage_ctx} {_draft_label_zh(draft_key)}]\n{body}"
+    elif source == "synthesis_feedback":
+        display_student = f"[整合寫作]\n{body}"
     else:
         display_student = body
-        if not display_student:
-            raise HTTPException(status_code=400, detail="student_text is empty")
 
     db.add(OridMessage(session_id=session.id, stage=stage_ctx, sender="student", text=display_student))
     await db.commit()
@@ -2086,7 +2241,6 @@ async def writing_coach_chat(
 
     if source == "feedback_button":
         anchor_line = book_anchor_one_line(book_pack)
-        fb_rubric: dict[str, Any] = {}
         if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
             fb_ok, fb_missing, fb_sug, fb_ex, fb_praise = _control_feedback(stage_ctx, body)
             fb_imp = None
@@ -2269,6 +2423,76 @@ async def writing_coach_chat(
         )
         if fb_ok:
             await _maybe_advance_stage(db, session.id, stage_ctx)
+    elif source == "synthesis_feedback":
+        week1_raw = await _fetch_latest_writing_content_for_week(db, user.id, session.id, 1)
+        week1_slots = _orid_stage_d1_from_writing_content(week1_raw)
+        book_context = build_book_context_block(book_pack)
+        sys_p = build_synthesis_coach_system_prompt(
+            book_context=book_context,
+            week1_orid_lines=week1_slots,
+        )
+        hist_syn: list[dict[str, str]] = []
+        for m in msgs[-ORID_HISTORY_LIMIT:]:
+            role = "user" if m.sender == "student" else "assistant"
+            hist_syn.append({"role": role, "content": str(m.text or "")})
+        oa_syn: list[dict[str, str]] = [{"role": "system", "content": sys_p}]
+        oa_syn.extend(hist_syn)
+        try:
+            ai_reply = await _chat_completion(
+                oa_syn,
+                max_completion_tokens=OPENAI_MAX_COMPLETION_TOKENS,
+                temperature=OPENAI_TEMPERATURE if OPENAI_TEMPERATURE is not None else ORID_MAIN_FALLBACK_TEMPERATURE,
+            )
+        except Exception:
+            ai_reply = "我這邊有點忙不過來，你先儲存草稿，等一下再試試看。"
+        if not (ai_reply or "").strip():
+            ai_reply = "我有看到你的整合草稿，你可以再說一下最想調整的是銜接、具體例子，還是心得的深度？"
+        coach_meta["synthesis_context"] = True
+
+        if data.save_feedback:
+            w_stmt_syn = (
+                select(OridWriting)
+                .where(
+                    OridWriting.user_id == user.id,
+                    OridWriting.session_id == session.id,
+                    OridWriting.week == data.week,
+                )
+                .order_by(OridWriting.created_at.desc())
+                .limit(1)
+            )
+            w_res_syn = await db.execute(w_stmt_syn)
+            w_syn = w_res_syn.scalars().first()
+            obj_syn = ensure_orid_writing_obj(
+                raw_content=(w_syn.content if w_syn else None),
+                week=data.week,
+                empty_factory=_ensure_orid_writing_v1,
+            )
+            obj_syn = merge_synthesis_feedback_into_writing(
+                obj_syn,
+                ai_reply=(ai_reply or "").strip(),
+                student_text=body,
+            )
+            content_syn = json.dumps(obj_syn, ensure_ascii=False)
+            saved_syn: Optional[str] = None
+            if w_syn:
+                w_syn.content = content_syn
+                await db.commit()
+                await db.refresh(w_syn)
+                saved_syn = str(w_syn.id)
+            else:
+                new_ws = OridWriting(
+                    user_id=user.id,
+                    reading_id=session.reading_id,
+                    session_id=session.id,
+                    week=data.week,
+                    content=content_syn,
+                )
+                db.add(new_ws)
+                await db.commit()
+                await db.refresh(new_ws)
+                saved_syn = str(new_ws.id)
+            if saved_syn:
+                coach_meta["saved_to_writing_id"] = saved_syn
     else:
         if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
             ai_reply = format_control_free_text_reply(stage_ctx)

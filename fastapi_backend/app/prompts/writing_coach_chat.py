@@ -18,6 +18,34 @@ def _stage_focus_line(stage: str) -> str:
     }.get(s, "")
 
 
+def build_synthesis_coach_system_prompt(
+    *,
+    book_context: str,
+    week1_orid_lines: dict[str, str],
+) -> str:
+    """
+    Week-2 synthesis: feedback on the student's integrated paragraph using Week-1 ORID slots as context.
+    """
+    labels = {"O": "O 客觀", "R": "R 感受", "I": "I 意義", "D": "D 行動"}
+    lines: list[str] = []
+    for k in ["O", "R", "I", "D"]:
+        t = (week1_orid_lines.get(k) or "").strip()
+        lines.append(f"- {labels[k]}：{t or '（尚未撰寫）'}")
+    joined = "\n".join(lines)
+    return f"""
+你是國小高年級學生的寫作回饋同伴。
+學生要把第 1 週四段 ORID **整合**成一段（或一篇短文）連貫的心得。
+請針對學生貼上的【整合草稿】回饋：段落銜接、是否仍扣緊故事、哪裡再多一句會更清楚。
+用短段落、口語、繁體中文；**不要**代寫整篇交作業用的完整範文。
+
+【第 1 週四段（唯讀參考）】
+{joined}
+
+【教材脈絡】
+{book_context or "（未提供）"}
+""".strip()
+
+
 def build_writing_coach_system_prompt(
     *,
     stage: str,

@@ -101,7 +101,7 @@ export default function WritingPanel(props: {
               disabled={disabled}
               onClick={() => setActiveStage(s.key)}
               className={[
-                "rounded-full border px-3 py-1 text-xs",
+                "rounded-full border px-3 py-1 text-sm",
                 isActive
                   ? "bg-primary text-primary-foreground border-primary"
                   : "bg-muted/30",
@@ -116,7 +116,7 @@ export default function WritingPanel(props: {
       </div>
 
       {locked && (
-        <div className="text-xs text-muted-foreground">
+        <div className="text-sm text-muted-foreground">
           目前聊天尚未到這一段，請先完成前面對話再寫。
         </div>
       )}
@@ -125,14 +125,14 @@ export default function WritingPanel(props: {
       <Card>
         <CardContent className="p-4 space-y-2">
           <div className="flex items-center justify-between gap-2">
-            <div className="text-sm font-medium">Draft 1（第一稿）</div>
+            <div className="text-[15px] font-medium">Draft 1（第一稿）</div>
 
             {condition === "genai" && (
               <button
                 type="button"
                 disabled={locked || assistLoading || !onAssist}
                 onClick={() => onAssist?.("d1", activeStage)}
-                className="rounded-md border px-3 py-1 text-xs hover:bg-muted disabled:opacity-50"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-muted disabled:opacity-50"
                 title="用聊天紀錄 + 閱讀內容產生本段 Draft 1（示範用）"
               >
                 {assistLoading ? "生成中…" : "AI 生成 Draft 1"}
@@ -142,7 +142,7 @@ export default function WritingPanel(props: {
 
           <textarea
             disabled={locked}
-            className="min-h-[170px] w-full rounded-md border bg-background p-3 text-sm outline-none"
+            className="min-h-[165px] w-full rounded-md border bg-background p-3 text-[15px] outline-none"
             placeholder="先把這一段用 2–4 句寫清楚"
             value={stage.d1}
             onChange={(e) =>
@@ -161,12 +161,12 @@ export default function WritingPanel(props: {
       {/* Feedback */}
       <Card>
         <CardContent className="p-4 space-y-2">
-          <div className="text-sm font-medium">回饋提示（兩組差異在這裡）</div>
-          <pre className="whitespace-pre-wrap text-xs text-muted-foreground">
+          <div className="text-[15px] font-medium">回饋提示（兩組差異在這裡）</div>
+          <pre className="whitespace-pre-wrap text-sm text-muted-foreground">
             {feedbackText}
           </pre>
           {assistError && (
-            <div className="text-xs text-red-600 whitespace-pre-wrap">
+            <div className="text-sm text-red-600 whitespace-pre-wrap">
               ❌ {assistError}
             </div>
           )}
@@ -177,14 +177,14 @@ export default function WritingPanel(props: {
       <Card>
         <CardContent className="p-4 space-y-2">
           <div className="flex items-center justify-between gap-2">
-            <div className="text-sm font-medium">Draft 2（修訂稿）</div>
+            <div className="text-[15px] font-medium">Draft 2（修訂稿）</div>
 
             {condition === "genai" && (
               <button
                 type="button"
                 disabled={locked || assistLoading || !onAssist || !stage.d1.trim()}
                 onClick={() => onAssist?.("d2", activeStage)}
-                className="rounded-md border px-3 py-1 text-xs hover:bg-muted disabled:opacity-50"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-muted disabled:opacity-50"
                 title="用 Draft 1 + 建議示範產生修訂稿（示範用）"
               >
                 {assistLoading ? "生成中…" : "AI 生成 Draft 2"}
@@ -194,7 +194,7 @@ export default function WritingPanel(props: {
 
           <textarea
             disabled={locked}
-            className="min-h-[170px] w-full rounded-md border bg-background p-3 text-sm outline-none"
+            className="min-h-[165px] w-full rounded-md border bg-background p-3 text-[15px] outline-none"
             placeholder="依回饋修訂（可只改 1–2 句也可以）"
             value={stage.d2}
             onChange={(e) =>

@@ -9,12 +9,12 @@ export default function TeacherLayout({ children }: { children: React.ReactNode 
       <header className="sticky top-0 z-30 border-b bg-white shadow-sm">
         <div className="mx-auto flex h-14 max-w-[1440px] items-center justify-between px-6">
           <div className="flex items-center gap-3">
-            <span className="text-lg font-bold text-blue-600">AI–ORID</span>
-            <span className="text-sm text-muted-foreground">教師儀表板</span>
+            <span className="text-lg font-bold text-blue-600 sm:text-xl">AI–ORID</span>
+            <span className="text-sm text-muted-foreground sm:text-base">教師儀表板</span>
           </div>
           <button
             onClick={() => logout()}
-            className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-slate-100 hover:text-red-600 transition"
+            className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs text-muted-foreground hover:bg-slate-100 hover:text-red-600 transition sm:text-sm"
           >
             <LogOut className="h-4 w-4" />
             登出

@@ -27,8 +27,8 @@ function ResetPasswordForm() {
     <form action={dispatch}>
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle className="text-2xl">重設密碼</CardTitle>
-          <CardDescription>請輸入新密碼，並再次確認。</CardDescription>
+          <CardTitle className="text-2xl sm:text-3xl">重設密碼</CardTitle>
+          <CardDescription className="text-base">請輸入新密碼，並再次確認。</CardDescription>
         </CardHeader>
 
         <CardContent className="grid gap-4">

@@ -114,6 +114,7 @@ export default function TeacherDashboardPage() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedStudentId, setSelectedStudentId] = useState("");
+  const [detailLoading, setDetailLoading] = useState(false);
   const [studentDetail, setStudentDetail] = useState<StudentSummary | null>(null);
   const [postTestScores, setPostTestScores] = useState<PostTestScore[]>([]);
   const [ptDraft, setPtDraft] = useState<Record<string, string>>({});
@@ -178,25 +179,39 @@ export default function TeacherDashboardPage() {
 
   // Fetch student detail and post-test scores when selected student changes
   useEffect(() => {
-    if (!classId || !selectedStudentId) return;
+    if (!classId || !selectedStudentId) {
+      setStudentDetail(null);
+      setDetailLoading(false);
+      return;
+    }
+    setDetailLoading(true);
     void (async () => {
-      const [detailRes, ptRes] = await Promise.all([
-        fetch(
-          `/api/teacher/classes/${classId}/students/${selectedStudentId}/summary?week=${week}`,
-          { cache: "no-store" }
-        ),
-        fetch(
-          `/api/teacher/classes/${classId}/students/${selectedStudentId}/post-test?week=${week}`,
-          { cache: "no-store" }
-        ),
-      ]);
-      if (detailRes.ok) setStudentDetail(await detailRes.json().catch(() => null));
-      if (ptRes.ok) {
-        const scores: PostTestScore[] = await ptRes.json().catch(() => []);
-        setPostTestScores(scores);
-        const draft: Record<string, string> = {};
-        for (const s of scores) draft[s.stage] = String(s.score);
-        setPtDraft(draft);
+      try {
+        const [detailRes, ptRes] = await Promise.all([
+          fetch(
+            `/api/teacher/classes/${classId}/students/${selectedStudentId}/summary?week=${week}`,
+            { cache: "no-store" },
+          ),
+          fetch(
+            `/api/teacher/classes/${classId}/students/${selectedStudentId}/post-test?week=${week}`,
+            { cache: "no-store" },
+          ),
+        ]);
+        if (detailRes.ok) {
+          const d = await detailRes.json().catch(() => null);
+          setStudentDetail(d);
+        } else {
+          setStudentDetail(null);
+        }
+        if (ptRes.ok) {
+          const scores: PostTestScore[] = await ptRes.json().catch(() => []);
+          setPostTestScores(scores);
+          const draft: Record<string, string> = {};
+          for (const s of scores) draft[s.stage] = String(s.score);
+          setPtDraft(draft);
+        }
+      } finally {
+        setDetailLoading(false);
       }
     })();
   }, [classId, selectedStudentId, week]);
@@ -265,7 +280,7 @@ export default function TeacherDashboardPage() {
     <div className="mx-auto max-w-[1400px] p-6">
       {/* Top controls */}
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
-        <h1 className="text-2xl font-bold text-slate-800">AI–ORID 教師儀表板</h1>
+        <h1 className="text-2xl font-bold text-slate-800 sm:text-3xl">AI–ORID 教師儀表板</h1>
         <div className="flex items-center gap-3">
           <Select value={classId} onValueChange={setClassId}>
             <SelectTrigger className="w-[200px] bg-white">
@@ -290,7 +305,7 @@ export default function TeacherDashboardPage() {
           <button
             onClick={handleExport}
             disabled={!classId}
-            className="flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+            className="flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-2 text-base font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
           >
             <Download className="h-4 w-4" />
             匯出 CSV
@@ -356,7 +371,7 @@ export default function TeacherDashboardPage() {
                       const pct = Math.round((count / stageTotal) * 100);
                       return (
                         <div key={stage} className="space-y-1">
-                          <div className="flex items-center justify-between text-sm">
+                          <div className="flex items-center justify-between text-base">
                             <span className="font-medium">{STAGE_LABELS[stage]}</span>
                             <span className="text-muted-foreground">{count} 人 ({pct}%)</span>
                           </div>
@@ -372,7 +387,7 @@ export default function TeacherDashboardPage() {
                   </div>
                   <div className="mt-4 flex items-center justify-center gap-6">
                     <StagePie dist={stageDist} total={stageTotal} />
-                    <div className="space-y-1 text-xs">
+                    <div className="space-y-1 text-base">
                       {DISPLAY_STAGES.map((s) => (
                         <div key={s} className="flex items-center gap-1.5">
                           <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: STAGE_COLORS[s] }} />
@@ -394,7 +409,7 @@ export default function TeacherDashboardPage() {
                 </CardHeader>
                 <CardContent className="p-0">
                   <div className="max-h-[360px] overflow-auto">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-base">
                       <thead className="sticky top-0 bg-slate-50">
                         <tr className="text-left text-muted-foreground">
                           <th className="px-4 py-2.5">學生</th>
@@ -424,12 +439,12 @@ export default function TeacherDashboardPage() {
                               <td className="px-4 py-2.5 font-medium">
                                 {row.student_email.split("@")[0]}
                                 {needsAttention && (
-                                  <span className="ml-1.5 text-xs text-orange-500">需關注</span>
+                                  <span className="ml-1.5 text-base text-orange-500">需關注</span>
                                 )}
                               </td>
                               <td className="px-4 py-2.5">
                                 <span
-                                  className="inline-block rounded-full px-2 py-0.5 text-xs font-semibold text-white"
+                                  className="inline-block rounded-full px-2 py-0.5 text-base font-semibold text-white"
                                   style={{ backgroundColor: STAGE_COLORS[row.current_stage] ?? "#94a3b8" }}
                                 >
                                   {row.current_stage}
@@ -465,7 +480,7 @@ export default function TeacherDashboardPage() {
           {/* ===== TAB: 個人追蹤 ===== */}
           <TabsContent value="tracking" className="space-y-6">
             <div className="flex flex-wrap items-center gap-4">
-              <span className="text-sm font-medium text-slate-600">選擇學生：</span>
+              <span className="text-base font-medium text-slate-600">選擇學生：</span>
               <Select value={selectedStudentId} onValueChange={setSelectedStudentId}>
                 <SelectTrigger className="w-[280px] bg-white">
                   <SelectValue placeholder="選擇學生" />
@@ -480,14 +495,18 @@ export default function TeacherDashboardPage() {
               </Select>
             </div>
 
-            {studentDetail ? (
+            {selectedStudentId && detailLoading ? (
+              <div className="flex h-48 items-center justify-center text-muted-foreground">
+                載入個人資料中…
+              </div>
+            ) : studentDetail ? (
               <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                 {/* Left: ORID completion + feedback analytics */}
                 <div className="space-y-4">
                   <Card>
                     <CardHeader className="pb-3">
                       <CardTitle className="text-base">ORID 完成狀態</CardTitle>
-                      <p className="text-sm text-muted-foreground">
+                      <p className="text-base text-muted-foreground">
                         {studentDetail.student_email} — 第 {studentDetail.week} 週
                       </p>
                     </CardHeader>
@@ -506,7 +525,7 @@ export default function TeacherDashboardPage() {
                           : "未開始";
                         return (
                           <div key={stage} className="space-y-1.5">
-                            <div className="flex items-center justify-between text-sm">
+                            <div className="flex items-center justify-between text-base">
                               <span className="font-medium">{STAGE_LABELS[stage]}</span>
                               <span className={isCurrent && !hasDraft ? "text-amber-500 font-medium" : "text-muted-foreground"}>
                                 {label}
@@ -533,18 +552,18 @@ export default function TeacherDashboardPage() {
                       </CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <div className="grid grid-cols-3 gap-3 text-center text-sm">
+                      <div className="grid grid-cols-3 gap-3 text-center text-base">
                         <div className="rounded-lg bg-slate-50 p-3">
-                          <p className="text-xl font-bold text-slate-800">{studentDetail.feedback_click_count}</p>
-                          <p className="mt-0.5 text-xs text-muted-foreground">點擊次數</p>
+                          <p className="text-2xl font-bold text-slate-800">{studentDetail.feedback_click_count}</p>
+                          <p className="mt-0.5 text-base text-muted-foreground">點擊次數</p>
                         </div>
                         <div className="rounded-lg bg-emerald-50 p-3">
-                          <p className="text-xl font-bold text-emerald-700">{studentDetail.feedback_ok_count}</p>
-                          <p className="mt-0.5 text-xs text-muted-foreground">通過次數</p>
+                          <p className="text-2xl font-bold text-emerald-700">{studentDetail.feedback_ok_count}</p>
+                          <p className="mt-0.5 text-base text-muted-foreground">通過次數</p>
                         </div>
                         <div className="rounded-lg bg-teal-50 p-3">
-                          <p className="text-xl font-bold text-teal-700">{studentDetail.feedback_ok_stages}/4</p>
-                          <p className="mt-0.5 text-xs text-muted-foreground">通過格數</p>
+                          <p className="text-2xl font-bold text-teal-700">{studentDetail.feedback_ok_stages}/4</p>
+                          <p className="mt-0.5 text-base text-muted-foreground">通過格數</p>
                         </div>
                       </div>
                     </CardContent>
@@ -561,7 +580,7 @@ export default function TeacherDashboardPage() {
                         </div>
                         <div>
                           <p className="text-2xl font-bold">{studentDetail.interaction_count}</p>
-                          <p className="text-xs text-muted-foreground">互動次數</p>
+                          <p className="text-base text-muted-foreground">互動次數</p>
                         </div>
                       </CardContent>
                     </Card>
@@ -572,7 +591,7 @@ export default function TeacherDashboardPage() {
                         </div>
                         <div>
                           <p className="text-2xl font-bold">{studentDetail.writing_completed_stages}/4</p>
-                          <p className="text-xs text-muted-foreground">寫作完成</p>
+                          <p className="text-base text-muted-foreground">寫作完成</p>
                         </div>
                       </CardContent>
                     </Card>
@@ -584,8 +603,8 @@ export default function TeacherDashboardPage() {
                         <Clock className="h-5 w-5 text-purple-600" />
                       </div>
                       <div>
-                        <p className="text-sm font-medium">最後活動</p>
-                        <p className="text-sm text-muted-foreground">
+                        <p className="text-base font-medium">最後活動</p>
+                        <p className="text-base text-muted-foreground">
                           {studentDetail.last_activity_at
                             ? new Date(studentDetail.last_activity_at).toLocaleString("zh-TW")
                             : "尚無紀錄"}
@@ -600,12 +619,12 @@ export default function TeacherDashboardPage() {
                       <CardTitle className="flex items-center justify-between gap-2 text-base">
                         <span className="flex items-center gap-2">
                           後測評分
-                          <span className="text-xs font-normal text-muted-foreground">（1–4 分）</span>
+                          <span className="text-base font-normal text-muted-foreground">（1–4 分）</span>
                         </span>
                         {writingRubric && (
                           <button
                             onClick={() => setRubricOpen((v) => !v)}
-                            className="text-xs font-normal text-blue-600 hover:underline"
+                            className="text-base font-normal text-blue-600 hover:underline"
                           >
                             {rubricOpen ? "收起評分標準" : "查看評分標準"}
                           </button>
@@ -615,7 +634,7 @@ export default function TeacherDashboardPage() {
                     <CardContent>
                       {/* Rubric reference panel */}
                       {rubricOpen && writingRubric?.by_stage && (
-                        <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 p-3 text-xs">
+                        <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 p-3 text-base">
                           {(["O", "R", "I", "D"] as const).map((s) => {
                             const items: RubricItem[] = writingRubric.by_stage[s] ?? [];
                             if (!items.length) return null;
@@ -625,7 +644,7 @@ export default function TeacherDashboardPage() {
                                 <p className="mb-1 font-semibold text-slate-700">
                                   <span
                                     className="mr-1 inline-block rounded-full px-1.5 py-0.5 text-white"
-                                    style={{ backgroundColor: STAGE_COLORS[s] ?? "#94a3b8", fontSize: 10 }}
+                                    style={{ backgroundColor: STAGE_COLORS[s] ?? "#94a3b8", fontSize: 12 }}
                                   >
                                     {s}
                                   </span>
@@ -650,7 +669,7 @@ export default function TeacherDashboardPage() {
                           return (
                             <div key={stage} className="flex items-center gap-3">
                               <span
-                                className="w-8 rounded-full px-1.5 py-0.5 text-center text-xs font-bold text-white"
+                                className="w-8 rounded-full px-1.5 py-0.5 text-center text-base font-bold text-white"
                                 style={{ backgroundColor: STAGE_COLORS[stage] ?? "#94a3b8" }}
                               >
                                 {stage}
@@ -664,10 +683,10 @@ export default function TeacherDashboardPage() {
                                 onChange={(e) =>
                                   setPtDraft((d) => ({ ...d, [stage]: e.target.value }))
                                 }
-                                className="w-20 rounded-md border border-slate-200 px-2 py-1 text-center text-sm focus:border-blue-400 focus:outline-none"
+                                className="w-20 rounded-md border border-slate-200 px-2 py-1 text-center text-base focus:border-blue-400 focus:outline-none"
                               />
                               {saved && (
-                                <span className="text-xs text-muted-foreground">
+                                <span className="text-base text-muted-foreground">
                                   已存：{saved.score}/{saved.max_score}
                                 </span>
                               )}
@@ -678,7 +697,7 @@ export default function TeacherDashboardPage() {
                       <button
                         onClick={handleSavePostTest}
                         disabled={ptSaving}
-                        className="mt-4 w-full rounded-md bg-blue-600 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                        className="mt-4 w-full rounded-md bg-blue-600 py-1.5 text-base font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                       >
                         {ptSaving ? "儲存中…" : "儲存評分"}
                       </button>
@@ -694,6 +713,11 @@ export default function TeacherDashboardPage() {
                     </CardContent>
                   </Card>
                 </div>
+              </div>
+            ) : selectedStudentId ? (
+              <div className="flex h-48 flex-col items-center justify-center gap-2 text-center text-muted-foreground">
+                <p>無法載入此學生在第 {week} 週的摘要（請檢查網路或稍後再試）。</p>
+                <p className="text-xs">若剛切換週次／班級，請確認學生仍在名單中。</p>
               </div>
             ) : (
               <div className="flex h-48 items-center justify-center text-muted-foreground">
@@ -714,7 +738,7 @@ function MiniBar({ pct, color }: { pct: number; color: string }) {
       <div className="h-2 w-20 overflow-hidden rounded-full bg-slate-100">
         <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: color }} />
       </div>
-      <span className="w-8 text-right text-xs text-muted-foreground">{pct}%</span>
+      <span className="w-8 text-right text-xs text-muted-foreground sm:text-sm">{pct}%</span>
     </div>
   );
 }
@@ -732,12 +756,12 @@ function StatCard({
 }) {
   return (
     <Card>
-      <CardContent className="flex items-center gap-4 p-5">
-        <div className="rounded-xl bg-slate-50 p-3">{icon}</div>
+      <CardContent className="flex items-center gap-4 p-4">
+        <div className="rounded-xl bg-slate-50 p-2">{icon}</div>
         <div>
-          <p className="text-sm text-muted-foreground">{label}</p>
+          <p className="text-xs text-muted-foreground sm:text-sm">{label}</p>
           <p className="text-2xl font-bold">{value}</p>
-          <p className="text-xs text-muted-foreground">{sub}</p>
+          <p className="text-xs text-muted-foreground sm:text-sm">{sub}</p>
         </div>
       </CardContent>
     </Card>
@@ -786,7 +810,7 @@ function StagePie({
         );
       })}
       <circle cx={cx} cy={cy} r="20" fill="white" />
-      <text x={cx} y={cy + 1} textAnchor="middle" dominantBaseline="middle" className="text-[10px] font-bold fill-slate-700">
+      <text x={cx} y={cy + 2} textAnchor="middle" dominantBaseline="middle" className="text-[12px] font-bold fill-slate-700">
         {total}人
       </text>
     </svg>
@@ -842,7 +866,7 @@ function TeachingTips({
   }
 
   return (
-    <ul className="space-y-2 text-sm text-slate-700">
+    <ul className="space-y-2 text-base text-slate-700">
       {tips.map((t, i) => (
         <li key={i} className="flex items-start gap-2">
           <span className="mt-0.5 inline-block h-1.5 w-1.5 rounded-full bg-blue-500 shrink-0" />

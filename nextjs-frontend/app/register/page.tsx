@@ -24,10 +24,10 @@ export default function Page() {
       <form action={dispatch}>
         <Card className="w-full max-w-sm rounded-lg shadow-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800">
           <CardHeader className="text-center">
-            <CardTitle className="text-2xl font-semibold text-gray-800 dark:text-white">
+            <CardTitle className="text-2xl font-semibold text-gray-800 dark:text-white sm:text-3xl">
               註冊
             </CardTitle>
-            <CardDescription className="text-sm text-gray-600 dark:text-gray-400">
+            <CardDescription className="text-base text-gray-600 dark:text-gray-400">
               請輸入電子郵件與密碼來建立帳號。
             </CardDescription>
           </CardHeader>
@@ -71,7 +71,7 @@ export default function Page() {
             <SubmitButton text="建立帳號" />
             <FormError state={state} />
 
-            <div className="mt-4 text-center text-sm text-gray-600 dark:text-gray-400">
+            <div className="mt-4 text-center text-base text-gray-600 dark:text-gray-400">
               已經有帳號了嗎？{" "}
               <Link
                 href="/login"
