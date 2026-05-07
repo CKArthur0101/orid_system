@@ -101,10 +101,51 @@ const STAGE_LABELS: Record<string, string> = {
   I: "意義 (I)",
   D: "行動 (D)",
 };
-const DISPLAY_STAGES = ["NOT_STARTED", "O", "R", "I", "D"] as const;
+/** 班級概覽「曾動筆人數」長條順序：O～D 為有寫該段；最後一列為四段皆無內容 */
+const OVERVIEW_PARTICIPATION_ORDER = ["O", "R", "I", "D", "NOT_STARTED"] as const;
+function overviewParticipationLabel(stage: string): string {
+  if (stage === "NOT_STARTED") return "四段皆無寫作";
+  return STAGE_LABELS[stage] ?? stage;
+}
 const ORID_STAGES = ["O", "R", "I", "D"] as const;
 const WEEKS = [1, 2, 3, 4, 5, 6];
 const POST_TEST_STAGES = ["O", "R", "I", "D", "ALL"];
+
+/** Demo：後測評分尚未完成時設 false，隱藏區塊並略過 cpt／rubric 請求 */
+const SHOW_TEACHER_POST_TEST_UI = false;
+
+function formatFastApiDetail(body: unknown): string {
+  if (!body || typeof body !== "object") return "";
+  const raw = (body as { detail?: unknown }).detail;
+  if (typeof raw === "string") return raw;
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item) =>
+        typeof item === "object" && item !== null && "msg" in item
+          ? String((item as { msg: unknown }).msg)
+          : JSON.stringify(item)
+      )
+      .filter(Boolean)
+      .join("；");
+  }
+  return "";
+}
+
+/** 教師 BFF：對應 /api/teacher/csum 與 /api/teacher/cpt（Windows+Docker 新增 route 後若 404，請重啟 frontend 容器） */
+function teacherClassStudentQs(classId: string, studentId: string, week: number) {
+  return new URLSearchParams({
+    classId: classId.trim(),
+    studentId: studentId.trim(),
+    week: String(week),
+  }).toString();
+}
+
+function teacherClassStudentQsNoWeek(classId: string, studentId: string) {
+  return new URLSearchParams({
+    classId: classId.trim(),
+    studentId: studentId.trim(),
+  }).toString();
+}
 
 // ── Main page ──────────────────────────────────────────────────────────────────
 export default function TeacherDashboardPage() {
@@ -115,6 +156,7 @@ export default function TeacherDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
   const [studentDetail, setStudentDetail] = useState<StudentSummary | null>(null);
   const [postTestScores, setPostTestScores] = useState<PostTestScore[]>([]);
   const [ptDraft, setPtDraft] = useState<Record<string, string>>({});
@@ -158,16 +200,30 @@ export default function TeacherDashboardPage() {
       if (res.ok) {
         const data: Overview = await res.json().catch(() => null);
         setOverview(data);
-        if (data?.students?.length && !selectedStudentId) {
-          setSelectedStudentId(data.students[0].student_id);
-        }
+        const students = data?.students ?? [];
+        // 換班級後常留下「上一個班的 student_id」，後端會 404；週次變更則沿用仍在名單內的人。
+        setSelectedStudentId((prev) => {
+          if (prev && students.some((s) => s.student_id === prev)) return prev;
+          return students[0]?.student_id ?? "";
+        });
+      } else {
+        // 避免沿用舊班的 student_id 對新班級發 summary → 後端 404
+        setOverview(null);
+        setSelectedStudentId("");
+        setStudentDetail(null);
+        setDetailError(null);
       }
       setLoading(false);
     })();
   }, [classId, week]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fetch rubric when week changes
+  // Fetch rubric when week changes（僅後測區塊開啟時需要）
   useEffect(() => {
+    if (!SHOW_TEACHER_POST_TEST_UI) {
+      setWritingRubric(null);
+      setRubricOpen(false);
+      return;
+    }
     void (async () => {
       const res = await fetch(`/api/teacher/rubric?week=${week}`, { cache: "no-store" });
       if (res.ok) {
@@ -181,34 +237,44 @@ export default function TeacherDashboardPage() {
   useEffect(() => {
     if (!classId || !selectedStudentId) {
       setStudentDetail(null);
+      setDetailError(null);
       setDetailLoading(false);
       return;
     }
     setDetailLoading(true);
+    setDetailError(null);
+    setPostTestScores([]);
     void (async () => {
       try {
-        const [detailRes, ptRes] = await Promise.all([
-          fetch(
-            `/api/teacher/classes/${classId}/students/${selectedStudentId}/summary?week=${week}`,
-            { cache: "no-store" },
-          ),
-          fetch(
-            `/api/teacher/classes/${classId}/students/${selectedStudentId}/post-test?week=${week}`,
-            { cache: "no-store" },
-          ),
-        ]);
+        const qs = teacherClassStudentQs(classId, selectedStudentId, week);
+        const detailRes = await fetch(`/api/teacher/csum?${qs}`, { cache: "no-store" });
+
+        if (SHOW_TEACHER_POST_TEST_UI) {
+          const ptRes = await fetch(`/api/teacher/cpt?${qs}`, { cache: "no-store" });
+          if (ptRes.ok) {
+            const scores: PostTestScore[] = await ptRes.json().catch(() => []);
+            setPostTestScores(scores);
+            const draft: Record<string, string> = {};
+            for (const s of scores) draft[s.stage] = String(s.score);
+            setPtDraft(draft);
+          } else if (detailRes.ok) {
+            const raw = await ptRes.json().catch(() => null);
+            const msg = formatFastApiDetail(raw) || `後測載入 HTTP ${ptRes.status}`;
+            setDetailError((prev) => (prev ? `${prev}；${msg}` : msg));
+          }
+        } else {
+          setPostTestScores([]);
+          setPtDraft({});
+        }
+
         if (detailRes.ok) {
           const d = await detailRes.json().catch(() => null);
           setStudentDetail(d);
         } else {
           setStudentDetail(null);
-        }
-        if (ptRes.ok) {
-          const scores: PostTestScore[] = await ptRes.json().catch(() => []);
-          setPostTestScores(scores);
-          const draft: Record<string, string> = {};
-          for (const s of scores) draft[s.stage] = String(s.score);
-          setPtDraft(draft);
+          const raw = await detailRes.json().catch(() => null);
+          const msg = formatFastApiDetail(raw) || `HTTP ${detailRes.status}`;
+          setDetailError(msg);
         }
       } finally {
         setDetailLoading(false);
@@ -229,6 +295,7 @@ export default function TeacherDashboardPage() {
   }, [classId, week]);
 
   const handleSavePostTest = useCallback(async () => {
+    if (!SHOW_TEACHER_POST_TEST_UI) return;
     if (!selectedStudentId || !classId) return;
     setPtSaving(true);
     try {
@@ -237,18 +304,15 @@ export default function TeacherDashboardPage() {
         if (raw === undefined || raw === "") continue;
         const score = parseInt(raw, 10);
         if (isNaN(score)) continue;
-        await fetch(
-          `/api/teacher/classes/${classId}/students/${selectedStudentId}/post-test`,
-          {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ week, stage, score, max_score: 4 }),
-          }
-        );
+        await fetch(`/api/teacher/cpt?${teacherClassStudentQsNoWeek(classId, selectedStudentId)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ week, stage, score, max_score: 4 }),
+        });
       }
       // Refresh
       const ptRes = await fetch(
-        `/api/teacher/classes/${classId}/students/${selectedStudentId}/post-test?week=${week}`,
+        `/api/teacher/cpt?${teacherClassStudentQs(classId, selectedStudentId, week)}`,
         { cache: "no-store" }
       );
       if (ptRes.ok) setPostTestScores(await ptRes.json().catch(() => []));
@@ -272,7 +336,8 @@ export default function TeacherDashboardPage() {
   }, [overview?.students]);
 
   const stageDist = overview?.stage_distribution ?? { NOT_STARTED: 0, O: 0, R: 0, I: 0, D: 0 };
-  const stageTotal = Object.values(stageDist).reduce((a, b) => a + b, 0) || 1;
+  const classTotal = overview?.total_students ?? 0;
+  const denom = Math.max(classTotal, 1);
   const className = classes.find((c) => c.id === classId)?.name ?? "";
   const selectedStudent = overview?.students?.find((s) => s.student_id === selectedStudentId);
 
@@ -282,7 +347,15 @@ export default function TeacherDashboardPage() {
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-2xl font-bold text-slate-800 sm:text-3xl">AI–ORID 教師儀表板</h1>
         <div className="flex items-center gap-3">
-          <Select value={classId} onValueChange={setClassId}>
+          <Select
+            value={classId}
+            onValueChange={(id) => {
+              setClassId(id);
+              setSelectedStudentId("");
+              setStudentDetail(null);
+              setDetailError(null);
+            }}
+          >
             <SelectTrigger className="w-[200px] bg-white">
               <SelectValue placeholder="選擇班級" />
             </SelectTrigger>
@@ -361,19 +434,24 @@ export default function TeacherDashboardPage() {
                 <CardHeader className="pb-3">
                   <CardTitle className="flex items-center gap-2 text-base">
                     <BarChart3 className="h-4 w-4 text-blue-600" />
-                    ORID 階段參與分布
+                    ORID 階段參與（曾動筆人數）
                   </CardTitle>
+                  <p className="text-sm text-muted-foreground">
+                    O～D 各列為有多少人「寫過該段」，可與總人數重疊；寫齊四段會同時反映在四列。與「學生清單／目前階段」游標無關。
+                  </p>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
-                    {DISPLAY_STAGES.map((stage) => {
+                    {OVERVIEW_PARTICIPATION_ORDER.map((stage) => {
                       const count = stageDist[stage] ?? 0;
-                      const pct = Math.round((count / stageTotal) * 100);
+                      const pct = Math.round((count / denom) * 100);
                       return (
                         <div key={stage} className="space-y-1">
                           <div className="flex items-center justify-between text-base">
-                            <span className="font-medium">{STAGE_LABELS[stage]}</span>
-                            <span className="text-muted-foreground">{count} 人 ({pct}%)</span>
+                            <span className="font-medium">{overviewParticipationLabel(stage)}</span>
+                            <span className="text-muted-foreground">
+                              {count} 人（佔全班 {pct}%）
+                            </span>
                           </div>
                           <div className="h-3 overflow-hidden rounded-full bg-slate-100">
                             <div
@@ -385,16 +463,17 @@ export default function TeacherDashboardPage() {
                       );
                     })}
                   </div>
-                  <div className="mt-4 flex items-center justify-center gap-6">
-                    <StagePie dist={stageDist} total={stageTotal} />
-                    <div className="space-y-1 text-base">
-                      {DISPLAY_STAGES.map((s) => (
-                        <div key={s} className="flex items-center gap-1.5">
-                          <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: STAGE_COLORS[s] }} />
-                          {STAGE_LABELS[s]}
-                        </div>
-                      ))}
-                    </div>
+                  <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-sm text-muted-foreground">
+                    <span className="font-medium text-slate-600">全班 {classTotal} 人</span>
+                    {OVERVIEW_PARTICIPATION_ORDER.map((s) => (
+                      <div key={s} className="flex items-center gap-1.5">
+                        <span
+                          className="inline-block h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: STAGE_COLORS[s] }}
+                        />
+                        {overviewParticipationLabel(s)}
+                      </div>
+                    ))}
                   </div>
                 </CardContent>
               </Card>
@@ -481,7 +560,10 @@ export default function TeacherDashboardPage() {
           <TabsContent value="tracking" className="space-y-6">
             <div className="flex flex-wrap items-center gap-4">
               <span className="text-base font-medium text-slate-600">選擇學生：</span>
-              <Select value={selectedStudentId} onValueChange={setSelectedStudentId}>
+              <Select
+                value={selectedStudentId ? selectedStudentId : undefined}
+                onValueChange={setSelectedStudentId}
+              >
                 <SelectTrigger className="w-[280px] bg-white">
                   <SelectValue placeholder="選擇學生" />
                 </SelectTrigger>
@@ -509,25 +591,55 @@ export default function TeacherDashboardPage() {
                       <p className="text-base text-muted-foreground">
                         {studentDetail.student_email} — 第 {studentDetail.week} 週
                       </p>
+                      <p className="text-xs text-muted-foreground">
+                        各格「已完成」以本週寫入之草稿為準（與右欄「寫作完成」一致）；AI
+                        教練若仍停留在較前面的階段，不影響已撰寫的格子。
+                      </p>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       {ORID_STAGES.map((stage) => {
-                        const isNotStarted = studentDetail.current_stage === "NOT_STARTED";
-                        const stageIdx = ORID_STAGES.indexOf(stage);
-                        const currentIdx = ORID_STAGES.indexOf(studentDetail.current_stage as typeof ORID_STAGES[number]);
-                        const completed = stageIdx < currentIdx;
-                        const isCurrent = !isNotStarted && stageIdx === currentIdx;
                         const hasDraft = (studentDetail.stages_with_draft ?? []).includes(stage);
-                        // 50% only if current stage AND student has actually written something
-                        const pct = completed ? 100 : (isCurrent && hasDraft) ? 50 : 0;
-                        const label = completed ? "已完成"
-                          : isCurrent ? (hasDraft ? "進行中" : "輪到了")
-                          : "未開始";
+                        const coachRaw = studentDetail.current_stage ?? "NOT_STARTED";
+                        const coachIdx =
+                          coachRaw === "NOT_STARTED"
+                            ? -1
+                            : ORID_STAGES.includes(coachRaw as (typeof ORID_STAGES)[number])
+                              ? ORID_STAGES.indexOf(coachRaw as (typeof ORID_STAGES)[number])
+                              : -1;
+                        const stageIdx = ORID_STAGES.indexOf(stage);
+                        const coachAtThis = coachIdx >= 0 && stageIdx === coachIdx;
+
+                        let pct: number;
+                        let label: string;
+                        let emphasize: boolean;
+
+                        if (hasDraft) {
+                          label = "已完成";
+                          pct = 100;
+                          emphasize = false;
+                        } else if (coachRaw === "NOT_STARTED") {
+                          label = "未開始";
+                          pct = 0;
+                          emphasize = false;
+                        } else if (coachAtThis) {
+                          label = "輪到此格 · 尚未寫草稿";
+                          pct = 33;
+                          emphasize = true;
+                        } else if (coachIdx >= 0 && stageIdx > coachIdx) {
+                          label = "尚無草稿";
+                          pct = 0;
+                          emphasize = false;
+                        } else {
+                          label = "尚無草稿";
+                          pct = 0;
+                          emphasize = false;
+                        }
+
                         return (
                           <div key={stage} className="space-y-1.5">
                             <div className="flex items-center justify-between text-base">
                               <span className="font-medium">{STAGE_LABELS[stage]}</span>
-                              <span className={isCurrent && !hasDraft ? "text-amber-500 font-medium" : "text-muted-foreground"}>
+                              <span className={emphasize ? "text-amber-600 font-medium" : "text-muted-foreground"}>
                                 {label}
                               </span>
                             </div>
@@ -613,7 +725,7 @@ export default function TeacherDashboardPage() {
                     </CardContent>
                   </Card>
 
-                  {/* Post-test score input */}
+                  {SHOW_TEACHER_POST_TEST_UI && (
                   <Card>
                     <CardHeader className="pb-2">
                       <CardTitle className="flex items-center justify-between gap-2 text-base">
@@ -703,6 +815,7 @@ export default function TeacherDashboardPage() {
                       </button>
                     </CardContent>
                   </Card>
+                  )}
 
                   <Card>
                     <CardHeader className="pb-2">
@@ -717,6 +830,14 @@ export default function TeacherDashboardPage() {
             ) : selectedStudentId ? (
               <div className="flex h-48 flex-col items-center justify-center gap-2 text-center text-muted-foreground">
                 <p>無法載入此學生在第 {week} 週的摘要（請檢查網路或稍後再試）。</p>
+                {detailError && (
+                  <p className="max-w-lg text-sm font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                    伺服器說明：{detailError}
+                  </p>
+                )}
+                <p className="text-xs">
+                  若為 404／Student not in class：代表此學生不在目前選擇的班級名單中，請重選班級或於資料庫確認 StudentClassMembership。
+                </p>
                 <p className="text-xs">若剛切換週次／班級，請確認學生仍在名單中。</p>
               </div>
             ) : (
@@ -765,55 +886,6 @@ function StatCard({
         </div>
       </CardContent>
     </Card>
-  );
-}
-
-function StagePie({
-  dist,
-  total,
-}: {
-  dist: Record<string, number>;
-  total: number;
-}) {
-  const stages = DISPLAY_STAGES;
-  let cum = 0;
-  const slices = stages.map((s) => {
-    const pct = (dist[s] ?? 0) / total;
-    const start = cum;
-    cum += pct;
-    return { stage: s, start, end: cum };
-  });
-
-  const r = 40;
-  const cx = 50;
-  const cy = 50;
-  const toXY = (frac: number) => ({
-    x: cx + r * Math.cos(2 * Math.PI * frac - Math.PI / 2),
-    y: cy + r * Math.sin(2 * Math.PI * frac - Math.PI / 2),
-  });
-
-  return (
-    <svg width="110" height="110" viewBox="0 0 100 100">
-      {slices.map(({ stage, start, end }) => {
-        if (end - start < 0.001) return null;
-        const s = toXY(start);
-        const e = toXY(end);
-        const largeArc = end - start > 0.5 ? 1 : 0;
-        return (
-          <path
-            key={stage}
-            d={`M${cx},${cy} L${s.x},${s.y} A${r},${r} 0 ${largeArc},1 ${e.x},${e.y} Z`}
-            fill={STAGE_COLORS[stage]}
-            stroke="white"
-            strokeWidth="1"
-          />
-        );
-      })}
-      <circle cx={cx} cy={cy} r="20" fill="white" />
-      <text x={cx} y={cy + 2} textAnchor="middle" dominantBaseline="middle" className="text-[12px] font-bold fill-slate-700">
-        {total}人
-      </text>
-    </svg>
   );
 }
 

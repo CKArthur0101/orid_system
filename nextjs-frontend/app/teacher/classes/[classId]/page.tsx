@@ -67,9 +67,10 @@ export default function TeacherClassOverviewPage({ params }: { params: Promise<{
         <div className="rounded border bg-white p-3">學生數：{data?.total_students ?? 0}</div>
         <div className="rounded border bg-white p-3">活躍數：{data?.active_students ?? 0}</div>
         <div className="rounded border bg-white p-3">完成率：{completionPct}%</div>
-        <div className="rounded border bg-white p-3">
-          階段分布：O {data?.stage_distribution?.O ?? 0} / R {data?.stage_distribution?.R ?? 0} / I{" "}
-          {data?.stage_distribution?.I ?? 0} / D {data?.stage_distribution?.D ?? 0}
+        <div className="rounded border bg-white p-3 text-xs leading-relaxed text-muted-foreground md:text-sm">
+          各段曾動筆人數（可重疊，加總可大於學生數）：尚無寫作 {data?.stage_distribution?.NOT_STARTED ?? 0}／O{" "}
+          {data?.stage_distribution?.O ?? 0}／R {data?.stage_distribution?.R ?? 0}／I{" "}
+          {data?.stage_distribution?.I ?? 0}／D {data?.stage_distribution?.D ?? 0}
         </div>
       </div>
 

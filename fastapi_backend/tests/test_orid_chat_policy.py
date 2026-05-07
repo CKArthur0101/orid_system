@@ -67,6 +67,26 @@ def test_ungrounded_in_book_detects_fabricated_scene():
         is False
     )
 
+
+def test_d_stage_real_life_plan_with_story_callback_not_ungrounded():
+    """D 段含午餐／衛生紙等生活細節並回扣故事，不得觸發『須對齊教材』式誤判。"""
+    book_pack = {
+        "book_title": "阿松爺爺的柿子樹",
+        "key_events": [
+            "阿松爺爺把柿子藏到屋後倉庫",
+            "最後大家一起把柿子拿出來吃，並撒下種子。",
+        ],
+        "story_excerpts": [],
+        "characters": [{"name": "阿松爺爺"}, {"name": "哎喲奶奶"}],
+    }
+    d_text = (
+        "下週營養午餐時，如果有人來借衛生紙或想跟我分零食，我會先深呼吸一遍，再把『好啊可以分你一點』說出口。"
+        "若心裡仍覺得小氣，我會先想一下故事裡大家一起分享的快樂臉孔，再決定怎麼做。"
+    )
+    assert orid_checker.looks_likely_ungrounded_in_book(d_text, book_pack, "D") is False
+    assert orid_checker.looks_likely_ungrounded_in_book(d_text, book_pack, "O") is True
+
+
 def test_latin_proper_noun_in_mixed_sentence_flags_ungrounded():
     book_pack = {
         "book_title": "阿松爺爺的柿子樹",

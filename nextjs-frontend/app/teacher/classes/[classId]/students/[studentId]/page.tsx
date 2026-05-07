@@ -26,10 +26,15 @@ export default function TeacherStudentSummaryPage({
 
   useEffect(() => {
     void (async () => {
-      const res = await fetch(
-        `/api/teacher/classes/${classId}/student-summary?studentId=${studentId}&week=${week}`,
-        { method: "GET", cache: "no-store" }
-      );
+        const qs = new URLSearchParams({
+          classId: classId.trim(),
+          studentId: studentId.trim(),
+          week: String(week),
+        }).toString();
+        const res = await fetch(`/api/teacher/csum?${qs}`, {
+          method: "GET",
+          cache: "no-store",
+        });
       if (!res.ok) return;
       const obj = await res.json().catch(() => null);
       setData(obj);

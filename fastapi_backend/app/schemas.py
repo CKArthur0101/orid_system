@@ -203,6 +203,8 @@ class TeacherClassOverview(BaseModel):
     active_students: int
     completion_rate: float            # has-text definition (unchanged)
     feedback_ok_rate: float = 0.0    # fraction of students with all 4 stages ok
+    # keys NOT_STARTED,O,R,I,D — O～D 為「至少有寫該段」的人數（可與總人數重疊加總）；
+    # NOT_STARTED 為四段皆無寫作者人數。
     stage_distribution: dict[str, int]
     students: list[TeacherStudentRow]
 

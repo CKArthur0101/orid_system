@@ -129,6 +129,34 @@ def _stages_with_draft(content: str | None) -> list[str]:
     return result
 
 
+_STAGE_ORDER = {"NOT_STARTED": 0, "O": 1, "R": 2, "I": 3, "D": 4}
+_STAGE_BY_ORDER = {0: "NOT_STARTED", 1: "O", 2: "R", 3: "I", 4: "D"}
+
+
+def _teacher_display_stage(
+    *,
+    interaction_count: int,
+    coach_stage: str,
+    writing_completed_stages: int,
+) -> str:
+    """
+    教師列出「目前階段」欄用：session.current_stage 為教練游標可能落後，
+    與草稿完成格數合併取較進的 ORID 階段，避免四格皆寫完仍顯示 O。
+    （班級圖表的 stage_distribution 另依各段動筆人數計，與此不同。）
+    """
+    if interaction_count <= 0:
+        return "NOT_STARTED"
+    cs = ((coach_stage or "NOT_STARTED").strip().upper()) or "NOT_STARTED"
+    if cs not in _STAGE_ORDER:
+        cs = "NOT_STARTED"
+    if cs == "NOT_STARTED":
+        cs = "O"
+    coach_i = _STAGE_ORDER[cs]
+    draft_i = max(0, min(int(writing_completed_stages), 4))
+    eff_i = max(coach_i, draft_i)
+    return _STAGE_BY_ORDER.get(eff_i, "NOT_STARTED")
+
+
 @router.get("/me/classes", response_model=list[TeacherClassRead])
 async def teacher_me_classes(
     db: AsyncSession = Depends(get_async_session),
@@ -174,7 +202,7 @@ async def teacher_class_overview(
             active_students=0,
             completion_rate=0.0,
             feedback_ok_rate=0.0,
-            stage_distribution={"O": 0, "R": 0, "I": 0, "D": 0},
+            stage_distribution={"NOT_STARTED": 0, "O": 0, "R": 0, "I": 0, "D": 0},
             students=[],
         )
 
@@ -234,8 +262,9 @@ async def teacher_class_overview(
             msg_counts[mc_row["session_id"]] = int(mc_row["cnt"])
             last_activity[mc_row["session_id"]] = mc_row["last_at"]
 
-    # ── 4. Writing completion per student ────────────────────────────────────
+    # ── 4. Writing completion + draft presence per stage (per student) ────────
     writing_stages: dict[UUID, int] = {}
+    draft_stages_by_student: dict[UUID, list[str]] = {}
     if session_ids:
         wsubq = (
             select(
@@ -257,7 +286,9 @@ async def teacher_class_overview(
         w_res = await db.execute(select(wsubq).where(wsubq.c.rn == 1))
         for w_row in w_res.mappings().all():
             uid = w_row["user_id"]
-            writing_stages[uid] = _count_completed_stages(w_row.get("content"))
+            content = w_row.get("content")
+            writing_stages[uid] = _count_completed_stages(content)
+            draft_stages_by_student[uid] = _stages_with_draft(content)
 
     # ── 5. Feedback analytics per student (from orid_feedback_events) ────────
     # click_count = total events; ok_count = events where ok=true;
@@ -294,19 +325,33 @@ async def teacher_class_overview(
         for os_row in ok_stages_res.mappings().all():
             feedback_ok_stages[os_row["user_id"]] = int(os_row["ok_stage_cnt"] or 0)
 
-    # ── 6. Assemble rows ──────────────────────────────────────────────────────
+    # ── 6. 各段「曾動筆」人數（可重疊；寫齊四段者同時計入 O～D）──────────────
     stage_distribution = {"NOT_STARTED": 0, "O": 0, "R": 0, "I": 0, "D": 0}
+    for student in students:
+        keys_list = draft_stages_by_student.get(student.id, [])
+        if not keys_list:
+            stage_distribution["NOT_STARTED"] += 1
+        else:
+            for st in ("O", "R", "I", "D"):
+                if st in keys_list:
+                    stage_distribution[st] += 1
+
+    # ── 7. Assemble rows ───────────────────────────────────────────────────────
+    valid_row_stages = {"NOT_STARTED", "O", "R", "I", "D"}
     rows: list[TeacherStudentRow] = []
 
     for student in students:
         sess = session_by_student.get(student.id)
         sid = sess["id"] if sess else None
         interaction_count = msg_counts.get(sid, 0) if sid else 0
-        stage = (sess["current_stage"] if sess else "NOT_STARTED") or "NOT_STARTED"
-        if interaction_count <= 0:
-            stage = "NOT_STARTED"
-        stage = stage if stage in stage_distribution else "NOT_STARTED"
-        stage_distribution[stage] += 1
+        coach_stage = (sess["current_stage"] if sess else "NOT_STARTED") or "NOT_STARTED"
+        w_done = writing_stages.get(student.id, 0)
+        stage = _teacher_display_stage(
+            interaction_count=interaction_count,
+            coach_stage=coach_stage,
+            writing_completed_stages=w_done,
+        )
+        stage = stage if stage in valid_row_stages else "NOT_STARTED"
 
         rows.append(
             TeacherStudentRow(
@@ -314,7 +359,7 @@ async def teacher_class_overview(
                 student_email=student.email,
                 current_stage=stage,
                 interaction_count=interaction_count,
-                writing_completed_stages=writing_stages.get(student.id, 0),
+                writing_completed_stages=w_done,
                 last_activity_at=last_activity.get(sid) if sid else None,
                 feedback_click_count=feedback_clicks.get(student.id, 0),
                 feedback_ok_count=feedback_ok_counts.get(student.id, 0),
@@ -390,9 +435,6 @@ async def teacher_student_summary(
         if mc_row:
             interaction_count = int(mc_row["cnt"] or 0)
             last_activity_at = mc_row["last_at"]
-        if interaction_count <= 0:
-            stage = "NOT_STARTED"
-
         writing_res = await db.execute(
             select(OridWriting)
             .where(
@@ -438,6 +480,15 @@ async def teacher_student_summary(
         )
         os_row = ok_stages_res.mappings().first()
         feedback_ok_stages = int((os_row["ok_stage_cnt"] if os_row else None) or 0)
+
+        if interaction_count <= 0:
+            stage = "NOT_STARTED"
+        else:
+            stage = _teacher_display_stage(
+                interaction_count=interaction_count,
+                coach_stage=stage,
+                writing_completed_stages=writing_completed_stages,
+            )
 
     return TeacherStudentSummary(
         class_id=class_id,

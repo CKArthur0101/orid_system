@@ -509,8 +509,14 @@ def looks_likely_ungrounded_in_book(
 
     Skips obviously off-topic daily-life lines. Uses per-clause checks so one
     matched phrase does not excuse the rest of the draft.
+
+    D (Decisional) stage is exempt: drafts mix real-life plans with optional
+    story callbacks; heuristic story-grounding yields false positives and must
+    not drive “align to textbook” feedback (see `_genai_feedback` in routes).
     """
-    _ = (stage or "O").strip().upper()
+    if (stage or "O").strip().upper() == "D":
+        return False
+
     text = (student_text or "").strip()
     if len(text) >= 3 and looks_likely_latin_hallucination(text, book_pack):
         return True
