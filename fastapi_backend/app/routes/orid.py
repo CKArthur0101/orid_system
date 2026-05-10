@@ -615,7 +615,11 @@ def book_unit_from_week(week: int) -> int:
 
 
 def _parse_force_new_allowlist() -> set[str]:
-    raw = os.getenv("ORID_FORCE_NEW_ALLOWLIST", "")
+    from app.config import settings
+
+    raw = (settings.ORID_FORCE_NEW_ALLOWLIST or "").strip()
+    if not raw:
+        raw = (os.getenv("ORID_FORCE_NEW_ALLOWLIST", "") or "").strip()
     return {x.strip().lower() for x in raw.split(",") if x.strip()}
 
 

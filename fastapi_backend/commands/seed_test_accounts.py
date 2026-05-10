@@ -45,6 +45,8 @@ DEFAULT_TEACHER_DISPLAY_NAME = "示範教師"
 DEFAULT_PASSWORD = "OridTest2026!"
 
 CLASS_NAME = "ORID 測試班"
+# 固定辨識種子班級，避免資料庫裡另有同名「ORID 測試班」時誤綁到空班級
+DEMO_CLASS_EXTERNAL_CODE = "demo"
 
 
 async def _ensure_user(
@@ -90,10 +92,23 @@ async def _ensure_user(
 async def _ensure_demo_class_links(students: list[User], teacher: User) -> None:
     """建立示範班級並綁定教師／學生（需已執行 teacher RBAC migration）。"""
     async with async_session_maker() as db:
-        r = await db.execute(select(ClassRoom).where(ClassRoom.name == CLASS_NAME).limit(1))
+        r = await db.execute(
+            select(ClassRoom).where(ClassRoom.external_code == DEMO_CLASS_EXTERNAL_CODE).limit(1)
+        )
         cls = r.scalars().first()
         if not cls:
-            cls = ClassRoom(name=CLASS_NAME, year=2026, external_code="demo")
+            r = await db.execute(
+                select(ClassRoom)
+                .where(ClassRoom.name == CLASS_NAME)
+                .order_by(ClassRoom.created_at.asc())
+                .limit(1)
+            )
+            cls = r.scalars().first()
+            if cls is not None and not (cls.external_code or "").strip():
+                cls.external_code = DEMO_CLASS_EXTERNAL_CODE
+                await db.flush()
+        if not cls:
+            cls = ClassRoom(name=CLASS_NAME, year=2026, external_code=DEMO_CLASS_EXTERNAL_CODE)
             db.add(cls)
             await db.flush()
 

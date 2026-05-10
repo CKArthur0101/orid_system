@@ -105,7 +105,7 @@ def _anchor_is_daily_life(anchor: str) -> bool:
     a = (anchor or "").strip()
     if not a:
         return False
-    return any(k in a for k in _DAILY_LIFE_KEYWORDS)
+    return any(k in a for k in _DAILY_LIFE_KEYWORDS )
 
 
 def _normalize_match_text(text: str) -> str:

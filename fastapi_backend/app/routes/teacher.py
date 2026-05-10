@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func, and_, or_, cast, Integer
+from sqlalchemy import func, and_, or_, cast, Integer, case
 
 from app.database import get_async_session
 from app.models import (
@@ -37,6 +37,19 @@ from app.users import current_active_user
 router = APIRouter(tags=["teacher"])
 
 READING_TITLE_TEMPLATE = "第 {week} 週（暫定教材）"
+
+_ORID_SENDER_STUDENT = "student"
+_ORID_SENDER_AI = "ai"
+
+
+def _dialogue_rounds(st_count: int, ai_count: int) -> int:
+    """一輪對話 = 學生一則 + AI 一則；以兩邊則數取小（可完整配對的輪數）。"""
+    return min(max(0, st_count), max(0, ai_count))
+
+
+def _student_ui_name(student: User) -> str:
+    d = (student.display_name or "").strip()
+    return d or student.email
 
 
 def _book_unit_from_week(week: int) -> int:
@@ -165,7 +178,15 @@ async def teacher_me_classes(
     class_ids = await _get_allowed_class_ids(db, user)
     if not class_ids:
         return []
-    q = await db.execute(select(ClassRoom).where(ClassRoom.id.in_(class_ids)).order_by(ClassRoom.name.asc()))
+    q = await db.execute(
+        select(ClassRoom)
+        .where(ClassRoom.id.in_(class_ids))
+        .order_by(
+            case((ClassRoom.external_code == "demo", 0), else_=1),
+            ClassRoom.name.asc(),
+            ClassRoom.created_at.asc(),
+        )
+    )
     return q.scalars().all()
 
 
@@ -245,21 +266,29 @@ async def teacher_class_overview(
         session_by_student[uid] = {"id": sid, "current_stage": row["current_stage"] or "O"}
         session_ids.append(sid)
 
-    # ── 3. Message counts per session ────────────────────────────────────────
+    # ── 3. 對話輪數 per session（一輪 = 學生一則 + AI 一則，取 min(學則, AI則)）──
     msg_counts: dict[UUID, int] = {}
     last_activity: dict[UUID, object] = {}
     if session_ids:
+        st_sum = func.coalesce(
+            func.sum(case((OridChatMessage.sender == _ORID_SENDER_STUDENT, 1), else_=0)),
+            0,
+        )
+        ai_sum = func.coalesce(
+            func.sum(case((OridChatMessage.sender == _ORID_SENDER_AI, 1), else_=0)),
+            0,
+        )
         mc_res = await db.execute(
             select(
                 OridChatMessage.session_id,
-                func.count(OridChatMessage.id).label("cnt"),
+                func.least(st_sum, ai_sum).label("rounds"),
                 func.max(OridChatMessage.created_at).label("last_at"),
             )
             .where(OridChatMessage.session_id.in_(session_ids))
             .group_by(OridChatMessage.session_id)
         )
         for mc_row in mc_res.mappings().all():
-            msg_counts[mc_row["session_id"]] = int(mc_row["cnt"])
+            msg_counts[mc_row["session_id"]] = int(mc_row["rounds"] or 0)
             last_activity[mc_row["session_id"]] = mc_row["last_at"]
 
     # ── 4. Writing completion + draft presence per stage (per student) ────────
@@ -345,6 +374,7 @@ async def teacher_class_overview(
             TeacherStudentRow(
                 student_id=student.id,
                 student_email=student.email,
+                student_display_name=_student_ui_name(student),
                 current_stage=stage,
                 interaction_count=interaction_count,
                 writing_completed_stages=w_done,
@@ -413,15 +443,27 @@ async def teacher_student_summary(
     feedback_ok_stages = 0
 
     if session:
+        st_sum = func.coalesce(
+            func.sum(case((OridChatMessage.sender == _ORID_SENDER_STUDENT, 1), else_=0)),
+            0,
+        )
+        ai_sum = func.coalesce(
+            func.sum(case((OridChatMessage.sender == _ORID_SENDER_AI, 1), else_=0)),
+            0,
+        )
         mc_res = await db.execute(
             select(
-                func.count(OridChatMessage.id).label("cnt"),
+                st_sum.label("st_cnt"),
+                ai_sum.label("ai_cnt"),
                 func.max(OridChatMessage.created_at).label("last_at"),
             ).where(OridChatMessage.session_id == session.id)
         )
         mc_row = mc_res.mappings().first()
         if mc_row:
-            interaction_count = int(mc_row["cnt"] or 0)
+            interaction_count = _dialogue_rounds(
+                int(mc_row["st_cnt"] or 0),
+                int(mc_row["ai_cnt"] or 0),
+            )
             last_activity_at = mc_row["last_at"]
         writing_res = await db.execute(
             select(OridWeekSubmission).where(
@@ -479,6 +521,7 @@ async def teacher_student_summary(
         class_id=class_id,
         student_id=student_id,
         student_email=student.email,
+        student_display_name=_student_ui_name(student),
         week=week,
         current_stage=stage,
         interaction_count=interaction_count,
@@ -650,7 +693,7 @@ async def export_class_csv(
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
-        "學生信箱", "目前階段", "互動次數",
+        "姓名", "學生信箱", "目前階段", "對話輪數",
         "寫作完成格數", "回饋點擊次數", "回饋通過次數", "回饋通過格數",
         "後測_O", "後測_R", "後測_I", "後測_D", "後測_ALL",
     ])
@@ -658,6 +701,7 @@ async def export_class_csv(
         uid = row.student_id
         pts = pt_by_student.get(uid, {})
         writer.writerow([
+            row.student_display_name,
             row.student_email,
             row.current_stage,
             row.interaction_count,

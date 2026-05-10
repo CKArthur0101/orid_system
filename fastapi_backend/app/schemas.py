@@ -226,8 +226,11 @@ class TeacherClassRead(BaseModel):
 class TeacherStudentRow(BaseModel):
     student_id: UUID
     student_email: str
+    student_display_name: str
     current_stage: str
-    interaction_count: int
+    interaction_count: int = Field(
+        description="對話輪數：該週 session 內 min(學生訊息則數, AI 訊息則數)。",
+    )
     writing_completed_stages: int
     last_activity_at: datetime | None = None
     # analytics extras (None when analytics tables have no data yet)
@@ -254,9 +257,12 @@ class TeacherStudentSummary(BaseModel):
     class_id: UUID
     student_id: UUID
     student_email: str
+    student_display_name: str
     week: int
     current_stage: str
-    interaction_count: int
+    interaction_count: int = Field(
+        description="對話輪數：該週 session 內 min(學生訊息則數, AI 訊息則數)。",
+    )
     writing_completed_stages: int
     stages_with_draft: list[str] = []
     last_activity_at: datetime | None = None

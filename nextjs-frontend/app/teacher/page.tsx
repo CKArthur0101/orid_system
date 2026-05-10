@@ -34,6 +34,8 @@ type ClassInfo = {
 type StudentRow = {
   student_id: string;
   student_email: string;
+  /** 後端 TeacherStudentRow.student_display_name；無則用 student_email */
+  student_display_name?: string | null;
   current_stage: string;
   interaction_count: number;
   writing_completed_stages: number;
@@ -59,6 +61,7 @@ type StudentSummary = {
   class_id: string;
   student_id: string;
   student_email: string;
+  student_display_name?: string | null;
   week: number;
   current_stage: string;
   interaction_count: number;
@@ -145,6 +148,11 @@ function teacherClassStudentQsNoWeek(classId: string, studentId: string) {
     classId: classId.trim(),
     studentId: studentId.trim(),
   }).toString();
+}
+
+function studentLabel(s: { student_display_name?: string | null; student_email: string }) {
+  const n = (s.student_display_name ?? "").trim();
+  return n || s.student_email;
 }
 
 // ── Main page ──────────────────────────────────────────────────────────────────
@@ -422,7 +430,7 @@ export default function TeacherDashboardPage() {
               />
               <StatCard
                 icon={<MessageSquare className="h-5 w-5 text-amber-600" />}
-                label="平均互動回合"
+                label="平均對話輪數"
                 value={avgInteractions}
                 sub={`${className} 第 ${week} 週`}
               />
@@ -516,7 +524,7 @@ export default function TeacherDashboardPage() {
                               }}
                             >
                               <td className="px-4 py-2.5 font-medium">
-                                {row.student_email.split("@")[0]}
+                                {studentLabel(row)}
                                 {needsAttention && (
                                   <span className="ml-1.5 text-base text-orange-500">需關注</span>
                                 )}
@@ -570,7 +578,7 @@ export default function TeacherDashboardPage() {
                 <SelectContent>
                   {(overview?.students ?? []).map((s) => (
                     <SelectItem key={s.student_id} value={s.student_id}>
-                      {s.student_email}
+                      {studentLabel(s)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -589,7 +597,7 @@ export default function TeacherDashboardPage() {
                     <CardHeader className="pb-3">
                       <CardTitle className="text-base">ORID 完成狀態</CardTitle>
                       <p className="text-base text-muted-foreground">
-                        {studentDetail.student_email} — 第 {studentDetail.week} 週
+                        {studentLabel(studentDetail)} — 第 {studentDetail.week} 週
                       </p>
                       <p className="text-xs text-muted-foreground">
                         各格「已完成」以本週寫入之草稿為準（與右欄「寫作完成」一致）；AI
@@ -692,7 +700,7 @@ export default function TeacherDashboardPage() {
                         </div>
                         <div>
                           <p className="text-2xl font-bold">{studentDetail.interaction_count}</p>
-                          <p className="text-base text-muted-foreground">互動次數</p>
+                          <p className="text-base text-muted-foreground">對話輪數</p>
                         </div>
                       </CardContent>
                     </Card>
@@ -899,18 +907,18 @@ function TeachingTips({
   const tips: string[] = [];
 
   if (student.interaction_count === 0) {
-    tips.push("此學生尚未開始互動，建議個別關心並引導進入系統。");
+    tips.push("此學生尚未開始對話，建議個別關心並引導進入系統。");
   } else if (student.interaction_count < 3) {
-    tips.push("互動次數偏低，可鼓勵學生多嘗試與 AI 對話來深化思考。");
+    tips.push("對話輪數偏低，可鼓勵學生多嘗試與 AI 來回討論以深化思考。");
   }
 
   const stageIdx = ORID_STAGES.indexOf(student.current_stage as typeof ORID_STAGES[number]);
   if (stageIdx <= 1 && student.interaction_count >= 5) {
-    tips.push("互動次數足夠但階段停留在前期，可能遇到瓶頸，建議引導。");
+    tips.push("對話輪數已不少但階段停留在前期，可能遇到瓶頸，建議引導。");
   }
 
   if (student.writing_completed_stages === 0 && student.interaction_count > 0) {
-    tips.push("已有對話互動但尚未完成任何寫作，提醒學生完成反思寫作。");
+    tips.push("已有對話但尚未完成任何寫作，提醒學生完成反思寫作。");
   }
 
   if (student.feedback_click_count > 0 && student.feedback_ok_stages < student.writing_completed_stages) {

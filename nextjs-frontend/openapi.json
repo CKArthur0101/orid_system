@@ -830,6 +830,32 @@
         }
       }
     },
+    "/orid/me/capabilities": {
+      "get": {
+        "tags": [
+          "orid"
+        ],
+        "summary": "Orid Me Capabilities",
+        "operationId": "orid_me_capabilities",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OridMeCapabilitiesRead"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
     "/orid/readings": {
       "post": {
         "tags": [
@@ -1016,11 +1042,11 @@
             "required": false,
             "schema": {
               "type": "boolean",
-              "description": "true \u6642\u5f37\u5236\u5efa\u7acb\u65b0 session\uff1bfalse \u53d6\u6700\u8fd1\u4e00\u6b21\u3002",
+              "description": "true \u6642\u5f37\u5236\u5efa\u7acb\u65b0 session\uff1bfalse \u53d6\u6700\u8fd1\u4e00\u6b21\uff08\u540c\u66f8\u55ae\u5143\uff09\u3002",
               "default": false,
               "title": "Force New"
             },
-            "description": "true \u6642\u5f37\u5236\u5efa\u7acb\u65b0 session\uff1bfalse \u53d6\u6700\u8fd1\u4e00\u6b21\u3002"
+            "description": "true \u6642\u5f37\u5236\u5efa\u7acb\u65b0 session\uff1bfalse \u53d6\u6700\u8fd1\u4e00\u6b21\uff08\u540c\u66f8\u55ae\u5143\uff09\u3002"
           }
         ],
         "responses": {
@@ -1623,6 +1649,255 @@
           }
         }
       }
+    },
+    "/teacher/classes/{class_id}/students/{student_id}/post-test": {
+      "get": {
+        "tags": [
+          "teacher"
+        ],
+        "summary": "Get Post Test Scores",
+        "operationId": "get_post_test_scores",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "class_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Class Id"
+            }
+          },
+          {
+            "name": "student_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Student Id"
+            }
+          },
+          {
+            "name": "week",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 6,
+              "minimum": 1,
+              "default": 1,
+              "title": "Week"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PostTestScoreRead"
+                  },
+                  "title": "Response Teacher-Get Post Test Scores"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "teacher"
+        ],
+        "summary": "Upsert Post Test Score",
+        "description": "Create or update a single post-test score entry (student \u00d7 week \u00d7 stage).",
+        "operationId": "upsert_post_test_score",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "class_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Class Id"
+            }
+          },
+          {
+            "name": "student_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Student Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostTestScoreUpsert"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostTestScoreRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/teacher/rubric": {
+      "get": {
+        "tags": [
+          "teacher"
+        ],
+        "summary": "Get Writing Rubric",
+        "description": "Return the writing_rubric for the given week from the reading's book_pack.\nUsed by the teacher dashboard to display scoring criteria when grading post-tests.",
+        "operationId": "get_writing_rubric",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "week",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 6,
+              "minimum": 1,
+              "default": 1,
+              "title": "Week"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/teacher/classes/{class_id}/export": {
+      "get": {
+        "tags": [
+          "teacher"
+        ],
+        "summary": "Export Class Csv",
+        "description": "Download a CSV with per-student analytics and post-test scores for the given week.",
+        "operationId": "export_class_csv",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "class_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Class Id"
+            }
+          },
+          {
+            "name": "week",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 6,
+              "minimum": 1,
+              "default": 1,
+              "title": "Week"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1822,6 +2097,20 @@
         ],
         "title": "ItemRead"
       },
+      "OridMeCapabilitiesRead": {
+        "properties": {
+          "orid_can_force_new": {
+            "type": "boolean",
+            "title": "Orid Can Force New"
+          }
+        },
+        "type": "object",
+        "required": [
+          "orid_can_force_new"
+        ],
+        "title": "OridMeCapabilitiesRead",
+        "description": "\u8207\u5f8c\u7aef ORID_FORCE_NEW_ALLOWLIST \u4e00\u81f4\uff0c\u4f9b\u524d\u7aef\u6c7a\u5b9a\u662f\u5426\u986f\u793a\u5f37\u5236\u958b\u65b0 session\u3002"
+      },
       "OridMessageRead": {
         "properties": {
           "id": {
@@ -1919,6 +2208,17 @@
             "type": "integer",
             "title": "Stage Turn"
           },
+          "book_unit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Book Unit"
+          },
           "thread_id": {
             "anyOf": [
               {
@@ -2011,6 +2311,11 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
           }
         },
         "type": "object",
@@ -2021,7 +2326,8 @@
           "session_id",
           "week",
           "content",
-          "created_at"
+          "created_at",
+          "updated_at"
         ],
         "title": "OridWritingRead"
       },
@@ -2104,6 +2410,142 @@
         ],
         "title": "Page[ItemRead]"
       },
+      "PostTestScoreRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "student_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Student Id"
+          },
+          "grader_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Grader Id"
+          },
+          "class_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Class Id"
+          },
+          "week": {
+            "type": "integer",
+            "title": "Week"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "rubric_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rubric Id"
+          },
+          "score": {
+            "type": "integer",
+            "title": "Score"
+          },
+          "max_score": {
+            "type": "integer",
+            "title": "Max Score"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "student_id",
+          "grader_id",
+          "class_id",
+          "week",
+          "stage",
+          "score",
+          "max_score",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PostTestScoreRead"
+      },
+      "PostTestScoreUpsert": {
+        "properties": {
+          "week": {
+            "type": "integer",
+            "title": "Week"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "score": {
+            "type": "integer",
+            "title": "Score"
+          },
+          "max_score": {
+            "type": "integer",
+            "title": "Max Score",
+            "default": 3
+          },
+          "rubric_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rubric Id"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "week",
+          "stage",
+          "score"
+        ],
+        "title": "PostTestScoreUpsert"
+      },
       "ReadingCreate": {
         "properties": {
           "title": {
@@ -2179,6 +2621,11 @@
             "type": "number",
             "title": "Completion Rate"
           },
+          "feedback_ok_rate": {
+            "type": "number",
+            "title": "Feedback Ok Rate",
+            "default": 0.0
+          },
           "stage_distribution": {
             "additionalProperties": {
               "type": "integer"
@@ -2253,13 +2700,18 @@
             "type": "string",
             "title": "Student Email"
           },
+          "student_display_name": {
+            "type": "string",
+            "title": "Student Display Name"
+          },
           "current_stage": {
             "type": "string",
             "title": "Current Stage"
           },
           "interaction_count": {
             "type": "integer",
-            "title": "Interaction Count"
+            "title": "Interaction Count",
+            "description": "\u5c0d\u8a71\u8f2a\u6578\uff1a\u8a72\u9031 session \u5167 min(\u5b78\u751f\u8a0a\u606f\u5247\u6578, AI \u8a0a\u606f\u5247\u6578)\u3002"
           },
           "writing_completed_stages": {
             "type": "integer",
@@ -2276,12 +2728,28 @@
               }
             ],
             "title": "Last Activity At"
+          },
+          "feedback_click_count": {
+            "type": "integer",
+            "title": "Feedback Click Count",
+            "default": 0
+          },
+          "feedback_ok_count": {
+            "type": "integer",
+            "title": "Feedback Ok Count",
+            "default": 0
+          },
+          "feedback_ok_stages": {
+            "type": "integer",
+            "title": "Feedback Ok Stages",
+            "default": 0
           }
         },
         "type": "object",
         "required": [
           "student_id",
           "student_email",
+          "student_display_name",
           "current_stage",
           "interaction_count",
           "writing_completed_stages"
@@ -2304,6 +2772,10 @@
             "type": "string",
             "title": "Student Email"
           },
+          "student_display_name": {
+            "type": "string",
+            "title": "Student Display Name"
+          },
           "week": {
             "type": "integer",
             "title": "Week"
@@ -2314,11 +2786,20 @@
           },
           "interaction_count": {
             "type": "integer",
-            "title": "Interaction Count"
+            "title": "Interaction Count",
+            "description": "\u5c0d\u8a71\u8f2a\u6578\uff1a\u8a72\u9031 session \u5167 min(\u5b78\u751f\u8a0a\u606f\u5247\u6578, AI \u8a0a\u606f\u5247\u6578)\u3002"
           },
           "writing_completed_stages": {
             "type": "integer",
             "title": "Writing Completed Stages"
+          },
+          "stages_with_draft": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Stages With Draft",
+            "default": []
           },
           "last_activity_at": {
             "anyOf": [
@@ -2331,6 +2812,21 @@
               }
             ],
             "title": "Last Activity At"
+          },
+          "feedback_click_count": {
+            "type": "integer",
+            "title": "Feedback Click Count",
+            "default": 0
+          },
+          "feedback_ok_count": {
+            "type": "integer",
+            "title": "Feedback Ok Count",
+            "default": 0
+          },
+          "feedback_ok_stages": {
+            "type": "integer",
+            "title": "Feedback Ok Stages",
+            "default": 0
           }
         },
         "type": "object",
@@ -2338,6 +2834,7 @@
           "class_id",
           "student_id",
           "student_email",
+          "student_display_name",
           "week",
           "current_stage",
           "interaction_count",
@@ -2349,7 +2846,8 @@
         "properties": {
           "email": {
             "type": "string",
-            "format": "email",
+            "maxLength": 128,
+            "minLength": 1,
             "title": "Email"
           },
           "password": {
@@ -2392,6 +2890,18 @@
             "title": "Is Verified",
             "default": false
           },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
           "role": {
             "type": "string",
             "title": "Role",
@@ -2403,7 +2913,8 @@
           "email",
           "password"
         ],
-        "title": "UserCreate"
+        "title": "UserCreate",
+        "description": "\u767b\u5165\u5e33\u865f\u5b58\u65bc API/DB \u7684 email \u6b04\u4f4d\uff1b\u53ef\u70ba\u5b78\u865f\u3002"
       },
       "UserRead": {
         "properties": {
@@ -2414,7 +2925,6 @@
           },
           "email": {
             "type": "string",
-            "format": "email",
             "title": "Email"
           },
           "is_active": {
@@ -2436,6 +2946,17 @@
             "type": "string",
             "title": "Role",
             "default": "student"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
           }
         },
         "type": "object",
@@ -2443,7 +2964,8 @@
           "id",
           "email"
         ],
-        "title": "UserRead"
+        "title": "UserRead",
+        "description": "email \u6b04\u4f4d\u5be6\u969b\u70ba\u767b\u5165\u5e33\u865f\uff08\u5b78\u865f\u7b49\uff09\uff0c\u975e\u5fc5\u70ba email \u683c\u5f0f\u3002"
       },
       "UserUpdate": {
         "properties": {
@@ -2462,7 +2984,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "format": "email"
+                "maxLength": 128
               },
               {
                 "type": "null"
@@ -2513,6 +3035,18 @@
               }
             ],
             "title": "Role"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
           }
         },
         "type": "object",
@@ -2650,7 +3184,7 @@
           },
           "stage": {
             "type": "string",
-            "pattern": "^(O|R|I|D)$",
+            "pattern": "^(O|R|I|D|ALL)$",
             "title": "Stage"
           },
           "draft": {
@@ -2661,7 +3195,7 @@
           },
           "source": {
             "type": "string",
-            "pattern": "^(free_text|feedback_button)$",
+            "pattern": "^(free_text|feedback_button|synthesis_feedback)$",
             "title": "Source"
           },
           "week": {
@@ -2711,6 +3245,17 @@
               }
             ],
             "title": "Feedback Ok"
+          },
+          "feedback_praise": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback Praise"
           },
           "feedback_missing": {
             "items": {
@@ -2826,6 +3371,17 @@
           "ok": {
             "type": "boolean",
             "title": "Ok"
+          },
+          "praise": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Praise"
           },
           "missing": {
             "items": {

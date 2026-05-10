@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     # CORS
     CORS_ORIGINS: Set[str]
 
+    # ORID：逗號分隔「登入帳號」（學號或信箱），可使用「重新開始本週」(force_new)；空＝誰都不行
+    ORID_FORCE_NEW_ALLOWLIST: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
