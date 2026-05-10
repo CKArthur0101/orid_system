@@ -27,7 +27,7 @@ class TestPasswordValidation:
                 {
                     "detail": {
                         "code": ErrorCode.REGISTER_INVALID_PASSWORD.value,
-                        "reason": ["Password should not contain e-mail."],
+                        "reason": ["Password should not be the same as your login id."],
                     }
                 },
             ),
@@ -88,8 +88,9 @@ class TestPasswordValidation:
     async def test_register_user_with_valid_password(self, test_client, db_session):
         """Test user registration with success"""
         json = {
-            "email": "user@1.com",
+            "email": "114524099",
             "password": "Sppecialchar1#",
+            "display_name": "測試生",
         }
         response = await test_client.post("/auth/register", json=json)
 
@@ -99,4 +100,5 @@ class TestPasswordValidation:
 
         assert response.status_code == status.HTTP_201_CREATED
         assert user is not None
-        assert user.email == "user@1.com"
+        assert user.email == "114524099"
+        assert user.display_name == "測試生"

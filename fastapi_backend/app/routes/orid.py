@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import UUID, uuid4
 from typing import Optional, Any, Tuple, List, Dict
 import os
 import re
@@ -10,6 +10,7 @@ from collections import defaultdict, deque
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -18,7 +19,7 @@ from openai import AsyncOpenAI, BadRequestError
 
 from app.database import get_async_session, User
 from app.users import current_active_user
-from app.models import Reading, OridSession, OridMessage, OridWriting, OridStageAttempt, OridFeedbackEvent
+from app.models import Reading, OridSession, OridChatMessage, OridWeekSubmission, OridStageAttempt, OridFeedbackEvent
 from app.schemas import (
     ReadingCreate, ReadingRead,
     OridSessionCreate, OridSessionRead,
@@ -686,15 +687,10 @@ async def _fetch_latest_writing_content_for_week(
     session_id: UUID,
     week: int,
 ) -> Optional[str]:
-    w_stmt = (
-        select(OridWriting)
-        .where(
-            OridWriting.user_id == user_id,
-            OridWriting.session_id == session_id,
-            OridWriting.week == week,
-        )
-        .order_by(OridWriting.created_at.desc())
-        .limit(1)
+    w_stmt = select(OridWeekSubmission).where(
+        OridWeekSubmission.user_id == user_id,
+        OridWeekSubmission.session_id == session_id,
+        OridWeekSubmission.week == week,
     )
     w_res = await db.execute(w_stmt)
     w = w_res.scalars().first()
@@ -799,13 +795,13 @@ async def seed_writing_coach_welcome_if_needed(
     reading: Optional[Reading],
 ) -> None:
     cnt = await db.scalar(
-        select(func.count(OridMessage.id)).where(OridMessage.session_id == session.id)
+        select(func.count(OridChatMessage.id)).where(OridChatMessage.session_id == session.id)
     )
     if (cnt or 0) > 0:
         return
     book_pack = load_book_pack_from_reading(reading)
     text = build_writing_coach_welcome_text(book_pack)
-    db.add(OridMessage(session_id=session.id, stage="O", sender="ai", text=text))
+    db.add(OridChatMessage(session_id=session.id, stage="O", sender="ai", text=text))
     await db.commit()
 
 
@@ -949,7 +945,7 @@ def _extract_question_snippets_from_ai_text(text: str) -> list[str]:
     return out
 
 
-def recent_ai_questions_for_prompt(msgs: list[OridMessage], stage: str, limit: int = 6) -> str:
+def recent_ai_questions_for_prompt(msgs: list[OridChatMessage], stage: str, limit: int = 6) -> str:
     s = (stage or "O").strip().upper()
     ai_msgs = [m for m in msgs if (m.stage or "").strip().upper() == s and m.sender == "ai"]
     seen: list[str] = []
@@ -963,7 +959,7 @@ def recent_ai_questions_for_prompt(msgs: list[OridMessage], stage: str, limit: i
     return "\n".join(f"- {x}" for x in tail)
 
 
-def latest_ai_question_for_stage(msgs: list[OridMessage], stage: str) -> str:
+def latest_ai_question_for_stage(msgs: list[OridChatMessage], stage: str) -> str:
     s = (stage or "O").strip().upper()
     for m in reversed(msgs):
         if m.sender != "ai":
@@ -1156,7 +1152,7 @@ def _cross_stage_ack(current_stage: str, student_text: str) -> Optional[str]:
     return str(obj.get("ack") or "").strip() or None
 
 
-def _stage_recent_lines(msgs: list[OridMessage], stage: str, limit: int = 8) -> list[str]:
+def _stage_recent_lines(msgs: list[OridChatMessage], stage: str, limit: int = 8) -> list[str]:
     out: list[str] = []
     for m in msgs:
         if (m.stage or "").strip().upper() != stage:
@@ -1166,7 +1162,7 @@ def _stage_recent_lines(msgs: list[OridMessage], stage: str, limit: int = 8) -> 
     return out[-limit:]
 
 
-def _recent_session_lines(msgs: list[OridMessage], limit: int = 12) -> list[str]:
+def _recent_session_lines(msgs: list[OridChatMessage], limit: int = 12) -> list[str]:
     out: list[str] = []
     for m in msgs[-limit:]:
         prefix = "學生" if m.sender == "student" else "老師"
@@ -1233,7 +1229,7 @@ def _is_low_effort_text(text: str) -> bool:
 
 
 def _count_recent_student_streak(
-    msgs: list[OridMessage],
+    msgs: list[OridChatMessage],
     *,
     predicate,
     max_scan: int = 8,
@@ -2203,7 +2199,7 @@ async def writing_coach_chat(
 
     if not _allow_chat_message(str(user.id)):
         msg = "請慢一點，我們一次說一個重點。"
-        db.add(OridMessage(session_id=session.id, stage=stage_ctx, sender="ai", text=msg))
+        db.add(OridChatMessage(session_id=session.id, stage=stage_ctx, sender="ai", text=msg))
         await db.commit()
         return WritingCoachChatResponse(
             session_id=session.id,
@@ -2219,13 +2215,13 @@ async def writing_coach_chat(
     else:
         display_student = body
 
-    db.add(OridMessage(session_id=session.id, stage=stage_ctx, sender="student", text=display_student))
+    db.add(OridChatMessage(session_id=session.id, stage=stage_ctx, sender="student", text=display_student))
     await db.commit()
 
     q = await db.execute(
-        select(OridMessage)
-        .filter(OridMessage.session_id == session.id)
-        .order_by(OridMessage.created_at.asc())
+        select(OridChatMessage)
+        .filter(OridChatMessage.session_id == session.id)
+        .order_by(OridChatMessage.created_at.asc())
     )
     msgs = list(q.scalars().all())
 
@@ -2241,6 +2237,7 @@ async def writing_coach_chat(
 
     if source == "feedback_button":
         anchor_line = book_anchor_one_line(book_pack)
+        fb_rubric: dict[str, Any] = {}
         if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
             fb_ok, fb_missing, fb_sug, fb_ex, fb_praise = _control_feedback(stage_ctx, body)
             fb_imp = None
@@ -2350,61 +2347,6 @@ async def writing_coach_chat(
                     student_draft=body,
                 )
 
-        if data.save_feedback:
-            w_stmt = (
-                select(OridWriting)
-                .where(
-                    OridWriting.user_id == user.id,
-                    OridWriting.session_id == session.id,
-                    OridWriting.week == data.week,
-                )
-                .order_by(OridWriting.created_at.desc())
-                .limit(1)
-            )
-            w_res = await db.execute(w_stmt)
-            w = w_res.scalars().first()
-            obj = ensure_orid_writing_obj(
-                raw_content=(w.content if w else None),
-                week=data.week,
-                empty_factory=_ensure_orid_writing_v1,
-            )
-            obj = upsert_feedback_into_stage(
-                obj=obj,
-                stage=stage_ctx,
-                draft=draft_key,
-                text=body,
-                ok=bool(fb_ok),
-                missing=fb_missing,
-                suggestions=fb_sug,
-                example=fb_ex,
-                improved=fb_imp,
-                empty_factory=_ensure_orid_writing_v1,
-                praise=fb_praise,
-                rubric_focus=fb_rubric.get("rubric_focus"),
-                rubric_level_estimate=fb_rubric.get("rubric_level_estimate"),
-            )
-            content_str = json.dumps(obj, ensure_ascii=False)
-            saved_wid: Optional[str] = None
-            if w:
-                w.content = content_str
-                await db.commit()
-                await db.refresh(w)
-                saved_wid = str(w.id)
-            else:
-                new_w = OridWriting(
-                    user_id=user.id,
-                    reading_id=session.reading_id,
-                    session_id=session.id,
-                    week=data.week,
-                    content=content_str,
-                )
-                db.add(new_w)
-                await db.commit()
-                await db.refresh(new_w)
-                saved_wid = str(new_w.id)
-            if saved_wid:
-                coach_meta["saved_to_writing_id"] = saved_wid
-
         await _try_dual_write_feedback(
             db,
             session_id=session.id,
@@ -2448,51 +2390,6 @@ async def writing_coach_chat(
         if not (ai_reply or "").strip():
             ai_reply = "我有看到你的整合草稿，你可以再說一下最想調整的是銜接、具體例子，還是心得的深度？"
         coach_meta["synthesis_context"] = True
-
-        if data.save_feedback:
-            w_stmt_syn = (
-                select(OridWriting)
-                .where(
-                    OridWriting.user_id == user.id,
-                    OridWriting.session_id == session.id,
-                    OridWriting.week == data.week,
-                )
-                .order_by(OridWriting.created_at.desc())
-                .limit(1)
-            )
-            w_res_syn = await db.execute(w_stmt_syn)
-            w_syn = w_res_syn.scalars().first()
-            obj_syn = ensure_orid_writing_obj(
-                raw_content=(w_syn.content if w_syn else None),
-                week=data.week,
-                empty_factory=_ensure_orid_writing_v1,
-            )
-            obj_syn = merge_synthesis_feedback_into_writing(
-                obj_syn,
-                ai_reply=(ai_reply or "").strip(),
-                student_text=body,
-            )
-            content_syn = json.dumps(obj_syn, ensure_ascii=False)
-            saved_syn: Optional[str] = None
-            if w_syn:
-                w_syn.content = content_syn
-                await db.commit()
-                await db.refresh(w_syn)
-                saved_syn = str(w_syn.id)
-            else:
-                new_ws = OridWriting(
-                    user_id=user.id,
-                    reading_id=session.reading_id,
-                    session_id=session.id,
-                    week=data.week,
-                    content=content_syn,
-                )
-                db.add(new_ws)
-                await db.commit()
-                await db.refresh(new_ws)
-                saved_syn = str(new_ws.id)
-            if saved_syn:
-                coach_meta["saved_to_writing_id"] = saved_syn
     else:
         if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
             ai_reply = format_control_free_text_reply(stage_ctx)
@@ -2520,7 +2417,7 @@ async def writing_coach_chat(
             if not (ai_reply or "").strip():
                 ai_reply = "我有看到你的訊息，你可以再具體說一下想改哪一句嗎？"
 
-    db.add(OridMessage(session_id=session.id, stage=stage_ctx, sender="ai", text=ai_reply.strip()))
+    db.add(OridChatMessage(session_id=session.id, stage=stage_ctx, sender="ai", text=ai_reply.strip()))
     await db.commit()
 
     print(
@@ -2576,9 +2473,9 @@ async def writing_assist(
     book_pack = load_book_pack_from_reading(reading)
 
     q = await db.execute(
-        select(OridMessage)
-        .filter(OridMessage.session_id == session.id)
-        .order_by(OridMessage.created_at.asc())
+        select(OridChatMessage)
+        .filter(OridChatMessage.session_id == session.id)
+        .order_by(OridChatMessage.created_at.asc())
     )
     msgs = q.scalars().all()
 
@@ -2649,60 +2546,6 @@ async def writing_feedback(
     if _has_feedback_book_grounding_issue(missing):
         praise = _book_grounding_praise(data.stage)
 
-    saved_to: Optional[str] = None
-    if data.save:
-        w_stmt = (
-            select(OridWriting)
-            .where(
-                OridWriting.user_id == user.id,
-                OridWriting.session_id == session.id,
-                OridWriting.week == data.week,
-            )
-            .order_by(OridWriting.created_at.desc())
-            .limit(1)
-        )
-        w_res = await db.execute(w_stmt)
-        w = w_res.scalars().first()
-
-        obj = ensure_orid_writing_obj(
-            raw_content=(w.content if w else None),
-            week=data.week,
-            empty_factory=_ensure_orid_writing_v1,
-        )
-        obj = upsert_feedback_into_stage(
-            obj=obj,
-            stage=data.stage,
-            draft=data.draft,
-            text=text,
-            ok=ok,
-            missing=missing,
-            suggestions=suggestions,
-            example=example,
-            improved=improved,
-            empty_factory=_ensure_orid_writing_v1,
-            praise=praise,
-        )
-
-        content_str = json.dumps(obj, ensure_ascii=False)
-
-        if w:
-            w.content = content_str
-            await db.commit()
-            await db.refresh(w)
-            saved_to = str(w.id)
-        else:
-            new_w = OridWriting(
-                user_id=user.id,
-                reading_id=session.reading_id,
-                session_id=session.id,
-                week=data.week,
-                content=content_str,
-            )
-            db.add(new_w)
-            await db.commit()
-            await db.refresh(new_w)
-            saved_to = str(new_w.id)
-
     await _try_dual_write_feedback(
         db,
         session_id=session.id,
@@ -2737,7 +2580,7 @@ async def writing_feedback(
             **rubric_snap,
             "model": OPENAI_MODEL,
             "max_completion_tokens": OPENAI_MAX_COMPLETION_TOKENS,
-            "saved_to_writing_id": saved_to,
+            "saved_to_writing_id": None,
             "prompts_ok": PROMPTS_OK,
             "prompts_import_error": PROMPTS_IMPORT_ERROR,
             "openai_enabled": OPENAI_ENABLED,
@@ -2772,16 +2615,27 @@ async def create_writing(
     if not data.content.strip():
         raise HTTPException(status_code=400, detail="content is empty")
 
-    w = OridWriting(
+    content_str = data.content.strip()
+    ins = pg_insert(OridWeekSubmission).values(
+        id=uuid4(),
         user_id=user.id,
         reading_id=data.reading_id,
         session_id=data.session_id,
         week=data.week,
-        content=data.content.strip(),
+        content=content_str,
     )
-    db.add(w)
+    ins = ins.on_conflict_do_update(
+        constraint="uq_orid_week_submissions_user_session_week",
+        set_={
+            "content": ins.excluded.content,
+            "reading_id": ins.excluded.reading_id,
+            "updated_at": func.now(),
+        },
+    ).returning(OridWeekSubmission)
+
+    res = await db.execute(ins)
+    w = res.scalar_one()
     await db.commit()
-    await db.refresh(w)
     return w
 
 
@@ -2794,16 +2648,16 @@ async def list_writings(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
-    q = select(OridWriting).filter(OridWriting.user_id == user.id)
+    q = select(OridWeekSubmission).filter(OridWeekSubmission.user_id == user.id)
 
     if session_id:
-        q = q.filter(OridWriting.session_id == session_id)
+        q = q.filter(OridWeekSubmission.session_id == session_id)
     if reading_id:
-        q = q.filter(OridWriting.reading_id == reading_id)
+        q = q.filter(OridWeekSubmission.reading_id == reading_id)
     if week:
-        q = q.filter(OridWriting.week == week)
+        q = q.filter(OridWeekSubmission.week == week)
 
-    q = q.order_by(OridWriting.created_at.desc())
+    q = q.order_by(OridWeekSubmission.created_at.desc())
     if latest:
         q = q.limit(1)
 
@@ -2819,9 +2673,9 @@ async def update_writing(
     user: User = Depends(current_active_user),
 ):
     r = await db.execute(
-        select(OridWriting).filter(
-            OridWriting.id == writing_id,
-            OridWriting.user_id == user.id,
+        select(OridWeekSubmission).filter(
+            OridWeekSubmission.id == writing_id,
+            OridWeekSubmission.user_id == user.id,
         )
     )
     w = r.scalars().first()
@@ -2851,8 +2705,8 @@ async def list_messages(
     if not session or session.user_id != user.id:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    q = select(OridMessage).filter(OridMessage.session_id == session_id)
-    q = q.order_by(OridMessage.created_at.asc() if order == "asc" else OridMessage.created_at.desc())
+    q = select(OridChatMessage).filter(OridChatMessage.session_id == session_id)
+    q = q.order_by(OridChatMessage.created_at.asc() if order == "asc" else OridChatMessage.created_at.desc())
     q = q.limit(limit)
 
     res = await db.execute(q)

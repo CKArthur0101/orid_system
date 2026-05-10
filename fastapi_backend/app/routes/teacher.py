@@ -19,8 +19,8 @@ from app.models import (
     StudentClassMembership,
     Reading,
     OridSession,
-    OridMessage,
-    OridWriting,
+    OridChatMessage,
+    OridWeekSubmission,
     OridFeedbackEvent,
     OridPostTestScore,
 )
@@ -251,12 +251,12 @@ async def teacher_class_overview(
     if session_ids:
         mc_res = await db.execute(
             select(
-                OridMessage.session_id,
-                func.count(OridMessage.id).label("cnt"),
-                func.max(OridMessage.created_at).label("last_at"),
+                OridChatMessage.session_id,
+                func.count(OridChatMessage.id).label("cnt"),
+                func.max(OridChatMessage.created_at).label("last_at"),
             )
-            .where(OridMessage.session_id.in_(session_ids))
-            .group_by(OridMessage.session_id)
+            .where(OridChatMessage.session_id.in_(session_ids))
+            .group_by(OridChatMessage.session_id)
         )
         for mc_row in mc_res.mappings().all():
             msg_counts[mc_row["session_id"]] = int(mc_row["cnt"])
@@ -266,29 +266,17 @@ async def teacher_class_overview(
     writing_stages: dict[UUID, int] = {}
     draft_stages_by_student: dict[UUID, list[str]] = {}
     if session_ids:
-        wsubq = (
-            select(
-                OridWriting,
-                func.row_number()
-                .over(
-                    partition_by=OridWriting.user_id,
-                    order_by=OridWriting.created_at.desc(),
-                )
-                .label("rn"),
+        w_res = await db.execute(
+            select(OridWeekSubmission).where(
+                OridWeekSubmission.user_id.in_(student_ids),
+                OridWeekSubmission.session_id.in_(session_ids),
+                OridWeekSubmission.week == week,
             )
-            .where(
-                OridWriting.user_id.in_(student_ids),
-                OridWriting.session_id.in_(session_ids),
-                OridWriting.week == week,
-            )
-            .subquery()
         )
-        w_res = await db.execute(select(wsubq).where(wsubq.c.rn == 1))
-        for w_row in w_res.mappings().all():
-            uid = w_row["user_id"]
-            content = w_row.get("content")
-            writing_stages[uid] = _count_completed_stages(content)
-            draft_stages_by_student[uid] = _stages_with_draft(content)
+        for row in w_res.scalars().all():
+            uid = row.user_id
+            writing_stages[uid] = _count_completed_stages(row.content)
+            draft_stages_by_student[uid] = _stages_with_draft(row.content)
 
     # ── 5. Feedback analytics per student (from orid_feedback_events) ────────
     # click_count = total events; ok_count = events where ok=true;
@@ -427,23 +415,20 @@ async def teacher_student_summary(
     if session:
         mc_res = await db.execute(
             select(
-                func.count(OridMessage.id).label("cnt"),
-                func.max(OridMessage.created_at).label("last_at"),
-            ).where(OridMessage.session_id == session.id)
+                func.count(OridChatMessage.id).label("cnt"),
+                func.max(OridChatMessage.created_at).label("last_at"),
+            ).where(OridChatMessage.session_id == session.id)
         )
         mc_row = mc_res.mappings().first()
         if mc_row:
             interaction_count = int(mc_row["cnt"] or 0)
             last_activity_at = mc_row["last_at"]
         writing_res = await db.execute(
-            select(OridWriting)
-            .where(
-                OridWriting.user_id == student_id,
-                OridWriting.session_id == session.id,
-                OridWriting.week == week,
+            select(OridWeekSubmission).where(
+                OridWeekSubmission.user_id == student_id,
+                OridWeekSubmission.session_id == session.id,
+                OridWeekSubmission.week == week,
             )
-            .order_by(OridWriting.created_at.desc())
-            .limit(1)
         )
         writing = writing_res.scalars().first()
         writing_content = writing.content if writing else None

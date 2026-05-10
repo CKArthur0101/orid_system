@@ -56,6 +56,10 @@ function formatApiError(status: number, body: string, fallback: string) {
   return body || `${fallback}（${status}）`;
 }
 
+function localDraftStorageKey(sessionId: string, week: number) {
+  return `orid-writing-draft:${sessionId}:${week}`;
+}
+
 const STAGES: { key: StageKey; label: string }[] = [
   { key: "O", label: "O (Objective)" },
   { key: "R", label: "R (Reflective)" },
@@ -300,6 +304,14 @@ export default function WeekBookPage() {
       setLoading(true);
       setError(null);
 
+      if (typeof window !== "undefined" && sessionId) {
+        try {
+          localStorage.removeItem(localDraftStorageKey(sessionId, weekNum));
+        } catch {
+          /* ignore */
+        }
+      }
+
       const desiredCondition = getConditionFromUrl();
       const s = await ensureNewOrLatestSession(true, desiredCondition);
       const nextSessionId = isUuid(s?.id) ? String(s.id) : null;
@@ -538,7 +550,20 @@ export default function WeekBookPage() {
         if (latest?.content) {
           setWritingData(parseWritingRecordContent(latest.content, weekNum));
         } else {
-          setWritingData(createEmptyWriting(weekNum));
+          let restored = false;
+          if (typeof window !== "undefined") {
+            try {
+              const raw = localStorage.getItem(localDraftStorageKey(sessionId, weekNum));
+              if (raw) {
+                const parsed = JSON.parse(raw) as unknown;
+                setWritingData(normalizeWritingContent(parsed, weekNum));
+                restored = true;
+              }
+            } catch {
+              /* ignore */
+            }
+          }
+          if (!restored) setWritingData(createEmptyWriting(weekNum));
         }
       } catch {
         setWritingId(null);
@@ -711,18 +736,29 @@ export default function WeekBookPage() {
       setWritingError(null);
       setSaveMsg(null);
 
-      const content = JSON.stringify(writingData);
-      const isUpdate = isUuid(writingId);
-      const method = isUpdate ? "PUT" : "POST";
-      const body = isUpdate
-        ? { id: writingId, content }
-        : { reading_id: readingId, session_id: sessionId, week: weekNum, content };
+      if (label === "draft") {
+        try {
+          if (typeof window !== "undefined") {
+            localStorage.setItem(localDraftStorageKey(sessionId, weekNum), JSON.stringify(writingData));
+          }
+          setSaveMsg("草稿已儲存在此瀏覽器（尚未上傳至伺服器）✅");
+        } catch {
+          setWritingError("無法寫入本機儲存");
+        }
+        return;
+      }
 
+      const content = JSON.stringify(writingData);
       const r = await fetch(`/api/orid/writings`, {
-        method,
+        method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          reading_id: readingId,
+          session_id: sessionId,
+          week: weekNum,
+          content,
+        }),
       });
 
       const text = await r.text();
@@ -731,7 +767,15 @@ export default function WeekBookPage() {
       const data = text ? JSON.parse(text) : null;
       if (isUuid(data?.id)) setWritingId(String(data.id));
 
-      setSaveMsg(label === "draft" ? "已儲存草稿 ✅" : "已提交 ✅（示範：同樣會儲存到 DB）");
+      try {
+        if (typeof window !== "undefined") {
+          localStorage.removeItem(localDraftStorageKey(sessionId, weekNum));
+        }
+      } catch {
+        /* ignore */
+      }
+
+      setSaveMsg("已提交 ✅（伺服器僅保留此週一份正式內容）");
     } catch (e: any) {
       setWritingError(e?.message ?? "儲存失敗");
     } finally {
@@ -752,17 +796,16 @@ export default function WeekBookPage() {
         week2_flow: "synthesis",
       };
       const content = JSON.stringify(next);
-      const isUpdate = isUuid(writingId);
-      const method = isUpdate ? "PUT" : "POST";
-      const body = isUpdate
-        ? { id: writingId, content }
-        : { reading_id: readingId, session_id: sessionId, week: weekNum, content };
-
       const r = await fetch(`/api/orid/writings`, {
-        method,
+        method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          reading_id: readingId,
+          session_id: sessionId,
+          week: weekNum,
+          content,
+        }),
       });
 
       const text = await r.text();
@@ -770,6 +813,14 @@ export default function WeekBookPage() {
 
       const data = text ? JSON.parse(text) : null;
       if (isUuid(data?.id)) setWritingId(String(data.id));
+
+      try {
+        if (typeof window !== "undefined") {
+          localStorage.removeItem(localDraftStorageKey(sessionId, weekNum));
+        }
+      } catch {
+        /* ignore */
+      }
 
       setWritingData(next);
       setSaveMsg("已進入整合寫作階段 ✅");

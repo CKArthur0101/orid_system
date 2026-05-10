@@ -41,13 +41,14 @@ export default function Page() {
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="username" className="text-base font-medium text-slate-600">
-                電子郵件
+                帳號（學號）
               </Label>
               <Input
                 id="username"
                 name="username"
-                type="email"
-                placeholder="例如：student@example.com"
+                type="text"
+                autoComplete="username"
+                placeholder="例如：114524020"
                 required
                 className="h-11 rounded-xl border-slate-200 bg-slate-50 text-base text-slate-800 placeholder:text-slate-400 focus-visible:ring-2 focus-visible:ring-sky-400/50 focus-visible:border-sky-400"
               />

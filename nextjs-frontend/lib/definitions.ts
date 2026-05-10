@@ -21,9 +21,22 @@ export const passwordResetConfirmSchema = z
     path: ["passwordConfirm"],
   });
 
+const loginIdSchema = z
+  .string()
+  .min(1, { message: "請輸入帳號（學號）" })
+  .max(128, { message: "帳號過長" });
+
 export const registerSchema = z.object({
   password: passwordSchema,
-  email: z.string().email({ message: "Invalid email address" }),
+  email: loginIdSchema,
+  display_name: z
+    .string()
+    .max(128, { message: "顯示名稱過長" })
+    .optional()
+    .transform((s) => {
+      const t = (s ?? "").trim();
+      return t.length ? t : undefined;
+    }),
 });
 
 export const loginSchema = z.object({

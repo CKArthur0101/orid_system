@@ -83,6 +83,8 @@ async def authenticated_user(test_client, db_session):
         "is_active": True,
         "is_superuser": False,
         "is_verified": True,
+        "role": "student",
+        "display_name": "單測生",
     }
 
     # Create user directly in database

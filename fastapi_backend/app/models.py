@@ -14,6 +14,7 @@ class Base(DeclarativeBase):
 
 class User(SQLAlchemyBaseUserTableUUID, Base):
     role = Column(String, nullable=False, default="student", server_default="student")
+    display_name = Column(String(128), nullable=True)
     items = relationship("Item", back_populates="user", cascade="all, delete-orphan")
 
 
@@ -59,11 +60,11 @@ class OridSession(Base):
 
     user = relationship("User")
     reading = relationship("Reading")
-    messages = relationship("OridMessage", back_populates="session", cascade="all, delete-orphan")
+    messages = relationship("OridChatMessage", back_populates="session", cascade="all, delete-orphan")
 
 
-class OridMessage(Base):
-    __tablename__ = "orid_messages"
+class OridChatMessage(Base):
+    __tablename__ = "orid_chat_messages"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     session_id = Column(UUID(as_uuid=True), ForeignKey("orid_sessions.id"), nullable=False)
@@ -77,17 +78,23 @@ class OridMessage(Base):
     session = relationship("OridSession", back_populates="messages")
 
 
-class OridWriting(Base):
-    __tablename__ = "orid_writings"
+class OridWeekSubmission(Base):
+    """Official submitted ORID JSON per user/session/week; re-submit overwrites the same PK row."""
+
+    __tablename__ = "orid_week_submissions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "session_id", "week", name="uq_orid_week_submissions_user_session_week"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
     reading_id = Column(UUID(as_uuid=True), ForeignKey("readings.id"), nullable=False)
     session_id = Column(UUID(as_uuid=True), ForeignKey("orid_sessions.id"), nullable=False)
 
-    week = Column(Integer, nullable=False)          # 第幾週(1~6)
-    content = Column(Text, nullable=False)          # 寫作內容
+    week = Column(Integer, nullable=False)  # 第幾週(1~6)
+    content = Column(Text, nullable=False)  # 寫作 JSON
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
 class ClassRoom(Base):

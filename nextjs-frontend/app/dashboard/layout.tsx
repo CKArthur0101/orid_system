@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import { BookOpen, Home, LogOut } from "lucide-react";
 import { logout } from "@/components/actions/logout-action";
 
@@ -17,6 +18,32 @@ export default function DashboardLayout({
 }) {
   const pathname = usePathname();
   const lockWeekWritingLayout = pathname?.startsWith("/dashboard/books/week/") ?? false;
+  const [greeting, setGreeting] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await fetch("/api/users/me", { credentials: "include", cache: "no-store" });
+        if (!r.ok || cancelled) return;
+        const u = await r.json().catch(() => null);
+        if (!u || cancelled) return;
+        const role = String(u.role ?? "student").toLowerCase();
+        const loginId = String(u.email ?? "").trim();
+        const name = String(u.display_name ?? "").trim() || loginId;
+        if (role === "student") {
+          setGreeting(`${name} 同學`);
+        } else {
+          setGreeting(name);
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className={`flex flex-col bg-gradient-to-br from-sky-50 via-white to-amber-50/30 ${lockWeekWritingLayout ? "h-dvh max-h-dvh overflow-hidden" : "min-h-screen min-h-dvh"}`}>
@@ -53,13 +80,20 @@ export default function DashboardLayout({
             </nav>
           </div>
 
-          <button
-            onClick={() => logout()}
-            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-slate-500 hover:bg-red-50 hover:text-red-600 transition sm:text-base"
-          >
-            <LogOut className="h-4 w-4" />
-            <span className="hidden sm:inline">登出</span>
-          </button>
+          <div className="flex items-center gap-2 sm:gap-3">
+            {greeting && (
+              <span className="max-w-[9rem] truncate text-xs text-slate-600 sm:max-w-[14rem] sm:text-base">
+                {greeting}
+              </span>
+            )}
+            <button
+              onClick={() => logout()}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-slate-500 hover:bg-red-50 hover:text-red-600 transition sm:text-base"
+            >
+              <LogOut className="h-4 w-4" />
+              <span className="hidden sm:inline">登出</span>
+            </button>
+          </div>
         </div>
       </header>
 

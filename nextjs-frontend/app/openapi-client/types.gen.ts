@@ -157,13 +157,17 @@ export type PageItemRead = {
  */
 export type UserCreate = {
   /**
-   * Email
+   * Login id (stored as email in DB; may be student id)
    */
   email: string;
   /**
    * Password
    */
   password: string;
+  /**
+   * Shown name (e.g. 邱振凱)
+   */
+  display_name?: string | null;
   /**
    * Is Active
    */
@@ -187,9 +191,17 @@ export type UserRead = {
    */
   id: string;
   /**
-   * Email
+   * Login id (stored as email in DB)
    */
   email: string;
+  /**
+   * Shown name
+   */
+  display_name?: string | null;
+  /**
+   * App role e.g. student / teacher
+   */
+  role?: string | null;
   /**
    * Is Active
    */
@@ -216,6 +228,10 @@ export type UserUpdate = {
    * Email
    */
   email?: string | null;
+  /**
+   * Shown name
+   */
+  display_name?: string | null;
   /**
    * Is Active
    */

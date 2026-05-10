@@ -13,8 +13,9 @@ jest.mock("../app/clientService", () => ({
 describe("register action", () => {
   it("should call register service action with the correct input", async () => {
     const formData = new FormData();
-    formData.set("email", "a@a.com");
+    formData.set("email", "114524030");
     formData.set("password", "Q12341414#");
+    formData.set("display_name", "測試");
 
     // Mock a successful register
     (registerRegister as jest.Mock).mockResolvedValue({});
@@ -23,8 +24,9 @@ describe("register action", () => {
 
     expect(registerRegister).toHaveBeenCalledWith({
       body: {
-        email: "a@a.com",
+        email: "114524030",
         password: "Q12341414#",
+        display_name: "測試",
       },
     });
 
@@ -32,7 +34,7 @@ describe("register action", () => {
   });
   it("should should return an error if the server call fails", async () => {
     const formData = new FormData();
-    formData.set("email", "a@a.com");
+    formData.set("email", "114524030");
     formData.set("password", "Q12341414#");
 
     // Mock a failed register
@@ -46,7 +48,7 @@ describe("register action", () => {
 
     expect(registerRegister).toHaveBeenCalledWith({
       body: {
-        email: "a@a.com",
+        email: "114524030",
         password: "Q12341414#",
       },
     });
@@ -57,14 +59,14 @@ describe("register action", () => {
 
   it("should return an validation error if the form is invalid", async () => {
     const formData = new FormData();
-    formData.set("email", "email");
+    formData.set("email", "");
     formData.set("password", "invalid_password");
 
     const result = await register({}, formData);
 
     expect(result).toEqual({
       errors: {
-        email: ["Invalid email address"],
+        email: ["請輸入帳號（學號）"],
         password: [
           "Password should contain at least one uppercase letter.",
           "Password should contain at least one special character.",

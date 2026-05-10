@@ -5,7 +5,7 @@ import json
 import pytest
 from sqlalchemy import select
 
-from app.models import OridMessage, OridSession, Reading
+from app.models import OridChatMessage, OridSession, Reading
 
 
 def _minimal_book_pack() -> str:
@@ -64,7 +64,7 @@ async def test_writing_coach_control_feedback_button_persists_messages(
     assert data["meta"].get("condition") == "control"
 
     q = await db_session.execute(
-        select(OridMessage).where(OridMessage.session_id == session.id).order_by(OridMessage.created_at.asc())
+        select(OridChatMessage).where(OridChatMessage.session_id == session.id).order_by(OridChatMessage.created_at.asc())
     )
     rows = list(q.scalars().all())
     assert len(rows) == 2

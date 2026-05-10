@@ -4,22 +4,62 @@ from typing import Any
 from uuid import UUID
 
 from fastapi_users import schemas
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ----------------------------
 # Users (fastapi-users)
 # ----------------------------
 class UserRead(schemas.BaseUser[uuid.UUID]):
+    """email 欄位實際為登入帳號（學號等），非必為 email 格式。"""
+    email: str  # type: ignore[assignment]
     role: str = "student"
+    display_name: str | None = None
 
 
 class UserCreate(schemas.BaseUserCreate):
+    """登入帳號存於 API/DB 的 email 欄位；可為學號。"""
+    email: str = Field(..., min_length=1, max_length=128)
+    display_name: str | None = Field(None, max_length=128)
     role: str = "student"
+
+    @field_validator("email")
+    @classmethod
+    def strip_email(cls, v: str) -> str:
+        s = (v or "").strip()
+        if not s:
+            raise ValueError("Account (login id) is required")
+        return s
+
+    @field_validator("display_name")
+    @classmethod
+    def strip_display_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        s = v.strip()
+        return s or None
 
 
 class UserUpdate(schemas.BaseUserUpdate):
+    email: str | None = Field(None, max_length=128)  # type: ignore[assignment]
     role: str | None = None
+    display_name: str | None = Field(None, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def strip_email_optional(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        s = v.strip()
+        return s or None
+
+    @field_validator("display_name")
+    @classmethod
+    def strip_display_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        s = v.strip()
+        return s or None
 
 
 class OridMeCapabilitiesRead(BaseModel):
@@ -155,6 +195,7 @@ class OridWritingRead(BaseModel):
     week: int
     content: str
     created_at: datetime
+    updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 

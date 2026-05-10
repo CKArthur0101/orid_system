@@ -53,8 +53,9 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
 
         if len(password) < 8:
             errors.append("Password should be at least 8 characters.")
-        if user.email in password:
-            errors.append("Password should not contain e-mail.")
+        acct = (user.email or "").strip()
+        if acct and acct == password:
+            errors.append("Password should not be the same as your login id.")
         if not any(char.isupper() for char in password):
             errors.append("Password should contain at least one uppercase letter.")
         if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):

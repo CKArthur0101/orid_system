@@ -28,7 +28,7 @@ export default function Page() {
               註冊
             </CardTitle>
             <CardDescription className="text-base text-gray-600 dark:text-gray-400">
-              請輸入電子郵件與密碼來建立帳號。
+              請輸入帳號（可為學號）、顯示名稱與密碼。
             </CardDescription>
           </CardHeader>
 
@@ -38,17 +38,35 @@ export default function Page() {
                 htmlFor="email"
                 className="text-gray-700 dark:text-gray-300"
               >
-                電子郵件
+                帳號（學號）
               </Label>
               <Input
                 id="email"
                 name="email"
-                type="email"
-                placeholder="例如：student@example.com"
+                type="text"
+                autoComplete="username"
+                placeholder="例如：114524020"
                 required
                 className="border-gray-300 dark:border-gray-600"
               />
               <FieldError state={state} field="email" />
+            </div>
+
+            <div className="grid gap-3">
+              <Label
+                htmlFor="display_name"
+                className="text-gray-700 dark:text-gray-300"
+              >
+                顯示名稱（選填）
+              </Label>
+              <Input
+                id="display_name"
+                name="display_name"
+                type="text"
+                placeholder="例如：邱振凱（登入後顯示為「邱振凱 同學」）"
+                className="border-gray-300 dark:border-gray-600"
+              />
+              <FieldError state={state} field="display_name" />
             </div>
 
             <div className="grid gap-3">
