@@ -1,10 +1,21 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
 from fastapi_users import schemas
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+
+
+def json_dt_utc_z(dt: datetime | None) -> str | None:
+    """將 DB 常見的 naive UTC（或已帶時區）轉成 ISO 字串並附 Z，避免前端把無時區字串誤當本地時間。"""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat().replace("+00:00", "Z")
 
 
 # ----------------------------
@@ -238,6 +249,10 @@ class TeacherStudentRow(BaseModel):
     feedback_ok_count: int = 0
     feedback_ok_stages: int = 0   # # of stages with ≥1 ok=true event
 
+    @field_serializer("last_activity_at")
+    def _ser_last_activity_at_row(self, v: datetime | None) -> str | None:
+        return json_dt_utc_z(v)
+
 
 class TeacherClassOverview(BaseModel):
     class_id: UUID
@@ -269,6 +284,10 @@ class TeacherStudentSummary(BaseModel):
     feedback_click_count: int = 0
     feedback_ok_count: int = 0
     feedback_ok_stages: int = 0
+
+    @field_serializer("last_activity_at")
+    def _ser_last_activity_at_summary(self, v: datetime | None) -> str | None:
+        return json_dt_utc_z(v)
 
 
 class PostTestScoreUpsert(BaseModel):

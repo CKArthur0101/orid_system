@@ -134,6 +134,19 @@ function formatFastApiDetail(body: unknown): string {
   return "";
 }
 
+/**
+ * 最後活動時間：後端存 UTC（常為無時區字串）。無 Z／無 ±offset 時依 ISO 慣例視為 UTC 再轉成本機顯示，避免與工作列差 8 小時。
+ */
+function formatLastActivityLocal(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const s = String(iso).trim();
+  const hasExplicitTz = /Z$/i.test(s) || /[+-]\d{2}:?\d{2}$/.test(s);
+  const forParser = hasExplicitTz ? s : s.includes("T") ? `${s}Z` : s;
+  const d = new Date(forParser);
+  if (Number.isNaN(d.getTime())) return s;
+  return d.toLocaleString("zh-TW");
+}
+
 /** 教師 BFF：對應 /api/teacher/csum 與 /api/teacher/cpt（Windows+Docker 新增 route 後若 404，請重啟 frontend 容器） */
 function teacherClassStudentQs(classId: string, studentId: string, week: number) {
   return new URLSearchParams({
@@ -725,9 +738,7 @@ export default function TeacherDashboardPage() {
                       <div>
                         <p className="text-base font-medium">最後活動</p>
                         <p className="text-base text-muted-foreground">
-                          {studentDetail.last_activity_at
-                            ? new Date(studentDetail.last_activity_at).toLocaleString("zh-TW")
-                            : "尚無紀錄"}
+                          {formatLastActivityLocal(studentDetail.last_activity_at) ?? "尚無紀錄"}
                         </p>
                       </div>
                     </CardContent>
