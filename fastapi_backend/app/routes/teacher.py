@@ -25,6 +25,7 @@ from app.models import (
     OridPostTestScore,
 )
 from app.schemas import (
+    OridMessageRead,
     TeacherClassRead,
     TeacherClassOverview,
     TeacherStudentRow,
@@ -532,6 +533,45 @@ async def teacher_student_summary(
         feedback_ok_count=feedback_ok_count,
         feedback_ok_stages=feedback_ok_stages,
     )
+
+
+@router.get(
+    "/classes/{class_id}/students/{student_id}/chat-messages",
+    response_model=list[OridMessageRead],
+)
+async def teacher_student_chat_messages(
+    class_id: UUID,
+    student_id: UUID,
+    week: int = Query(1, ge=1, le=6),
+    limit: int = Query(500, ge=1, le=2000),
+    db: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_active_user),
+):
+    """該週與個人摘要相同的 ORID session 之寫作教練對話紀錄（依時間正序）。"""
+    class_ids = await _get_allowed_class_ids(db, user)
+    if class_id not in class_ids:
+        raise HTTPException(status_code=403, detail="Class not assigned")
+
+    member = await db.execute(
+        select(StudentClassMembership).where(
+            StudentClassMembership.class_id == class_id,
+            StudentClassMembership.student_id == student_id,
+        )
+    )
+    if not member.scalars().first():
+        raise HTTPException(status_code=404, detail="Student not in class")
+
+    session = await _latest_orid_session_for_student_week(db, student_id, week)
+    if not session:
+        return []
+
+    res = await db.execute(
+        select(OridChatMessage)
+        .where(OridChatMessage.session_id == session.id)
+        .order_by(OridChatMessage.created_at.asc())
+        .limit(limit)
+    )
+    return res.scalars().all()
 
 
 # ── Post-test score endpoints ────────────────────────────────────────────────

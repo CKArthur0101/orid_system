@@ -224,6 +224,10 @@ class OridMessageRead(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    @field_serializer("created_at")
+    def _ser_orid_msg_created_at(self, v: datetime) -> str:
+        return json_dt_utc_z(v) or ""
+
 
 class TeacherClassRead(BaseModel):
     id: UUID

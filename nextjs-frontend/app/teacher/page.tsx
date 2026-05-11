@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   Users,
   Activity,
@@ -71,6 +71,15 @@ type StudentSummary = {
   feedback_click_count: number;
   feedback_ok_count: number;
   feedback_ok_stages: number;
+};
+
+type OridChatLogRow = {
+  id: string;
+  session_id: string;
+  stage: string;
+  sender: string;
+  text: string;
+  created_at: string;
 };
 
 type PostTestScore = {
@@ -184,6 +193,14 @@ export default function TeacherDashboardPage() {
   const [ptSaving, setPtSaving] = useState(false);
   const [writingRubric, setWritingRubric] = useState<WritingRubric>(null);
   const [rubricOpen, setRubricOpen] = useState(false);
+  const [trackingRightTab, setTrackingRightTab] = useState<"data" | "records">("data");
+  const [chatMessages, setChatMessages] = useState<OridChatLogRow[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [recordsCardHeight, setRecordsCardHeight] = useState<number | null>(null);
+  const leftTrackingColumnRef = useRef<HTMLDivElement | null>(null);
+  const rightTrackingTabsRef = useRef<HTMLDivElement | null>(null);
+  const recordsHeaderRef = useRef<HTMLDivElement | null>(null);
 
   // On mount: fetch classes then immediately fetch overview with the first class
   useEffect(() => {
@@ -303,6 +320,49 @@ export default function TeacherDashboardPage() {
     })();
   }, [classId, selectedStudentId, week]);
 
+  useEffect(() => {
+    setTrackingRightTab("data");
+  }, [selectedStudentId, week]);
+
+  useEffect(() => {
+    if (!classId || !selectedStudentId || trackingRightTab !== "records") {
+      if (trackingRightTab !== "records") {
+        setChatMessages([]);
+        setChatError(null);
+        setChatLoading(false);
+      }
+      return;
+    }
+    const ac = new AbortController();
+    setChatLoading(true);
+    setChatError(null);
+    setChatMessages([]);
+    void (async () => {
+      try {
+        const qs = teacherClassStudentQs(classId, selectedStudentId, week);
+        const res = await fetch(`/api/teacher/cchat?${qs}`, {
+          cache: "no-store",
+          signal: ac.signal,
+        });
+        if (!res.ok) {
+          const raw = await res.json().catch(() => null);
+          setChatError(formatFastApiDetail(raw) || `HTTP ${res.status}`);
+          setChatMessages([]);
+          return;
+        }
+        const data: unknown = await res.json().catch(() => []);
+        setChatMessages(Array.isArray(data) ? (data as OridChatLogRow[]) : []);
+      } catch {
+        if (ac.signal.aborted) return;
+        setChatError("無法載入對話紀錄");
+        setChatMessages([]);
+      } finally {
+        if (!ac.signal.aborted) setChatLoading(false);
+      }
+    })();
+    return () => ac.abort();
+  }, [classId, selectedStudentId, week, trackingRightTab]);
+
   const handleExport = useCallback(async () => {
     const res = await fetch(`/api/teacher/classes/${classId}/export?week=${week}`);
     if (!res.ok) return;
@@ -361,6 +421,70 @@ export default function TeacherDashboardPage() {
   const denom = Math.max(classTotal, 1);
   const className = classes.find((c) => c.id === classId)?.name ?? "";
   const selectedStudent = overview?.students?.find((s) => s.student_id === selectedStudentId);
+  const trackingStudentSelect = (
+    <div className="flex flex-wrap items-center gap-4">
+      <span className="text-base font-medium text-slate-600">選擇學生：</span>
+      <Select
+        value={selectedStudentId ? selectedStudentId : undefined}
+        onValueChange={setSelectedStudentId}
+      >
+        <SelectTrigger className="w-[280px] bg-white">
+          <SelectValue placeholder="選擇學生" />
+        </SelectTrigger>
+        <SelectContent>
+          {(overview?.students ?? []).map((s) => (
+            <SelectItem key={s.student_id} value={s.student_id}>
+              {studentLabel(s)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+
+  useEffect(() => {
+    if (!studentDetail) {
+      setRecordsCardHeight(null);
+      return;
+    }
+
+    const syncRecordsCardHeight = () => {
+      if (typeof window === "undefined" || window.innerWidth < 1024) {
+        setRecordsCardHeight(null);
+        return;
+      }
+      const leftEl = leftTrackingColumnRef.current;
+      const tabsEl = rightTrackingTabsRef.current;
+      if (!leftEl || !tabsEl) {
+        setRecordsCardHeight(null);
+        return;
+      }
+      const gapPx = 16; // 對應 gap-4
+      const headerPx =
+        trackingRightTab === "records" && recordsHeaderRef.current
+          ? Math.round(recordsHeaderRef.current.getBoundingClientRect().height)
+          : 0;
+      const next = Math.max(
+        220,
+        Math.round(
+          leftEl.getBoundingClientRect().height - tabsEl.getBoundingClientRect().height - gapPx - headerPx,
+        ),
+      );
+      setRecordsCardHeight(next);
+    };
+
+    syncRecordsCardHeight();
+    window.addEventListener("resize", syncRecordsCardHeight);
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(syncRecordsCardHeight) : null;
+    if (ro) {
+      if (leftTrackingColumnRef.current) ro.observe(leftTrackingColumnRef.current);
+      if (rightTrackingTabsRef.current) ro.observe(rightTrackingTabsRef.current);
+    }
+    return () => {
+      window.removeEventListener("resize", syncRecordsCardHeight);
+      ro?.disconnect();
+    };
+  }, [studentDetail, selectedStudentId, week, trackingRightTab]);
 
   return (
     <div className="mx-auto max-w-[1400px] p-6">
@@ -578,34 +702,17 @@ export default function TeacherDashboardPage() {
           </TabsContent>
 
           {/* ===== TAB: 個人追蹤 ===== */}
-          <TabsContent value="tracking" className="space-y-6">
-            <div className="flex flex-wrap items-center gap-4">
-              <span className="text-base font-medium text-slate-600">選擇學生：</span>
-              <Select
-                value={selectedStudentId ? selectedStudentId : undefined}
-                onValueChange={setSelectedStudentId}
-              >
-                <SelectTrigger className="w-[280px] bg-white">
-                  <SelectValue placeholder="選擇學生" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(overview?.students ?? []).map((s) => (
-                    <SelectItem key={s.student_id} value={s.student_id}>
-                      {studentLabel(s)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
+          <TabsContent value="tracking" className="space-y-4">
+            {!studentDetail ? trackingStudentSelect : null}
             {selectedStudentId && detailLoading ? (
               <div className="flex h-48 items-center justify-center text-muted-foreground">
                 載入個人資料中…
               </div>
             ) : studentDetail ? (
-              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:items-start">
                 {/* Left: ORID completion + feedback analytics */}
-                <div className="space-y-4">
+                <div ref={leftTrackingColumnRef} className="space-y-4">
+                  {trackingStudentSelect}
                   <Card>
                     <CardHeader className="pb-3">
                       <CardTitle className="text-base">ORID 完成狀態</CardTitle>
@@ -703,8 +810,40 @@ export default function TeacherDashboardPage() {
                   </Card>
                 </div>
 
-                {/* Right: Stats + post-test + teaching tips */}
-                <div className="space-y-4">
+                {/* Right: 數據／紀錄切換 + 統計或對話 thread */}
+                <div className="flex min-h-0 flex-col gap-4 lg:pt-[1px]">
+                  <div
+                    ref={rightTrackingTabsRef}
+                    className="flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 text-sm font-medium text-slate-600 shadow-sm"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setTrackingRightTab("data")}
+                      className={[
+                        "flex-1 rounded-md py-1.5 transition",
+                        trackingRightTab === "data"
+                          ? "bg-white text-slate-900 shadow-sm"
+                          : "hover:text-slate-900",
+                      ].join(" ")}
+                    >
+                      數據
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTrackingRightTab("records")}
+                      className={[
+                        "flex-1 rounded-md py-1.5 transition",
+                        trackingRightTab === "records"
+                          ? "bg-white text-slate-900 shadow-sm"
+                          : "hover:text-slate-900",
+                      ].join(" ")}
+                    >
+                      紀錄
+                    </button>
+                  </div>
+
+                  {trackingRightTab === "data" ? (
+                    <>
                   <div className="grid grid-cols-2 gap-4">
                     <Card>
                       <CardContent className="flex items-center gap-3 p-4">
@@ -844,6 +983,91 @@ export default function TeacherDashboardPage() {
                       <TeachingTips student={studentDetail} selectedStudent={selectedStudent} />
                     </CardContent>
                   </Card>
+                    </>
+                  ) : (
+                    <Card className="overflow-hidden">
+                      <CardHeader ref={recordsHeaderRef} className="pb-2 pt-4">
+                        <CardTitle className="text-base">對話紀錄</CardTitle>
+                        <p className="text-xs font-normal text-muted-foreground">
+                          {studentLabel(studentDetail)} · 第 {studentDetail.week} 週寫作教練（與學生端同一對話序）
+                        </p>
+                      </CardHeader>
+                      <CardContent className="p-0">
+                        {chatLoading ? (
+                          <div
+                            className="flex items-center justify-center text-sm text-muted-foreground"
+                            style={recordsCardHeight ? { height: `${recordsCardHeight}px` } : undefined}
+                          >
+                            載入對話中…
+                          </div>
+                        ) : chatError ? (
+                          <div
+                            className="overflow-y-auto bg-amber-50 p-4 text-sm text-amber-800"
+                            style={recordsCardHeight ? { height: `${recordsCardHeight}px` } : undefined}
+                          >
+                            {chatError}
+                          </div>
+                        ) : chatMessages.length === 0 ? (
+                          <div
+                            className="flex items-center justify-center px-4 text-center text-sm text-muted-foreground"
+                            style={recordsCardHeight ? { height: `${recordsCardHeight}px` } : undefined}
+                          >
+                            此週尚無對話紀錄，或學生尚未建立該週 session。
+                          </div>
+                        ) : (
+                          <div
+                            className="space-y-3 overflow-y-scroll border-t border-slate-100 bg-slate-50/80 px-3 py-3"
+                            style={{
+                              ...(recordsCardHeight ? { height: `${recordsCardHeight}px` } : {}),
+                              scrollbarGutter: "stable",
+                            }}
+                          >
+                            {chatMessages.map((m) => {
+                              const isStudent = m.sender === "student";
+                              const stageTag = STAGE_LABELS[m.stage] ?? m.stage;
+                              const who = isStudent ? "學生" : "AI 教練";
+                              const timeStr = formatLastActivityLocal(m.created_at) ?? "";
+                              return (
+                                <div
+                                  key={m.id}
+                                  className={["flex w-full", isStudent ? "justify-end" : "justify-start"].join(" ")}
+                                >
+                                  <div
+                                    className={[
+                                      "max-w-[min(92%,28rem)] rounded-2xl px-3 py-2 text-sm shadow-sm",
+                                      isStudent
+                                        ? "bg-sky-600 text-white"
+                                        : "border border-slate-200 bg-white text-slate-800",
+                                    ].join(" ")}
+                                  >
+                                    <div
+                                      className={[
+                                        "mb-1 flex flex-wrap items-center gap-2 text-[11px] font-medium",
+                                        isStudent ? "text-sky-100" : "text-muted-foreground",
+                                      ].join(" ")}
+                                    >
+                                      <span
+                                        className="rounded-full px-1.5 py-0.5"
+                                        style={{
+                                          backgroundColor: isStudent ? "rgba(255,255,255,0.2)" : STAGE_COLORS[m.stage] ?? "#94a3b8",
+                                          color: isStudent ? "#fff" : "#fff",
+                                        }}
+                                      >
+                                        {stageTag}
+                                      </span>
+                                      <span>{who}</span>
+                                      {timeStr ? <span className="opacity-80">{timeStr}</span> : null}
+                                    </div>
+                                    <p className="whitespace-pre-wrap break-words leading-relaxed">{m.text}</p>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  )}
                 </div>
               </div>
             ) : selectedStudentId ? (

@@ -1650,6 +1650,93 @@
         }
       }
     },
+    "/teacher/classes/{class_id}/students/{student_id}/chat-messages": {
+      "get": {
+        "tags": [
+          "teacher"
+        ],
+        "summary": "Teacher Student Chat Messages",
+        "description": "\u8a72\u9031\u8207\u500b\u4eba\u6458\u8981\u76f8\u540c\u7684 ORID session \u4e4b\u5beb\u4f5c\u6559\u7df4\u5c0d\u8a71\u7d00\u9304\uff08\u4f9d\u6642\u9593\u6b63\u5e8f\uff09\u3002",
+        "operationId": "teacher_student_chat_messages",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "class_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Class Id"
+            }
+          },
+          {
+            "name": "student_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Student Id"
+            }
+          },
+          {
+            "name": "week",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 6,
+              "minimum": 1,
+              "default": 1,
+              "title": "Week"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 2000,
+              "minimum": 1,
+              "default": 500,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OridMessageRead"
+                  },
+                  "title": "Response Teacher-Teacher Student Chat Messages"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/teacher/classes/{class_id}/students/{student_id}/post-test": {
       "get": {
         "tags": [
@@ -2137,7 +2224,6 @@
           },
           "created_at": {
             "type": "string",
-            "format": "date-time",
             "title": "Created At"
           }
         },
