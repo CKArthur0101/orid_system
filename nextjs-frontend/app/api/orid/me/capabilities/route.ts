@@ -20,6 +20,9 @@ export async function GET(req: Request) {
   try {
     return NextResponse.json(JSON.parse(text), { status: r.status });
   } catch {
-    return NextResponse.json({ detail: text || "capabilities failed" }, { status: r.status });
+    return NextResponse.json(
+      { detail: r.ok ? "服務回應格式錯誤。" : "服務暫時無法處理請求，請稍後再試。" },
+      { status: r.ok ? 502 : r.status },
+    );
   }
 }

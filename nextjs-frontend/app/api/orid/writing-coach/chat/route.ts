@@ -11,7 +11,10 @@ function jsonOrDetailResponse(status: number, text: string) {
   try {
     return NextResponse.json(JSON.parse(text), { status });
   } catch {
-    return NextResponse.json({ detail: text || `writing-coach chat failed (${status})` }, { status });
+    return NextResponse.json(
+      { detail: status >= 500 ? "服務暫時無法處理請求，請稍後再試。" : "請求失敗。" },
+      { status },
+    );
   }
 }
 

@@ -1,5 +1,6 @@
 import os
 import re
+import logging
 from typing import Tuple
 from openai import AsyncOpenAI
 
@@ -21,6 +22,7 @@ LOCAL_ATTACK_PATTERNS = [
 # ==========================================
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+logger = logging.getLogger(__name__)
 
 
 def _normalize_text(text: str) -> str:
@@ -73,8 +75,8 @@ async def check_safety(text: str) -> Tuple[bool, str]:
                 elif "sexual" in flagged_cats or "sexual_minors" in flagged_cats:
                     reason = "涉及不當性暗示內容"
                 return True, reason
-        except Exception as e:
+        except Exception:
             # 教學現場採 fail-open，避免 moderation 短暫失敗就整段流程中斷
-            print(f"[Safety Warning] OpenAI Moderation API failed: {e}")
+            logger.warning("OpenAI moderation failed; continuing with local safety only")
 
     return False, ""

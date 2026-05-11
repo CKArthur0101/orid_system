@@ -15,10 +15,14 @@ function normalizeUuid(s: string) {
 }
 
 function passthrough(r: Response, text: string) {
-  return new NextResponse(text, {
-    status: r.status,
-    headers: { "Content-Type": r.headers.get("content-type") ?? "application/json" },
-  });
+  try {
+    return NextResponse.json(JSON.parse(text), { status: r.status });
+  } catch {
+    return NextResponse.json(
+      { detail: r.ok ? "服務回應格式錯誤。" : "服務暫時無法處理請求，請稍後再試。" },
+      { status: r.ok ? 502 : r.status },
+    );
+  }
 }
 
 export async function GET(req: Request) {
@@ -75,7 +79,7 @@ export async function PUT(req: Request) {
   const content: unknown = json?.content;
 
   if (!writingId) return NextResponse.json({ detail: "missing writing id" }, { status: 422 });
-  if (!UUID_RE.test(writingId)) return NextResponse.json({ detail: `invalid writing id: ${rawWritingId}` }, { status: 422 });
+  if (!UUID_RE.test(writingId)) return NextResponse.json({ detail: "invalid writing id" }, { status: 422 });
   if (typeof content !== "string") return NextResponse.json({ detail: "missing content" }, { status: 422 });
 
   const headers = {

@@ -51,13 +51,6 @@ export async function PUT(
       },
     });
   } catch (err: any) {
-    return NextResponse.json(
-      {
-        detail: `route /api/orid/writings/[writing_id] PUT crashed: ${
-          err?.message ?? String(err)
-        }`,
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({ detail: "服務暫時無法處理請求，請稍後再試。" }, { status: 500 });
   }
 }

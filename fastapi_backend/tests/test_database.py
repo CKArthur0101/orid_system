@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, AsyncEngine
 from fastapi_users.db import SQLAlchemyUserDatabase
 
 from app.database import (
+    _build_async_database_url,
     async_session_maker,
     create_db_and_tables,
     get_async_session,
@@ -99,6 +100,16 @@ def test_engine_creation(mocker):
 
     # Verify session maker is configured
     assert async_session_maker.kw["expire_on_commit"] is False
+
+
+def test_build_async_database_url_preserves_query_params():
+    raw = "postgresql://user:pass@db.example.com:6543/postgres?sslmode=require&pgbouncer=true"
+    normalized = _build_async_database_url(raw)
+
+    assert normalized.startswith("postgresql+asyncpg://user:")
+    assert "@db.example.com:6543/postgres" in normalized
+    assert "sslmode=require" in normalized
+    assert "pgbouncer=true" in normalized
 
 
 @pytest.mark.asyncio

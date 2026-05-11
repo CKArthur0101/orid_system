@@ -21,10 +21,14 @@ function forwardHeaders(req: NextRequest) {
 }
 
 function passthrough(r: Response, text: string) {
-  return new NextResponse(text, {
-    status: r.status,
-    headers: { "Content-Type": r.headers.get("content-type") ?? "application/json" },
-  });
+  try {
+    return NextResponse.json(JSON.parse(text), { status: r.status });
+  } catch {
+    return NextResponse.json(
+      { detail: r.ok ? "服務回應格式錯誤。" : "服務暫時無法處理請求，請稍後再試。" },
+      { status: r.ok ? 502 : r.status },
+    );
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -44,9 +48,6 @@ export async function POST(req: NextRequest) {
     const text = await r.text();
     return passthrough(r, text);
   } catch (err: any) {
-    return NextResponse.json(
-      { detail: `route /api/orid/writings/assist POST crashed: ${err?.message ?? String(err)}` },
-      { status: 500 }
-    );
+    return NextResponse.json({ detail: "服務暫時無法處理請求，請稍後再試。" }, { status: 500 });
   }
 }

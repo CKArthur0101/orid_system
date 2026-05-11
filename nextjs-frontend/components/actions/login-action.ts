@@ -9,8 +9,9 @@ import { getErrorMessage } from "@/lib/utils";
 
 const API_BASE_URL = process.env.API_BASE_URL ?? "http://backend:8000";
 
-/** Long-lived login: keep until manual logout (practically long max-age). */
-const ACCESS_TOKEN_COOKIE_MAX_AGE_SEC = 60 * 60 * 24 * 365;
+const ACCESS_TOKEN_COOKIE_MAX_AGE_SEC = Number(
+  process.env.ACCESS_TOKEN_COOKIE_MAX_AGE_SEC ?? 60 * 60 * 12,
+);
 
 export async function login(prevState: unknown, formData: FormData) {
   const validatedFields = loginSchema.safeParse({
@@ -63,7 +64,6 @@ export async function login(prevState: unknown, formData: FormData) {
       // role lookup failed — fall back to student dashboard
     }
   } catch (err) {
-    console.error("Login error:", err);
     return {
       server_error: "An unexpected error occurred. Please try again later.",
     };

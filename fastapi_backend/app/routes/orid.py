@@ -5,8 +5,8 @@ from typing import Optional, Any, Tuple, List, Dict
 import os
 import re
 import json
-import time
-from collections import defaultdict, deque
+import logging
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
@@ -31,6 +31,7 @@ from app.schemas import (
 )
 
 router = APIRouter(tags=["orid"])
+logger = logging.getLogger(__name__)
 
 # ----------------------------
 # Prompt bank & Checker
@@ -196,29 +197,9 @@ ORID_MAIN_FALLBACK_TEMPERATURE = float(os.getenv("ORID_MAIN_FALLBACK_TEMPERATURE
 ORID_ALLOW_HEURISTIC_PASS = _env_bool("ORID_ALLOW_HEURISTIC_PASS", False)
 ORID_ENABLE_RATE_LIMIT = _env_bool("ORID_ENABLE_RATE_LIMIT", True)
 
-_CHAT_RATE_BUCKETS: dict[str, deque[float]] = defaultdict(deque)
-
 
 def _draft_label_zh(draft: str) -> str:
     return "草稿1" if (draft or "").strip().lower() == "d1" else "草稿2"
-_STUCK_ROUNDS_BY_SESSION_STAGE: dict[str, int] = {}
-
-
-def _stuck_key(session_id: UUID, stage: str) -> str:
-    return f"{session_id}:{(stage or 'O').strip().upper()}"
-
-
-def _get_stuck_rounds(session_id: UUID, stage: str) -> int:
-    return max(0, int(_STUCK_ROUNDS_BY_SESSION_STAGE.get(_stuck_key(session_id, stage), 0)))
-
-
-def _set_stuck_rounds(session_id: UUID, stage: str, value: int) -> None:
-    key = _stuck_key(session_id, stage)
-    v = max(0, int(value))
-    if v == 0:
-        _STUCK_ROUNDS_BY_SESSION_STAGE.pop(key, None)
-    else:
-        _STUCK_ROUNDS_BY_SESSION_STAGE[key] = v
 
 
 def get_required_pass(stage: str) -> int:
@@ -245,6 +226,19 @@ def get_min_ai_turns(stage: str) -> int:
     if s == "D":
         return ORID_MIN_AI_TURNS_D
     return ORID_MIN_AI_TURNS_DEFAULT
+
+
+def _user_role(user: User) -> str:
+    return str(getattr(user, "role", "student") or "student").strip().lower()
+
+
+def _is_teacher_or_admin(user: User) -> bool:
+    return _user_role(user) in {"teacher", "admin"}
+
+
+def _require_teacher_or_admin(user: User) -> None:
+    if not _is_teacher_or_admin(user):
+        raise HTTPException(status_code=403, detail="權限不足")
 
 
 # ----------------------------
@@ -1253,17 +1247,38 @@ def _count_recent_student_streak(
     return streak
 
 
-def _allow_chat_message(user_id: str) -> bool:
+async def _allow_chat_message(db: AsyncSession, user_id: UUID) -> bool:
     if not ORID_ENABLE_RATE_LIMIT or ORID_LIMIT_PER_MINUTE <= 0:
         return True
-    now = time.time()
-    q = _CHAT_RATE_BUCKETS[user_id]
-    while q and (now - q[0] > ORID_LIMIT_WINDOW_SECONDS):
-        q.popleft()
-    if len(q) >= ORID_LIMIT_PER_MINUTE:
-        return False
-    q.append(now)
-    return True
+
+    window_start = datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=max(1, ORID_LIMIT_WINDOW_SECONDS))
+    res = await db.execute(
+        select(func.count(OridChatMessage.id))
+        .join(OridSession, OridSession.id == OridChatMessage.session_id)
+        .where(
+            OridSession.user_id == user_id,
+            OridChatMessage.sender == "student",
+            OridChatMessage.created_at >= window_start,
+        )
+    )
+    recent_count = int(res.scalar() or 0)
+    return recent_count < ORID_LIMIT_PER_MINUTE
+
+
+async def _load_recent_session_messages(
+    db: AsyncSession,
+    session_id: UUID,
+    *,
+    limit: int,
+) -> list[OridChatMessage]:
+    recent_q = (
+        select(OridChatMessage)
+        .filter(OridChatMessage.session_id == session_id)
+        .order_by(OridChatMessage.created_at.desc())
+        .limit(max(1, limit))
+    )
+    recent_res = await db.execute(recent_q)
+    return list(reversed(recent_res.scalars().all()))
 
 
 # ----------------------------
@@ -1401,8 +1416,8 @@ async def _llm_book_grounding_supported(
                 return True
             if g in {"false", "0", "no"}:
                 return False
-    except Exception as e:
-        print("[book_grounding_checker_failed]", repr(e))
+    except Exception:
+        logger.warning("book grounding checker failed")
     return None
 
 
@@ -1819,8 +1834,8 @@ async def _genai_feedback(
                 obj = getattr(parsed, "__dict__", {}) or {}
             return _feedback_from_obj(stage=stage, text=text, obj=obj)
 
-    except Exception as e:
-        print("[writing_feedback][structured_parse_failed]", repr(e))
+    except Exception:
+        logger.warning("writing feedback structured parse failed")
         msg = str(e)
         if "LengthFinishReasonError" in msg or "length limit was reached" in msg:
             structured_length_limited = True
@@ -1845,8 +1860,8 @@ async def _genai_feedback(
                     else:
                         obj2 = getattr(parsed2, "__dict__", {}) or {}
                     return _feedback_from_obj(stage=stage, text=text, obj=obj2)
-            except Exception as e2:
-                print("[writing_feedback][structured_parse_retry_failed]", repr(e2))
+            except Exception:
+                logger.warning("writing feedback structured parse retry failed")
 
     try:
         manual_max = ORID_FEEDBACK_MAX_COMPLETION_TOKENS
@@ -1864,8 +1879,8 @@ async def _genai_feedback(
         obj = _extract_json_object(raw)
         if obj:
             return _feedback_from_obj(stage=stage, text=text, obj=obj)
-    except Exception as e:
-        print("[writing_feedback][manual_json_failed]", repr(e))
+    except Exception:
+        logger.warning("writing feedback manual json parse failed")
 
     ok2, miss2, sug2, ex2, pr2 = _control_feedback(stage, text)
     return ok2, miss2, sug2, ex2, None, pr2, {}
@@ -1918,8 +1933,8 @@ async def _maybe_advance_stage(
             )
         )
         ok_count = int(res.scalar() or 0)
-    except Exception as exc:
-        print("[advance_stage_count_failed]", repr(exc))
+    except Exception:
+        logger.warning("advance stage count failed")
         return False
 
     if ok_count >= required:
@@ -1928,22 +1943,19 @@ async def _maybe_advance_stage(
             live_session.current_stage = new_stage
             try:
                 await db.commit()
-                print(
-                    "[stage_advanced]",
-                    json.dumps(
-                        {
-                            "session_id": str(session_id),
-                            "from": stage,
-                            "to": new_stage,
-                            "ok_count": ok_count,
-                            "required": required,
-                        },
-                        ensure_ascii=False,
-                    ),
+                logger.info(
+                    "stage advanced",
+                    extra={
+                        "session_id": str(session_id),
+                        "from_stage": stage,
+                        "to_stage": new_stage,
+                        "ok_count": ok_count,
+                        "required": required,
+                    },
                 )
                 return True
-            except Exception as exc:
-                print("[advance_stage_commit_failed]", repr(exc))
+            except Exception:
+                logger.warning("advance stage commit failed")
                 try:
                     await db.rollback()
                 except Exception:
@@ -2002,8 +2014,8 @@ async def _try_dual_write_feedback(
         )
         db.add(event)
         await db.commit()
-    except Exception as exc:
-        print("[dual_write_feedback_failed]", repr(exc))
+    except Exception:
+        logger.warning("dual write feedback failed")
         try:
             await db.rollback()
         except Exception:
@@ -2025,6 +2037,7 @@ async def create_reading(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
+    _require_teacher_or_admin(user)
     reading = Reading(**data.model_dump())
     db.add(reading)
     await db.commit()
@@ -2201,7 +2214,21 @@ async def writing_coach_chat(
     if source not in ("feedback_button", "synthesis_feedback") and not body:
         raise HTTPException(status_code=400, detail="student_text is empty")
 
-    if not _allow_chat_message(str(user.id)):
+    if body and _is_meta_or_injection_text(body):
+        raise HTTPException(
+            status_code=400,
+            detail="這段內容看起來像是在要求系統忽略規則，請直接描述你的想法或作文內容。",
+        )
+
+    if body:
+        unsafe, unsafe_reason = await check_safety(body)
+        if unsafe:
+            raise HTTPException(
+                status_code=400,
+                detail=f"這段內容目前不適合送出：{unsafe_reason}。請改成尊重、安全的說法後再試一次。",
+            )
+
+    if not await _allow_chat_message(db, user.id):
         msg = "請慢一點，我們一次說一個重點。"
         db.add(OridChatMessage(session_id=session.id, stage=stage_ctx, sender="ai", text=msg))
         await db.commit()
@@ -2222,12 +2249,11 @@ async def writing_coach_chat(
     db.add(OridChatMessage(session_id=session.id, stage=stage_ctx, sender="student", text=display_student))
     await db.commit()
 
-    q = await db.execute(
-        select(OridChatMessage)
-        .filter(OridChatMessage.session_id == session.id)
-        .order_by(OridChatMessage.created_at.asc())
+    msgs = await _load_recent_session_messages(
+        db,
+        session.id,
+        limit=max(ORID_HISTORY_LIMIT + 12, 24),
     )
-    msgs = list(q.scalars().all())
 
     condition = normalize_orid_condition(session.condition, default=DEFAULT_ORID_CONDITION)
     fb_ok: Optional[bool] = None
@@ -2424,17 +2450,14 @@ async def writing_coach_chat(
     db.add(OridChatMessage(session_id=session.id, stage=stage_ctx, sender="ai", text=ai_reply.strip()))
     await db.commit()
 
-    print(
-        "[writing_coach_chat]",
-        json.dumps(
-            {
-                "session_id": str(session.id),
-                "stage": stage_ctx,
-                "source": source,
-                "condition": condition,
-            },
-            ensure_ascii=False,
-        ),
+    logger.info(
+        "writing_coach_chat completed",
+        extra={
+            "session_id": str(session.id),
+            "stage": stage_ctx,
+            "source": source,
+            "condition": condition,
+        },
     )
 
     coach_meta.update(
@@ -2476,12 +2499,7 @@ async def writing_assist(
     reading = rr.scalars().first()
     book_pack = load_book_pack_from_reading(reading)
 
-    q = await db.execute(
-        select(OridChatMessage)
-        .filter(OridChatMessage.session_id == session.id)
-        .order_by(OridChatMessage.created_at.asc())
-    )
-    msgs = q.scalars().all()
+    msgs = await _load_recent_session_messages(db, session.id, limit=24)
 
     if (data.context_draft or "").strip():
         stage_history = [f"學生目前在此段的草稿：\n{(data.context_draft or '').strip()[:1500]}"]

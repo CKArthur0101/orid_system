@@ -585,17 +585,10 @@ export default function WeekBookPage() {
     });
   }, [seededInitial, readingContentReady, bookPack]);
 
-  async function reloadChatHistorySafely(activeSessionId: string) {
-    const res = await fetch(`/api/orid/messages?session_id=${activeSessionId}&order=asc&limit=200`, {
-      method: "GET",
-      cache: "no-store",
-    });
-    if (!res.ok) return;
-    const list = await res.json().catch(() => []);
-    const mapped: ChatMsg[] = Array.isArray(list)
-      ? list.map(toChatMsg).filter((x): x is ChatMsg => x !== null)
-      : [];
-    if (mapped.length) setMessages(mapped);
+  function appendAiReply(text: unknown) {
+    const reply = String(text ?? "").trim();
+    if (!reply) return;
+    setMessages((prev) => [...prev, { role: "ai", text: reply }]);
   }
 
   async function runFeedback(stage: StageKey) {
@@ -634,6 +627,7 @@ export default function WeekBookPage() {
       if (!r.ok) throw new Error(formatApiError(r.status, raw, "回饋失敗"));
 
       const data = raw ? JSON.parse(raw) : {};
+      appendAiReply(data?.ai_reply);
       const outStage = coerceStageKey(data?.stage, stage);
       const outDraft: DraftKey = normalizeDraftKey(data?.meta?.draft ?? data?.draft, draft);
 
@@ -667,7 +661,6 @@ export default function WeekBookPage() {
 
       const savedId = String(data?.meta?.saved_to_writing_id ?? "");
       if (isUuid(savedId)) setWritingId(savedId);
-      await reloadChatHistorySafely(sessionId);
     } catch (e: any) {
       setFbError(e?.message ?? "回饋失敗");
     } finally {
@@ -714,9 +707,9 @@ export default function WeekBookPage() {
       if (!r.ok) throw new Error(formatApiError(r.status, raw, "整合回饋失敗"));
 
       const data = raw ? JSON.parse(raw) : {};
+      appendAiReply(data?.ai_reply);
       const savedId = String(data?.meta?.saved_to_writing_id ?? "");
       if (isUuid(savedId)) setWritingId(savedId);
-      await reloadChatHistorySafely(sessionId);
     } catch (e: any) {
       setFbError(e?.message ?? "整合回饋失敗");
     } finally {

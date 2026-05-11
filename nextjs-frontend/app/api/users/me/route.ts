@@ -30,14 +30,14 @@ export async function GET(req: Request) {
     try {
       return NextResponse.json(JSON.parse(text), { status: r.status });
     } catch {
-      return NextResponse.json({ detail: text || "me failed" }, { status: r.status });
+      return NextResponse.json({ detail: "服務暫時無法處理請求，請稍後再試。" }, { status: r.status });
     }
   }
   let user: Record<string, unknown> = {};
   try {
     user = text ? JSON.parse(text) : {};
   } catch {
-    return NextResponse.json({ detail: "Invalid JSON from backend" }, { status: 502 });
+    return NextResponse.json({ detail: "服務回應格式錯誤。" }, { status: 502 });
   }
   const allow = parseForceNewAllowlist();
   const email = String(user?.email ?? "")

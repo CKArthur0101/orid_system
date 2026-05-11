@@ -11,13 +11,18 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     TEST_DATABASE_URL: str | None = None
     EXPIRE_ON_COMMIT: bool = False
+    DB_DISABLE_POOLING: bool = False
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_TIMEOUT_SEC: int = 30
+    DB_POOL_RECYCLE_SEC: int = 1800
 
     # User
     ACCESS_SECRET_KEY: str
     RESET_PASSWORD_SECRET_KEY: str
     VERIFICATION_SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_SECONDS: int = 60 * 60 * 24 * 365
+    ACCESS_TOKEN_EXPIRE_SECONDS: int = 60 * 60 * 12
 
     # Email
     MAIL_USERNAME: str | None = None

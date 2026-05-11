@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Text, func, String, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, Text, func, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy.orm import DeclarativeBase
@@ -41,9 +41,12 @@ class Reading(Base):
 
 class OridSession(Base):
     __tablename__ = "orid_sessions"
+    __table_args__ = (
+        Index("ix_orid_sessions_user_book_unit_created_at", "user_id", "book_unit", "created_at"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False, index=True)
     reading_id = Column(UUID(as_uuid=True), ForeignKey("readings.id"), nullable=False)
 
     # ✅ OpenAI Assistants thread id（每個 session 綁一個 thread）
@@ -65,9 +68,12 @@ class OridSession(Base):
 
 class OridChatMessage(Base):
     __tablename__ = "orid_chat_messages"
+    __table_args__ = (
+        Index("ix_orid_chat_messages_session_created_at", "session_id", "created_at"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    session_id = Column(UUID(as_uuid=True), ForeignKey("orid_sessions.id"), nullable=False)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("orid_sessions.id"), nullable=False, index=True)
 
     stage = Column(String, nullable=False)    # O/R/I/D
     sender = Column(String, nullable=False)   # "student" / "ai"
@@ -84,6 +90,7 @@ class OridWeekSubmission(Base):
     __tablename__ = "orid_week_submissions"
     __table_args__ = (
         UniqueConstraint("user_id", "session_id", "week", name="uq_orid_week_submissions_user_session_week"),
+        Index("ix_orid_week_submissions_user_week_session", "user_id", "week", "session_id"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -109,7 +116,10 @@ class ClassRoom(Base):
 
 class StudentClassMembership(Base):
     __tablename__ = "student_class_memberships"
-    __table_args__ = (UniqueConstraint("student_id", "class_id", name="uq_student_class_membership"),)
+    __table_args__ = (
+        UniqueConstraint("student_id", "class_id", name="uq_student_class_membership"),
+        Index("ix_student_class_memberships_class_student", "class_id", "student_id"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     student_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
@@ -153,6 +163,9 @@ class OridFeedbackEvent(Base):
     """One row per feedback result linked to an attempt."""
 
     __tablename__ = "orid_feedback_events"
+    __table_args__ = (
+        Index("ix_orid_feedback_events_session_stage_created_at", "session_id", "stage", "created_at"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     attempt_id = Column(UUID(as_uuid=True), ForeignKey("orid_stage_attempts.id"), nullable=False, index=True)

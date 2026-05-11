@@ -1,5 +1,6 @@
 import uuid
 import re
+import logging
 
 from typing import Optional
 
@@ -25,6 +26,7 @@ from .models import User
 from .schemas import UserCreate
 
 AUTH_URL_PATH = "auth"
+logger = logging.getLogger(__name__)
 
 
 class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
@@ -32,7 +34,7 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     verification_token_secret = settings.VERIFICATION_SECRET_KEY
 
     async def on_after_register(self, user: User, request: Optional[Request] = None):
-        print(f"User {user.id} has registered.")
+        logger.info("User registered", extra={"user_id": str(user.id)})
 
     async def on_after_forgot_password(
         self, user: User, token: str, request: Optional[Request] = None
@@ -42,7 +44,7 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     async def on_after_request_verify(
         self, user: User, token: str, request: Optional[Request] = None
     ):
-        print(f"Verification requested for user {user.id}. Verification token: {token}")
+        logger.info("Verification requested", extra={"user_id": str(user.id)})
 
     async def validate_password(
         self,

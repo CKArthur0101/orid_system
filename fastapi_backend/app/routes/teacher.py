@@ -320,6 +320,11 @@ async def teacher_class_overview(
                 OridFeedbackEvent.user_id,
                 func.count(OridFeedbackEvent.id).label("clicks"),
                 func.sum(cast(OridFeedbackEvent.ok, Integer)).label("ok_cnt"),
+                func.count(
+                    func.distinct(
+                        case((OridFeedbackEvent.ok == True, OridFeedbackEvent.stage), else_=None)  # noqa: E712
+                    )
+                ).label("ok_stage_cnt"),
             )
             .where(OridFeedbackEvent.session_id.in_(session_ids))
             .group_by(OridFeedbackEvent.user_id)
@@ -328,20 +333,7 @@ async def teacher_class_overview(
             uid = fb_row["user_id"]
             feedback_clicks[uid] = int(fb_row["clicks"] or 0)
             feedback_ok_counts[uid] = int(fb_row["ok_cnt"] or 0)
-
-        ok_stages_res = await db.execute(
-            select(
-                OridFeedbackEvent.user_id,
-                func.count(OridFeedbackEvent.stage.distinct()).label("ok_stage_cnt"),
-            )
-            .where(
-                OridFeedbackEvent.session_id.in_(session_ids),
-                OridFeedbackEvent.ok == True,  # noqa: E712
-            )
-            .group_by(OridFeedbackEvent.user_id)
-        )
-        for os_row in ok_stages_res.mappings().all():
-            feedback_ok_stages[os_row["user_id"]] = int(os_row["ok_stage_cnt"] or 0)
+            feedback_ok_stages[uid] = int(fb_row["ok_stage_cnt"] or 0)
 
     # ── 6. 各段「曾動筆」人數（可重疊；寫齊四段者同時計入 O～D）──────────────
     stage_distribution = {"NOT_STARTED": 0, "O": 0, "R": 0, "I": 0, "D": 0}
@@ -482,32 +474,18 @@ async def teacher_student_summary(
         fb_res = await db.execute(
             select(
                 func.count(OridFeedbackEvent.id).label("clicks"),
+                func.sum(cast(OridFeedbackEvent.ok, Integer)).label("ok_cnt"),
+                func.count(
+                    func.distinct(
+                        case((OridFeedbackEvent.ok == True, OridFeedbackEvent.stage), else_=None)  # noqa: E712
+                    )
+                ).label("ok_stage_cnt"),
             ).where(OridFeedbackEvent.session_id == session.id)
         )
         fb_row = fb_res.mappings().first()
         feedback_click_count = int((fb_row["clicks"] if fb_row else None) or 0)
-
-        fb_ok_res = await db.execute(
-            select(
-                func.count(OridFeedbackEvent.id).label("ok_cnt"),
-            ).where(
-                OridFeedbackEvent.session_id == session.id,
-                OridFeedbackEvent.ok == True,  # noqa: E712
-            )
-        )
-        fb_ok_row = fb_ok_res.mappings().first()
-        feedback_ok_count = int((fb_ok_row["ok_cnt"] if fb_ok_row else None) or 0)
-
-        ok_stages_res = await db.execute(
-            select(
-                func.count(OridFeedbackEvent.stage.distinct()).label("ok_stage_cnt"),
-            ).where(
-                OridFeedbackEvent.session_id == session.id,
-                OridFeedbackEvent.ok == True,  # noqa: E712
-            )
-        )
-        os_row = ok_stages_res.mappings().first()
-        feedback_ok_stages = int((os_row["ok_stage_cnt"] if os_row else None) or 0)
+        feedback_ok_count = int((fb_row["ok_cnt"] if fb_row else None) or 0)
+        feedback_ok_stages = int((fb_row["ok_stage_cnt"] if fb_row else None) or 0)
 
         if interaction_count <= 0:
             stage = "NOT_STARTED"
