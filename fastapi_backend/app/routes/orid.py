@@ -41,33 +41,36 @@ PROMPTS_IMPORT_ERROR: Optional[str] = None
 CHECKER_OK = True
 CHECKER_IMPORT_ERROR: Optional[str] = None
 
-from app.prompts.shared import build_book_context_block
-from app.prompts.writing_feedback import build_genai_feedback_prompts
-from app.prompts.writing_assist import (
-    ASSIST_TEXT_SPLIT,
-    build_writing_d1_prompts,
-    build_writing_d2_prompts,
-)
-from app.prompts.writing_coach_chat import (
+from app.prompts.shared_parts.book_context import build_book_context_block
+from app.prompts.builders.writing_feedback import build_genai_feedback_prompts
+from app.prompts.builders.writing_assist import build_writing_d1_prompts, build_writing_d2_prompts
+from app.prompts.parsers.writing_assist import parse_writing_assist_response
+from app.prompts.builders.coach_chat import (
     build_feedback_narration_prompt,
     build_synthesis_coach_system_prompt,
     build_writing_coach_system_prompt,
+)
+from app.prompts.policy.feedback_focus import (
     detect_feedback_strength,
-    format_control_feedback_reply,
-    format_control_free_text_reply,
     normalize_feedback_focus,
 )
-from app.prompts.orid_checker import (
-    build_book_grounding_checker_prompts,
+from app.prompts.policy.control_feedback import (
+    format_control_feedback_reply,
+    format_control_free_text_reply,
+)
+from app.prompts.builders.checker import build_book_grounding_checker_prompts
+from app.prompts.policy.grounding import (
     looks_story_related_to_book,
     looks_obviously_offtopic,
     looks_likely_factual_mismatch,
     looks_likely_ungrounded_in_book,
+)
+from app.prompts.parsers.json_payloads import (
+    extract_json_object,
     parse_book_grounding_checker_json,
 )
 from app.services.safety import check_safety
 from app.services.orid_condition import normalize_orid_condition, is_control_condition
-from app.services.orid_stage import build_stage_history, decide_stage_progress, resolve_stage_thresholds
 from app.services.orid_writing_store import (
     ensure_orid_writing_obj,
     merge_synthesis_feedback_into_writing,
@@ -1343,14 +1346,8 @@ async def llm_generate_writing(
         temperature=OPENAI_TEMPERATURE,
     )
 
-    if ASSIST_TEXT_SPLIT in raw:
-        text_part, tips_part = raw.split(ASSIST_TEXT_SPLIT, 1)
-        draft_text = text_part.strip()
-        tips_lines = [x.strip() for x in tips_part.strip().splitlines() if x.strip()]
-        tips = [re.sub(r"^\s*\d+\)\s*", "", x) for x in tips_lines][:3]
-        return WritingAssistResponse(stage=stage, draft=draft, draft_text=draft_text, tips=tips)
-
-    return WritingAssistResponse(stage=stage, draft=draft, draft_text=raw.strip(), tips=[])
+    draft_text, tips = parse_writing_assist_response(raw)
+    return WritingAssistResponse(stage=stage, draft=draft, draft_text=draft_text, tips=tips)
 
 
 # ----------------------------
@@ -1682,30 +1679,6 @@ def _normalize_feedback_list(value: Any, *, max_items: int = 3) -> list[str]:
     return []
 
 
-def _extract_json_object(raw: str) -> dict[str, Any]:
-    txt = (raw or "").strip()
-    if not txt:
-        return {}
-
-    try:
-        obj = json.loads(txt)
-        if isinstance(obj, dict):
-            return obj
-    except Exception:
-        pass
-
-    m = re.search(r"\{[\s\S]*\}", txt)
-    if m:
-        try:
-            obj = json.loads(m.group(0))
-            if isinstance(obj, dict):
-                return obj
-        except Exception:
-            pass
-
-    return {}
-
-
 def _rubric_meta_from_obj(obj: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     rf = obj.get("rubric_focus")
@@ -1876,7 +1849,7 @@ async def _genai_feedback(
             max_completion_tokens=manual_max,
             temperature=OPENAI_TEMPERATURE,
         )
-        obj = _extract_json_object(raw)
+        obj = extract_json_object(raw)
         if obj:
             return _feedback_from_obj(stage=stage, text=text, obj=obj)
     except Exception:

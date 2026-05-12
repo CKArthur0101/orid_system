@@ -1,5 +1,5 @@
-from app.prompts import orid_checker
-from app.prompts.writing_coach_chat import detect_feedback_strength, normalize_feedback_focus
+from app.prompts.policy import grounding
+from app.prompts.policy.feedback_focus import detect_feedback_strength, normalize_feedback_focus
 from app.routes import orid
 
 
@@ -29,8 +29,8 @@ def test_factual_mismatch_detection_for_story_related_but_wrong_details():
         ],
         "characters": [{"name": "阿松爺爺"}, {"name": "哎喲奶奶"}, {"name": "小朋友"}],
     }
-    assert orid.looks_likely_factual_mismatch("阿松爺爺把柿子拿去做火箭燃料", book_pack) is True
-    assert orid.looks_likely_factual_mismatch("阿松爺爺把柿子藏到屋後倉庫", book_pack) is False
+    assert grounding.looks_likely_factual_mismatch("阿松爺爺把柿子拿去做火箭燃料", book_pack) is True
+    assert grounding.looks_likely_factual_mismatch("阿松爺爺把柿子藏到屋後倉庫", book_pack) is False
 
 
 def test_obviously_offtopic_catches_ktv_and_sports_tokens():
@@ -38,8 +38,8 @@ def test_obviously_offtopic_catches_ktv_and_sports_tokens():
         "book_title": "阿松爺爺的柿子樹",
         "key_events": ["阿松爺爺把柿子藏到屋後倉庫"],
     }
-    assert orid.looks_obviously_offtopic("去唱KTV", book_pack) is True
-    assert orid.looks_obviously_offtopic("WNBA", book_pack) is True
+    assert grounding.looks_obviously_offtopic("去唱KTV", book_pack) is True
+    assert grounding.looks_obviously_offtopic("WNBA", book_pack) is True
 
 def test_ungrounded_in_book_detects_fabricated_scene():
     book_pack = {
@@ -57,11 +57,11 @@ def test_ungrounded_in_book_detects_fabricated_scene():
             {"name": "小朋友"},
         ],
     }
-    assert orid_checker.looks_likely_ungrounded_in_book(
+    assert grounding.looks_likely_ungrounded_in_book(
         "看到歐雅在打籃球", book_pack, "O"
     ) is True
     assert (
-        orid_checker.looks_likely_ungrounded_in_book(
+        grounding.looks_likely_ungrounded_in_book(
             "阿松爺爺把柿子藏到屋後倉庫", book_pack, "O"
         )
         is False
@@ -83,8 +83,8 @@ def test_d_stage_real_life_plan_with_story_callback_not_ungrounded():
         "下週營養午餐時，如果有人來借衛生紙或想跟我分零食，我會先深呼吸一遍，再把『好啊可以分你一點』說出口。"
         "若心裡仍覺得小氣，我會先想一下故事裡大家一起分享的快樂臉孔，再決定怎麼做。"
     )
-    assert orid_checker.looks_likely_ungrounded_in_book(d_text, book_pack, "D") is False
-    assert orid_checker.looks_likely_ungrounded_in_book(d_text, book_pack, "O") is True
+    assert grounding.looks_likely_ungrounded_in_book(d_text, book_pack, "D") is False
+    assert grounding.looks_likely_ungrounded_in_book(d_text, book_pack, "O") is True
 
 
 def test_latin_proper_noun_in_mixed_sentence_flags_ungrounded():
@@ -108,8 +108,8 @@ def test_latin_proper_noun_in_mixed_sentence_flags_ungrounded():
         "但他一直想把柿子獨占過來，"
         "不想分給別人，最後被Curry打"
     )
-    assert orid_checker.looks_likely_latin_hallucination(mixed, book_pack) is True
-    assert orid_checker.looks_likely_ungrounded_in_book(mixed, book_pack, "O") is True
+    assert grounding.looks_likely_latin_hallucination(mixed, book_pack) is True
+    assert grounding.looks_likely_ungrounded_in_book(mixed, book_pack, "O") is True
 
 def test_tail_sentence_in_chinese_after_book_quote_is_ungrounded():
     """Regress: mostly real key_event text + fabricated violence tail (no Latin)."""
@@ -132,8 +132,8 @@ def test_tail_sentence_in_chinese_after_book_quote_is_ungrounded():
         "但他一直想把柿子獨佔起來，"
         "不想分給別人，然後打小孩"
     )
-    assert orid_checker.looks_likely_ungrounded_in_book(mixed_period, book_pack, "O") is True
-    assert orid_checker.looks_likely_ungrounded_in_book(mixed_comma, book_pack, "O") is True
+    assert grounding.looks_likely_ungrounded_in_book(mixed_period, book_pack, "O") is True
+    assert grounding.looks_likely_ungrounded_in_book(mixed_comma, book_pack, "O") is True
 
 
 def test_character_action_relation_not_in_book_is_ungrounded():
@@ -150,8 +150,8 @@ def test_character_action_relation_not_in_book_is_ungrounded():
             {"name": "小朋友"},
         ],
     }
-    assert orid_checker.looks_likely_ungrounded_in_book("我看到爺爺打奶奶", book_pack, "O") is True
-    assert orid_checker.looks_likely_factual_mismatch("我看到爺爺打奶奶", book_pack) is True
+    assert grounding.looks_likely_ungrounded_in_book("我看到爺爺打奶奶", book_pack, "O") is True
+    assert grounding.looks_likely_factual_mismatch("我看到爺爺打奶奶", book_pack) is True
 
 
 def test_short_paraphrase_matching_book_is_not_flagged():
@@ -164,8 +164,8 @@ def test_short_paraphrase_matching_book_is_not_flagged():
         ],
     }
     t = "我看到阿松爺爺不分享柿子"
-    assert orid_checker.looks_likely_factual_mismatch(t, book_pack) is False
-    assert orid_checker.looks_likely_ungrounded_in_book(t, book_pack, "O") is False
+    assert grounding.looks_likely_factual_mismatch(t, book_pack) is False
+    assert grounding.looks_likely_ungrounded_in_book(t, book_pack, "O") is False
 
 
 def test_story_framing_prefix_does_not_trigger_ungrounded_false_positive():
@@ -178,7 +178,7 @@ def test_story_framing_prefix_does_not_trigger_ungrounded_false_positive():
         ],
     }
     t = "故事裡先發生了爺爺很小氣，然後只給奶奶柿子蒂"
-    assert orid_checker.looks_likely_ungrounded_in_book(t, book_pack, "O") is False
+    assert grounding.looks_likely_ungrounded_in_book(t, book_pack, "O") is False
 
 
 def test_grounding_checker_does_not_false_positive_on_correct_book_paraphrase():
@@ -196,16 +196,16 @@ def test_grounding_checker_does_not_false_positive_on_correct_book_paraphrase():
     correct_1 = "阿松爺爺一開始獨占所有柿子，不分給任何人。後來哎唷奶奶搬來，他只給她柿子蒂，沒給真的柿子。"
     correct_2 = "故事裡先發生的事情是爺爺不想給柿子，然後只給哎唷奶奶柿子蒂。"
 
-    assert orid_checker.looks_likely_ungrounded_in_book(correct_1, book_pack, "O") is False, (
+    assert grounding.looks_likely_ungrounded_in_book(correct_1, book_pack, "O") is False, (
         "正確描述書本內容卻被誤判為 ungrounded（false positive）"
     )
-    assert orid_checker.looks_likely_factual_mismatch(correct_1, book_pack) is False
+    assert grounding.looks_likely_factual_mismatch(correct_1, book_pack) is False
 
-    assert orid_checker.looks_likely_ungrounded_in_book(correct_2, book_pack, "O") is False
+    assert grounding.looks_likely_ungrounded_in_book(correct_2, book_pack, "O") is False
 
     # These should still be caught.
     fabricated = "阿松爺爺一開始獨占所有柿子，然後爺爺去殺奶奶。"
-    assert orid_checker.looks_likely_ungrounded_in_book(fabricated, book_pack, "O") is True
+    assert grounding.looks_likely_ungrounded_in_book(fabricated, book_pack, "O") is True
 
 
 def test_normalize_feedback_focus_rewrites_vague_feedback():
