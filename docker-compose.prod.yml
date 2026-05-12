@@ -1,0 +1,63 @@
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "127.0.0.1:${PROD_DB_PORT:-15433}:5432"
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+    networks:
+      - orid_prod_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build:
+      context: ./fastapi_backend
+    env_file:
+      - .env.prod
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      OPENAPI_OUTPUT_FILE: ${OPENAPI_OUTPUT_FILE:-./shared-data/openapi.json}
+    command: ["./start.prod.sh"]
+    ports:
+      - "127.0.0.1:${PROD_BACKEND_PORT:-18080}:8000"
+    volumes:
+      - ./local-shared-data:/app/shared-data:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - orid_prod_net
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./nextjs-frontend
+    environment:
+      NODE_ENV: production
+      API_BASE_URL: ${API_BASE_URL:-http://backend:8000}
+      ACCESS_TOKEN_COOKIE_MAX_AGE_SEC: ${ACCESS_TOKEN_COOKIE_MAX_AGE_SEC:-43200}
+    command: ["./start.prod.sh"]
+    ports:
+      - "127.0.0.1:${PROD_FRONTEND_PORT:-3200}:3000"
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - orid_prod_net
+    restart: unless-stopped
+
+volumes:
+  postgres_prod_data:
+
+networks:
+  orid_prod_net:
+    driver: bridge
