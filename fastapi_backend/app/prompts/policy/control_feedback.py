@@ -19,7 +19,7 @@ def _praise_line_from_draft(t: str, stage: str) -> str:
             break
     if len(one) > 36:
         one = one[:36] + "…"
-    return f"你有寫到「{one}」，看得出你在寫「{stage_zh}」這一段囉。"
+    return f"你有寫到「{one}」，我有看到你正在寫「{stage_zh}」這一段，方向是對的。"
 
 
 def _is_generic_praise(p: str) -> bool:
@@ -33,6 +33,26 @@ def _is_generic_praise(p: str) -> bool:
     return False
 
 
+def _default_example_line(stage: str, anchor: str = "") -> str:
+    s = (stage or "O").strip().upper()
+    a = (anchor or "").strip()
+    if s == "O":
+        if a:
+            return f"例如：一開始「{a}」，後來又發生了別的事，你可以把後面那一句接著寫出來。"
+        return "例如：一開始……，後來……。先把前後順序寫出來就可以了。"
+    if s == "R":
+        if a:
+            return f"例如：我看到「{a}」這一幕時，覺得有點難過，因為我覺得他沒有想到別人。"
+        return "例如：我覺得……，因為……。先寫感受，再補原因。"
+    if s == "I":
+        if a:
+            return f"例如：這件事讓我明白不能只想到自己，因為「{a}」讓我看到分享很重要。"
+        return "例如：這件事讓我明白……，因為……。先寫你學到什麼，再補理由。"
+    if a:
+        return f"例如：下次遇到像「{a}」這樣的情況，我會先停一下，再想想要怎麼做比較好。"
+    return "例如：下次遇到……，我會先……。先寫你做得到的第一步就好。"
+
+
 def format_control_feedback_reply(
     *,
     ok: bool,
@@ -40,6 +60,7 @@ def format_control_feedback_reply(
     suggestions: list[str],
     stage: str,
     book_anchor: str = "",
+    example: str | None = None,
     praise: str | None = None,
     student_draft: str = "",
 ) -> str:
@@ -57,21 +78,21 @@ def format_control_feedback_reply(
     nudge = ""
     if anchor:
         if s_up == "O":
-            nudge = f"還能想一想摘要裡像「{anchor}」先後怎麼發生，照順序寫一句就更好懂。"
+            nudge = f"我們先看「{anchor}」這件事，先寫一開始發生什麼，再寫後來怎麼了。"
         elif s_up == "R":
-            nudge = f"從故事裡「{anchor}」想起某一幕，用「我覺得……，因為……」接下去寫也可以。"
+            nudge = f"我們先想想「{anchor}」這一幕讓你有什麼感覺，再用「我覺得……，因為……」接著寫。"
         elif s_up == "I":
-            nudge = f"用「{anchor}」帶出一句你學到什麼，再補一個小理由就好。"
+            nudge = f"我們先用「{anchor}」這件事想一想，你從這裡學到什麼，再補一句理由就可以。"
         else:
-            nudge = f"想成「{anchor}」那種情況時，你下次會多做的那一個小行動是什麼？"
+            nudge = f"我們先想成「{anchor}」那種情況，你下次第一步可以做什麼小行動？"
 
     pr = (praise or "").strip()
     if "對齊教材" in m0:
         grounding_praise_map = {
-            "O": "你有試著寫出人物和事件，這是 O 段需要的方向；只是情節要再對回書裡。",
-            "R": "你有試著寫出感受，這是 R 段需要的方向；只是原因要再連回書裡真的發生的事。",
-            "I": "你有試著寫出想法，這是 I 段需要的方向；只是道理要再接回書裡真的發生的事。",
-            "D": "你有試著寫出行動，這是 D 段需要的方向；只是可以再說說是受書中哪件事啟發的。",
+            "O": "你有試著寫出人物和事情，這個方向是對的；我們再把內容對回書裡就更好了。",
+            "R": "你有試著寫出感受，這個方向是對的；我們再把原因接回書裡真的發生的事。",
+            "I": "你有試著寫出自己的想法，這個方向是對的；我們再把理由接回書裡真的發生的事。",
+            "D": "你有試著寫出自己的行動，這個方向是對的；我們再想想這和書裡哪件事有關。",
         }
         line1 = grounding_praise_map.get(s_up, "你有試著寫，我已經看到了；只是內容要再對回書裡。")
     elif _is_generic_praise(pr) and (student_draft or "").strip():
@@ -82,28 +103,34 @@ def format_control_feedback_reply(
         line1 = _praise_line_from_draft(student_draft, stage) if (student_draft or "").strip() else (pr or "你有試著寫，我已經看到了。")
 
     if ok:
-        line2 = m0 if m0 else "如果想再寫好一點，只要多一個小重點就好。"
+        line2 = m0 if m0 else "如果你想讓這段更清楚，我們只要再補一個小地方就好。"
     else:
-        line2 = m0 if m0 else "我們只先改一處，就會有幫助。"
+        line2 = m0 if m0 else "我們先只改一個地方，這段就會更清楚。"
 
     if s0 and "用。結尾" in s0:
-        line3 = "故事裡先發生的是……，你再用一句寫出後來又怎樣，就很清楚了。"
+        base_line3 = "我們一步一步來，先把同一件事寫成完整一句，再加上句號；先寫誰做了什麼，再補後來怎樣。"
     elif "對齊教材" in m0:
         grounding_stem_map = {
-            "O": "故事裡先發生的是……，後來……；請用書中真的人物和事件接下去。",
-            "R": "我覺得……（書中角色）……，因為書裡發生了……，讓我有這個感受。",
-            "I": "這件事讓我明白……，因為書裡的……告訴我……。",
-            "D": "下次遇到……，我想到書裡……的故事，所以我會……。",
+            "O": "我們先對回書中真的人物和事情，再按順序把前面和後面寫清楚，不要只寫最後一小段。",
+            "R": "我們先對回書裡真的情節，再把你的感受和原因接在同一句裡。",
+            "I": "我們先對回書裡真的情節，再寫你明白了什麼，然後補一個故事理由。",
+            "D": "我們先想想書裡帶給你的提醒，再把你下次會做的行動寫清楚。",
         }
-        line3 = grounding_stem_map.get(s_up, "故事裡先發生的是……，後來……；請用書中真的人物和事件接下去。")
+        base_line3 = grounding_stem_map.get(s_up, "我們先對回書裡真的人物和事情，再照順序把內容寫清楚。")
     elif s0 and not any(
         x in s0 for x in ("補充更多細節", "內容完整度", "深化內容", "增加完整度")
     ):
-        line3 = s0
+        base_line3 = f"我們一步一步來，{s0}"
     elif nudge:
-        line3 = nudge
+        base_line3 = nudge
     else:
-        line3 = "用一句你平常會說的話起頭，再補兩三個字就夠了。"
+        base_line3 = "我們先補一個最重要的地方就好，寫成 1 到 2 句，讓讀的人一下就看懂你在說什麼。"
+
+    ex = (example or "").strip() or _default_example_line(stage, anchor)
+    if ex.startswith("例如："):
+        line3 = f"{base_line3}\n{ex}"
+    else:
+        line3 = f"{base_line3}\n例如：{ex}"
 
     return (
         f"你已經做到：\n{line1}\n\n"

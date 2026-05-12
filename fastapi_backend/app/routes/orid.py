@@ -1418,6 +1418,128 @@ async def _llm_book_grounding_supported(
     return None
 
 
+def _is_grounding_specific_message(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return False
+    cues = (
+        "對齊教材",
+        "不在書裡",
+        "書裡說的是",
+        "書中人物是",
+        "書裡的人物是",
+        "書中叫做",
+        "書裡叫做",
+    )
+    return any(c in t for c in cues)
+
+
+def _book_grounding_reference_line(book_pack: Optional[dict[str, Any]], max_len: int = 56) -> str:
+    if not isinstance(book_pack, dict):
+        return ""
+    candidates: list[str] = []
+    for item in (book_pack.get("key_events") or [])[:3]:
+        s = str(item or "").strip()
+        if s:
+            candidates.append(s)
+    for item in (book_pack.get("story_excerpts") or [])[:2]:
+        if isinstance(item, dict):
+            s = str(item.get("text") or "").strip()
+        else:
+            s = str(item or "").strip()
+        if s:
+            candidates.append(s)
+    if not candidates:
+        return ""
+    ref = candidates[0]
+    return ref if len(ref) <= max_len else ref[: max_len - 1] + "…"
+
+
+def _book_grounding_character_note(student_text: str, book_pack: Optional[dict[str, Any]]) -> str:
+    t = (student_text or "").strip()
+    if not t or not isinstance(book_pack, dict):
+        return ""
+
+    characters = book_pack.get("characters") or []
+    preferred: dict[str, str] = {}
+    for item in characters:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        if name.endswith("爺爺"):
+            preferred["爺爺"] = name
+        elif name.endswith("奶奶"):
+            preferred["奶奶"] = name
+
+    notes: list[str] = []
+    for alias, full_name in preferred.items():
+        if alias in t and full_name not in t:
+            notes.append(f"書裡的人物是「{full_name}」")
+    return "，".join(notes[:1])
+
+
+def _build_grounding_feedback_override(
+    student_text: str,
+    book_pack: Optional[dict[str, Any]],
+    *,
+    stage: str,
+) -> Tuple[str, str]:
+    t = (student_text or "").strip()
+    flagged_terms: list[str] = []
+    for term in ("打籃球", "籃球", "傳球", "投籃", "足球", "棒球", "排球", "KTV", "唱歌", "NBA", "WNBA"):
+        if term in t and term not in flagged_terms:
+            flagged_terms.append(term)
+
+    problem_bits: list[str] = []
+    if flagged_terms:
+        joined = "、".join(f"「{x}」" for x in flagged_terms[:2])
+        problem_bits.append(f"你寫的 {joined} 看起來不在這本書裡")
+
+    char_note = _book_grounding_character_note(t, book_pack)
+    if char_note:
+        problem_bits.append(char_note)
+
+    ref = _book_grounding_reference_line(book_pack)
+    if not problem_bits:
+        missing = "請把內容對齊教材：你剛寫的情節不像書裡發生的。"
+    else:
+        missing = "請把內容對齊教材，" + "，".join(problem_bits) + "。"
+    if ref:
+        missing += f" 書裡說的是「{ref}」。"
+
+    stage_upper = (stage or "O").strip().upper()
+    suggestion_map = {
+        "O": "先改用書裡真的人物和事件來寫，再把前面先發生什麼、後來怎麼了寫清楚。",
+        "R": "先改用書裡真的人物和事件，再寫你看到那一幕時的感受和原因。",
+        "I": "先改用書裡真的人物和事件，再寫你從那件事明白了什麼。",
+        "D": "先想想這本書帶給你的提醒，再把你下次會做的行動寫清楚。",
+    }
+    return missing, suggestion_map.get(stage_upper, "先改用書裡真的人物和事件來寫，再把意思寫清楚。")
+
+
+def _book_grounding_example(stage: str, book_pack: Optional[dict[str, Any]]) -> str:
+    s = (stage or "O").strip().upper()
+    main_char = ""
+    if isinstance(book_pack, dict):
+        for item in (book_pack.get("characters") or [])[:3]:
+            if isinstance(item, dict):
+                name = str(item.get("name") or "").strip()
+                if name:
+                    main_char = name
+                    break
+    if s == "O":
+        if main_char:
+            return f"例如：故事的主角是「{main_char}」，一開始……，後來……。"
+        return "例如：先寫書裡真的人物，一開始……，後來……。"
+    if s == "R":
+        return "例如：我看到書裡這一幕時，覺得……，因為……。"
+    if s == "I":
+        return "例如：這件事讓我明白……，因為書裡……。"
+    return "例如：下次遇到類似的情況，我會先……。"
+
+
 async def _enforce_feedback_book_grounding(
     student_text: str,
     book_pack: Optional[dict[str, Any]],
@@ -1480,22 +1602,20 @@ async def _enforce_feedback_book_grounding(
         return ok, missing, suggestions
     miss = list(missing)
     sug = list(suggestions)
-    # If GenAI already gave a specific missing message, trust it (don't prepend a
-    # generic fallback that would push the specific one out when truncated to [:1]).
-    # Only insert the generic fallback when the GenAI gave no missing at all.
-    if not miss:
-        miss.insert(
-            0,
-            "內容需對齊教材：你剛寫的情節不像書裡發生的",
-        )
-        sug_fallback = "請對照故事摘要，改用書中真實的人與事件重寫"
-        if not sug:
-            sug.insert(0, sug_fallback)
+    override_missing, override_suggestion = _build_grounding_feedback_override(
+        t,
+        book_pack,
+        stage=stage,
+    )
+    if (not miss) or (not _is_grounding_specific_message(miss[0])):
+        miss = [override_missing]
+    if (not sug) or ("書裡" not in (sug[0] if sug else "")):
+        sug = [override_suggestion]
     return False, miss[:1], sug[:1]
 
 
 def _has_feedback_book_grounding_issue(missing: list[str]) -> bool:
-    return any("對齊教材" in (m or "") for m in (missing or []))
+    return any(_is_grounding_specific_message(m or "") for m in (missing or []))
 
 
 def _book_grounding_praise(stage: str) -> str:
@@ -1527,7 +1647,7 @@ def _draft_praise_line(t: str, stage: str) -> str:
             break
     if len(one) > 36:
         one = one[:36] + "…"
-    return f"你有寫到「{one}」，看得出你在寫「{zh}」這一段囉。"
+    return f"你有寫到「{one}」，我有看到你正在寫「{zh}」這一段，方向是對的。"
 
 
 def _control_feedback(stage: str, text: str) -> Tuple[bool, list[str], list[str], Optional[str], Optional[str]]:
@@ -1542,17 +1662,17 @@ def _control_feedback(stage: str, text: str) -> Tuple[bool, list[str], list[str]
         return "。" in t or "！" in t or "？" in t
 
     stem = {
-        "O": "故事裡先發生的是……，後來……",
-        "R": "我覺得……，因為……",
-        "I": "這件事讓我明白……，因為故事裡……",
-        "D": "下次遇到……，我會先……",
+        "O": "你可以先寫：一開始……，後來……。先把事情照順序講出來就可以了。",
+        "R": "你可以先寫：我覺得……，因為……。先寫感受，再補原因。",
+        "I": "你可以先寫：這件事讓我明白……，因為……。先寫學到什麼，再補理由。",
+        "D": "你可以先寫：下次遇到……，我會先……。先把你做得到的第一步寫出來。",
     }.get(s, "先寫一句你的想法，再補一個小細節。")
 
     if not t:
         return (
             False,
             ["這一格還是空白喔"],
-            ["你可以先從句型起頭，寫一句就好"],
+            ["我們先不用寫很多，你可以先照著句型起頭，寫一句就好。"],
             stem,
             "願意下筆就很棒，我們先寫一點點。",
         )
@@ -1581,22 +1701,22 @@ def _control_feedback(stage: str, text: str) -> Tuple[bool, list[str], list[str]
         if any(f in t for f in _feel) and not any(p in t for p in _plot) and len(t) < 55:
             prior.append(
                 (
-                    "這段讀起來比較像感覺；O 段要先把故事裡實際發生的事寫出來",
-                    "試試寫：故事裡先發生的是……，他做了……",
+                    "這段讀起來比較像在寫感覺；O 段我們先寫故事裡真的發生了什麼事。",
+                    "你可以先寫「一開始誰做了什麼」，再補後來發生了什麼。",
                 )
             )
         elif len(t) < 12:
-            prior.append(("內容還有點短，讀者會看不出故事在演什麼", "多寫一句：是誰？做了什麼？"))
+            prior.append(("內容還有點短，讀的人還看不出故事在演什麼", "我們先補一句「是誰做了什麼」，事情就會更清楚。"))
         elif not _has_sentence():
-            prior.append(("讀起來還沒用一句話說完一件事", "試著用句號收尾，讓讀者聽得懂一件事講完"))
+            prior.append(("讀起來還沒用一句話說完一件事", "我們先把同一件事寫成完整一句，再用句號收尾，讓人知道先發生了什麼。"))
         elif len(t) < 25:
-            prior.append(("事件順序還能再清楚一點", "先發生什麼，後來又怎樣，寫清楚一點"))
+            prior.append(("事件順序還能再清楚一點", "你可以先寫前面發生什麼，再寫後來怎樣，讀的人就更容易懂。"))
     elif s == "R":
         emo_kw = ["開心", "難過", "生氣", "害怕", "擔心", "緊張", "失望", "感動", "驚訝", "不公平", "高興", "難受"]
         if not any(k in t for k in emo_kw):
-            prior.append(("還幾乎沒有寫到心情", "用「我覺得__________」寫一個感覺，再接原因也可以"))
+            prior.append(("還幾乎沒有寫到心情", "我們先寫一個明確感受，再補上是故事裡哪一幕讓你有這個感覺。"))
         elif "因為" not in t:
-            prior.append(("還沒有寫「為什麼」會這樣想", "我覺得__________，因為故事裡__________"))
+            prior.append(("還沒有寫「為什麼」會這樣想", "你可以把感受後面的原因接上去，讀的人才知道你為什麼會這樣想。"))
     elif s == "I":
         meaning = ["學到", "明白", "代表", "提醒", "意義", "價值", "道理", "重要"]
         if any(k in t for k in ["很難過", "很開心", "生氣", "害怕", "高興"]) and "因為" not in t and not any(
@@ -1604,33 +1724,33 @@ def _control_feedback(stage: str, text: str) -> Tuple[bool, list[str], list[str]
         ) and len(t) < 40:
             prior.append(
                 (
-                    "這比較像寫感覺；I 段要寫你從故事裡「明白或學到」什麼",
-                    "這件事讓我明白__________，因為__________",
+                    "這比較像寫感覺；I 段我們要寫你從故事裡明白或學到什麼。",
+                    "你可以先寫你明白了什麼，再補故事裡哪個地方讓你有這個想法。",
                 )
             )
         elif not any(
             k in t for k in ["我覺得", "提醒", "學到", "明白", "道理", "價值", "重要", "意義", "應該"]
         ):
-            prior.append(("還沒有寫出你學到或明白什麼", "我學到__________，因為故事裡__________"))
+            prior.append(("還沒有寫出你學到或明白什麼", "我們先把你學到的道理講出來，再補故事裡的理由。"))
         elif "因為" not in t and "所以" not in t:
-            prior.append(("你想到的這個道理，還能加一個小理由", "我會這樣想，是因為故事裡……"))
+            prior.append(("你想到的這個道理，還能加一個小理由", "你可以再補一句「為什麼會這樣想」，意思就會更完整。"))
     else:
         if any(w in t for w in ("更好的人", "變更好", "變成更好", "要更好", "變成好人", "變一個好")) and (
             "我會" not in t
         ) and len(t) < 45:
             prior.append(
                 (
-                    "這比較像心願；D 段要寫一個你下次能做得出來的小行動",
-                    "下次當__________的時候，我會先__________",
+                    "這比較像心願；D 段我們要寫一個你下次做得到的小行動。",
+                    "你可以把心願改成一個具體動作，寫出你下次遇到時第一步會怎麼做。",
                 )
             )
         elif "我會" not in t and "下次" not in t:
-            prior.append(("還沒有寫出要怎麼做", "用「下次遇到……，我會先……」寫一個小動作"))
+            prior.append(("還沒有寫出要怎麼做", "我們先補一個你真的做得到的小動作，讓讀的人看到你下次會怎麼做。"))
         elif len(t) < 20:
             prior.append(
                 (
                     "行動還可以更具體一點",
-                    "寫一個能馬上做的「第一步」：我打算先……",
+                    "你可以再寫清楚一點，例如什麼時候做、先做哪一步，行動就會更完整。",
                 )
             )
 
@@ -1807,7 +1927,7 @@ async def _genai_feedback(
                 obj = getattr(parsed, "__dict__", {}) or {}
             return _feedback_from_obj(stage=stage, text=text, obj=obj)
 
-    except Exception:
+    except Exception as e:
         logger.warning("writing feedback structured parse failed")
         msg = str(e)
         if "LengthFinishReasonError" in msg or "length limit was reached" in msg:
@@ -2266,6 +2386,7 @@ async def writing_coach_chat(
         )
         if _has_feedback_book_grounding_issue(fb_missing):
             fb_praise = _book_grounding_praise(stage_ctx)
+            fb_ex = _book_grounding_example(stage_ctx, book_pack)
 
         # Completion rule: rubric level 3+ (達標/精進) → force ok=True
         # so the existing pass-tracking counts this turn as a pass.
@@ -2280,6 +2401,7 @@ async def writing_coach_chat(
                 suggestions=fb_sug,
                 stage=stage_ctx,
                 book_anchor=anchor_line,
+                example=fb_ex,
                 praise=fb_praise,
                 student_draft=body,
             )
@@ -2290,6 +2412,7 @@ async def writing_coach_chat(
                 suggestions=fb_sug,
                 stage=stage_ctx,
                 book_anchor=anchor_line,
+                example=fb_ex,
                 praise=fb_praise,
                 student_draft=body,
             )
@@ -2326,6 +2449,7 @@ async def writing_coach_chat(
                     suggestions=fb_sug,
                     stage=stage_ctx,
                     book_anchor=anchor_line,
+                    example=fb_ex,
                     praise=fb_praise,
                     student_draft=body,
                 )
@@ -2336,6 +2460,7 @@ async def writing_coach_chat(
                     suggestions=fb_sug,
                     stage=stage_ctx,
                     book_anchor=anchor_line,
+                    example=fb_ex,
                     praise=fb_praise,
                     student_draft=body,
                 )
@@ -2346,6 +2471,7 @@ async def writing_coach_chat(
                     suggestions=fb_sug,
                     stage=stage_ctx,
                     book_anchor=anchor_line,
+                    example=fb_ex,
                     praise=fb_praise,
                     student_draft=body,
                 )

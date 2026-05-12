@@ -1,6 +1,9 @@
 from app.prompts.policy import grounding
 from app.prompts.policy.feedback_focus import detect_feedback_strength, normalize_feedback_focus
+from app.prompts.policy.control_feedback import format_control_feedback_reply
 from app.routes import orid
+import pytest
+from types import SimpleNamespace
 
 
 def test_meta_or_injection_detection():
@@ -231,6 +234,54 @@ def test_feedback_narration_validation_requires_three_sections():
     assert orid._looks_valid_feedback_narration(bad_text) is False
 
 
+@pytest.mark.asyncio
+async def test_enforce_feedback_book_grounding_prioritizes_wrong_book_content():
+    book_pack = {
+        "book_title": "阿松爺爺的柿子樹",
+        "key_events": [
+            "阿松爺爺家的柿子好甜，可是他一直獨占，讓人只能看著流口水。",
+            "哎喲奶奶和小朋友用柿子蒂玩陀螺。",
+        ],
+        "characters": [
+            {"name": "阿松爺爺"},
+            {"name": "哎喲奶奶"},
+            {"name": "小朋友"},
+        ],
+    }
+
+    ok, missing, suggestions = await orid._enforce_feedback_book_grounding(
+        "我看到爺爺在打籃球，然後傳球給小朋友。",
+        book_pack,
+        "O",
+        True,
+        ["事件順序還能再清楚一點"],
+        ["把先發生什麼、後來怎樣補出來。"],
+    )
+
+    assert ok is False
+    assert "打籃球" in missing[0]
+    assert "阿松爺爺" in missing[0]
+    assert "書裡說的是" in missing[0]
+    assert "書裡真的人物和事件" in suggestions[0]
+
+
+def test_control_feedback_reply_preserves_example_in_try_section():
+    reply = format_control_feedback_reply(
+        ok=False,
+        missing=["事件順序還能再清楚一點"],
+        suggestions=["把先發生什麼、後來怎樣補出來，讀的人就更容易懂。"],
+        stage="O",
+        book_anchor="阿松爺爺把柿子藏到屋後倉庫",
+        example="故事裡先發生的是阿松爺爺把柿子藏起來，後來大家才知道他不想分給別人。",
+        student_draft="阿松爺爺不分享柿子",
+    )
+    assert "試試看這樣寫：" in reply
+    assert "我們一步一步來" in reply
+    assert "把先發生什麼、後來怎樣補出來" in reply
+    assert "例如：" in reply
+    assert "阿松爺爺把柿子藏起來" in reply
+
+
 def test_normalize_feedback_focus_strength_tone_changes_with_draft_quality():
     low_missing, _ = normalize_feedback_focus(
         stage="R",
@@ -245,7 +296,7 @@ def test_normalize_feedback_focus_strength_tone_changes_with_draft_quality():
         student_text="我覺得很難過，因為看到他把柿子都藏起來了。",
     )
     assert "先把感受說出來" in low_missing[0]
-    assert ("你的感受和原因都有了" in high_missing[0]) or ("你有情緒方向了" in high_missing[0])
+    assert ("你的感受和原因都有了" in high_missing[0]) or ("你有感受方向了" in high_missing[0])
     assert low_missing[0] != high_missing[0]
 
 
@@ -265,3 +316,52 @@ def test_normalize_feedback_focus_uses_child_friendly_wording():
     txt = missing[0]
     assert "精準" not in txt
     assert "潤一下" not in txt
+
+
+@pytest.mark.asyncio
+async def test_genai_feedback_falls_back_when_structured_parse_hits_length_limit(monkeypatch):
+    class FakeCompletions:
+        async def parse(self, **kwargs):
+            raise RuntimeError("length limit was reached")
+
+    fake_client = SimpleNamespace(
+        beta=SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=FakeCompletions(),
+            )
+        )
+    )
+
+    async def fake_chat_completion(messages, **kwargs):
+        return """{
+  "ok": true,
+  "praise": "你有寫到阿松爺爺。",
+  "missing": [],
+  "suggestions": ["故事裡先發生的是……"],
+  "example": "故事裡先發生的是……",
+  "improved": null,
+  "rubric_focus": null,
+  "rubric_level_estimate": null
+}"""
+
+    monkeypatch.setattr(orid, "client", fake_client)
+    monkeypatch.setattr(orid, "_chat_completion", fake_chat_completion)
+
+    book_pack = {
+        "book_title": "阿松爺爺的柿子樹",
+        "key_events": ["阿松爺爺把柿子藏到屋後倉庫"],
+        "characters": [{"name": "阿松爺爺"}],
+    }
+
+    ok, missing, suggestions, example, improved, praise, rubric = await orid._genai_feedback(
+        stage="O",
+        text="阿松爺爺把柿子藏起來。",
+        book_pack=book_pack,
+    )
+
+    assert ok is True
+    assert suggestions == ["故事裡先發生的是……"]
+    assert example == "故事裡先發生的是……"
+    assert improved is None
+    assert praise == "你有寫到阿松爺爺。"
+    assert rubric == {}

@@ -23,7 +23,8 @@ def _build_async_database_url(raw_url: str) -> str:
         driver = "postgresql+asyncpg"
     elif driver.startswith("postgres+") and driver != "postgresql+asyncpg":
         driver = "postgresql+asyncpg"
-    return str(url.set(drivername=driver))
+    # `str(URL)` masks the password as `***`, which breaks real DB connections.
+    return url.set(drivername=driver).render_as_string(hide_password=False)
 
 
 async_db_connection_url = _build_async_database_url(settings.DATABASE_URL)

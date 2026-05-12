@@ -69,6 +69,9 @@ def test_genai_feedback_builder_changes_contract_by_stage():
 
     assert "角色清單（學生寫的角色名必須對照這裡）" in o_system
     assert "書名已知；D 段不做角色名查核。" in d_system
+    assert "example：給 1–2 句與學生原文貼近的續寫小例子" in o_system
+    assert "國小五、六年級" in o_system
+    assert "一步一步帶寫" in o_system
     assert "學生「O」段原文如下" in o_user
     assert "學生「D」段原文如下" in d_user
 
@@ -89,6 +92,10 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "你已經做到：" in narration_system
     assert "你可以再加強：" in narration_system
     assert "試試看這樣寫：" in narration_system
+    assert "像老師坐在學生旁邊" in narration_system
+    assert "一步一步" in narration_system
+    assert "第二段**一定要保留這個重點**" in narration_system
+    assert "若 JSON 裡有 example，請保留成「例如：……」" in narration_system
     assert "結構化回饋 JSON" in narration_user
 
     synthesis_system = build_synthesis_coach_system_prompt(

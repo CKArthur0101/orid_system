@@ -107,6 +107,8 @@ def test_build_async_database_url_preserves_query_params():
     normalized = _build_async_database_url(raw)
 
     assert normalized.startswith("postgresql+asyncpg://user:")
+    assert "pass" in normalized
+    assert "***" not in normalized
     assert "@db.example.com:6543/postgres" in normalized
     assert "sslmode=require" in normalized
     assert "pgbouncer=true" in normalized
