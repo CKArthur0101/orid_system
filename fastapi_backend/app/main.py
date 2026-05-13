@@ -29,16 +29,17 @@ app.include_router(
     prefix=f"/{AUTH_URL_PATH}/jwt",
     tags=["auth"],
 )
-app.include_router(
-    fastapi_users.get_register_router(UserRead, UserCreate),
-    prefix=f"/{AUTH_URL_PATH}",
-    tags=["auth"],
-)
-app.include_router(
-    fastapi_users.get_reset_password_router(),
-    prefix=f"/{AUTH_URL_PATH}",
-    tags=["auth"],
-)
+if settings.ENABLE_PUBLIC_REGISTRATION_AND_PASSWORD_RESET:
+    app.include_router(
+        fastapi_users.get_register_router(UserRead, UserCreate),
+        prefix=f"/{AUTH_URL_PATH}",
+        tags=["auth"],
+    )
+    app.include_router(
+        fastapi_users.get_reset_password_router(),
+        prefix=f"/{AUTH_URL_PATH}",
+        tags=["auth"],
+    )
 app.include_router(
     fastapi_users.get_verify_router(UserRead),
     prefix=f"/{AUTH_URL_PATH}",

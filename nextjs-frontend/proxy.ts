@@ -3,7 +3,23 @@ import type { NextRequest } from "next/server";
 
 const API_BASE_URL = process.env.API_BASE_URL ?? "http://backend:8000";
 
+function isDisabledAuthPath(pathname: string) {
+  return (
+    pathname === "/register" ||
+    pathname === "/password-recovery" ||
+    pathname.startsWith("/password-recovery/")
+  );
+}
+
 export async function proxy(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+  if (isDisabledAuthPath(pathname)) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/login";
+    url.searchParams.set("from", "disabled_auth");
+    return NextResponse.redirect(url, 307);
+  }
+
   const token = request.cookies.get("accessToken")?.value;
 
   if (!token) {
@@ -35,5 +51,11 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/teacher/:path*"],
+  matcher: [
+    "/register",
+    "/password-recovery",
+    "/password-recovery/:path*",
+    "/dashboard/:path*",
+    "/teacher/:path*",
+  ],
 };

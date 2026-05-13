@@ -403,7 +403,7 @@ export default function WeekBookPage() {
   const oridReadOnly = weekNum === 2;
 
   const mainGridClass = showSynthesisColumn
-    ? "grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1.2fr)] gap-3 overflow-hidden xl:grid-cols-3 xl:grid-rows-[minmax(0,1fr)] xl:gap-3"
+    ? "grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1.2fr)] gap-3 overflow-hidden lg:grid-cols-3 lg:grid-rows-[minmax(0,1fr)] lg:gap-3"
     : "grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-3 overflow-hidden md:grid-cols-2 md:grid-rows-[minmax(0,1fr)] md:gap-3";
 
   useEffect(() => {
@@ -891,7 +891,7 @@ export default function WeekBookPage() {
 
       {/* 單屏：左 2×2 四格、右聊天；不超過視窗高度，過長只在各欄內捲動 */}
       <div className={mainGridClass}>
-        <div className="kid-shell flex h-full min-h-0 flex-col overflow-hidden md:order-1 md:h-full xl:order-1">
+        <div className="kid-shell order-1 flex h-full min-h-0 flex-col overflow-hidden md:h-full">
           <div className="kid-section-header shrink-0 justify-between">
             <div className="flex items-center gap-2">
               <span className="text-lg">✍️</span>
@@ -1017,7 +1017,7 @@ export default function WeekBookPage() {
         </div>
 
         {showSynthesisColumn ? (
-          <div className="kid-shell flex h-full min-h-0 flex-col overflow-hidden md:order-3 xl:order-2">
+          <div className="kid-shell order-2 flex h-full min-h-0 flex-col overflow-hidden">
             <div className="kid-section-header shrink-0 justify-between">
               <div className="flex items-center gap-2">
                 <span className="text-lg">🔗</span>
@@ -1048,7 +1048,7 @@ export default function WeekBookPage() {
           </div>
         ) : null}
 
-        <div className="kid-shell flex h-full min-h-0 flex-col overflow-hidden md:order-2 md:h-full xl:order-3">
+        <div className="kid-shell order-3 flex h-full min-h-0 flex-col overflow-hidden md:h-full">
           <div className="kid-section-header shrink-0">
             <span className="text-lg">💬</span>
             <span className="text-sm font-bold">寫作回饋夥伴</span>

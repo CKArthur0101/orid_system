@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { login } from "@/components/actions/login-action";
@@ -56,17 +55,9 @@ export default function Page() {
             </div>
 
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="password" className="text-base font-medium text-slate-600">
-                  密碼
-                </Label>
-                <Link
-                  href="/password-recovery"
-                  className="text-sm text-sky-500 hover:text-sky-600 sm:text-base"
-                >
-                  忘記密碼？
-                </Link>
-              </div>
+              <Label htmlFor="password" className="text-base font-medium text-slate-600">
+                密碼
+              </Label>
               <Input
                 id="password"
                 name="password"
@@ -82,13 +73,6 @@ export default function Page() {
             </div>
 
             <FormError state={state} />
-
-            <div className="text-center text-sm text-slate-500 sm:text-base">
-              還沒有帳號嗎？{" "}
-              <Link href="/register" className="font-medium text-sky-500 hover:text-sky-600">
-                註冊
-              </Link>
-            </div>
           </div>
         </form>
 

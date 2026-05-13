@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     VERIFICATION_SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_SECONDS: int = 60 * 60 * 12
+    # When False, `/auth/register` and forgot/reset-password routes are not mounted (experiment / prod hardening).
+    ENABLE_PUBLIC_REGISTRATION_AND_PASSWORD_RESET: bool = True
 
     # Email
     MAIL_USERNAME: str | None = None
