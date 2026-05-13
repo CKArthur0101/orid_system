@@ -265,6 +265,28 @@ async def test_enforce_feedback_book_grounding_prioritizes_wrong_book_content():
     assert "書裡真的人物和事件" in suggestions[0]
 
 
+@pytest.mark.asyncio
+async def test_enforce_feedback_book_grounding_skipped_for_likely_gibberish_bucket():
+    """Gibberish is often heuristically 'ungrounded'; must not inject book-plot overrides."""
+    book_pack = {
+        "book_title": "阿松爺爺的柿子樹",
+        "key_events": ["阿松爺爺把柿子藏到屋後倉庫"],
+        "characters": [{"name": "阿松爺爺"}],
+    }
+    ok, missing, suggestions = await orid._enforce_feedback_book_grounding(
+        "asdfasdfasdfasdf",
+        book_pack,
+        "O",
+        False,
+        ["請用完整句子描述書裡的一件事。"],
+        ["你可以先寫主角名字，再寫他做了什麼。"],
+        input_bucket="likely_gibberish",
+    )
+    assert ok is False
+    assert missing == ["請用完整句子描述書裡的一件事。"]
+    assert suggestions == ["你可以先寫主角名字，再寫他做了什麼。"]
+
+
 def test_control_feedback_reply_preserves_example_in_try_section():
     reply = format_control_feedback_reply(
         ok=False,

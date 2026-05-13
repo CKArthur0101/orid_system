@@ -6,6 +6,7 @@ from app.prompts.builders.coach_chat import (
 )
 from app.prompts.builders.writing_assist import build_writing_d1_prompts, build_writing_d2_prompts
 from app.prompts.builders.writing_feedback import build_genai_feedback_prompts
+from app.prompts.policy.feedback_focus import normalize_feedback_focus
 from app.prompts.shared_parts.book_context import build_book_context_block
 from app.prompts.versions import PROMPT_VERSIONS
 
@@ -69,11 +70,29 @@ def test_genai_feedback_builder_changes_contract_by_stage():
 
     assert "角色清單（學生寫的角色名必須對照這裡）" in o_system
     assert "書名已知；D 段不做角色名查核。" in d_system
-    assert "example：給 1–2 句與學生原文貼近的續寫小例子" in o_system
+    assert "example：給與學生原文貼近" in o_system
     assert "國小五、六年級" in o_system
-    assert "一步一步帶寫" in o_system
+    assert "40 分鐘" in o_system
     assert "學生「O」段原文如下" in o_user
+    assert "對照上方「故事摘要」" in o_user
     assert "學生「D」段原文如下" in d_user
+    assert "對照上方「故事摘要」" not in d_user
+
+    ts_system, _ = build_genai_feedback_prompts(
+        stage="O",
+        text="好",
+        book_pack=_book_pack(),
+        input_bucket="too_short",
+    )
+    assert "輸入偏短" in ts_system
+
+    mx_system, _ = build_genai_feedback_prompts(
+        stage="O",
+        text="I think 阿松爺爺 很自私",
+        book_pack=_book_pack(),
+        input_bucket="mixed_script",
+    )
+    assert "繁中文" in mx_system
 
 
 def test_coach_and_checker_builders_keep_expected_sections():
@@ -81,29 +100,65 @@ def test_coach_and_checker_builders_keep_expected_sections():
         stage="R",
         book_context=build_book_context_block(_book_pack()),
         source="feedback_button",
+        student_display_name="小華",
+        student_login="student@school.edu",
+        input_bucket="too_short",
+        opening_hint="先多寫半句就好。",
+        prev_ai_opener="我有看到你的訊息",
     )
     assert "ORID 寫作回饋同伴" in coach_system
     assert "只談目前段：R" in coach_system
+    assert "小華" in coach_system
+    assert "too_short" in coach_system
+    assert "先多寫半句就好" in coach_system
+    assert "本輪草稿中英混雜：可主動" not in coach_system
+
+    coach_mixed = build_writing_coach_system_prompt(
+        stage="O",
+        book_context=build_book_context_block(_book_pack()),
+        source="free_text",
+        input_bucket="mixed_script",
+    )
+    assert "本輪草稿中英混雜：可主動" in coach_mixed
 
     narration_system, narration_user = build_feedback_narration_prompt(
         stage="I",
         feedback_json_summary='{"ok": true, "praise": "有提到故事事件"}',
+        student_display_name="小華",
+        student_login="x@y.z",
+        student_draft_excerpt="我觉得故事很有趣。",
+        input_bucket="mixed_script",
+        opening_hint="先固定一種主要語言。",
+        prev_ai_opener=None,
     )
     assert "你已經做到：" in narration_system
     assert "你可以再加強：" in narration_system
     assert "試試看這樣寫：" in narration_system
     assert "像老師坐在學生旁邊" in narration_system
-    assert "一步一步" in narration_system
+    assert "40 分鐘" in narration_system
     assert "第二段**一定要保留這個重點**" in narration_system
-    assert "若 JSON 裡有 example，請保留成「例如：……」" in narration_system
+    assert "若 JSON 裡有 example，請融入這一段" in narration_system
+    assert "故事覆蓋" in narration_system or "摘要缺段" in narration_system
+    assert "先肯定再引導" in narration_system
+    assert "繁體中文為主" in narration_system
+    assert "循序漸進" in narration_system
+    assert "【I 段】" in narration_system
+    assert "【輸入粗分類】mixed_script" in narration_user
+    assert "我觉得故事很有趣" in narration_user
     assert "結構化回饋 JSON" in narration_user
 
     synthesis_system = build_synthesis_coach_system_prompt(
         book_context=build_book_context_block(_book_pack()),
         week1_orid_lines={"O": "他把柿子藏起來", "R": "", "I": "", "D": ""},
+        student_display_name="小華",
+        student_login=None,
+        opening_hint="先檢查段落銜接。",
+        prev_ai_opener="我有看到",
     )
     assert "第 1 週四段（唯讀參考）" in synthesis_system
     assert "O 客觀" in synthesis_system
+    assert "小華" in synthesis_system
+    assert "先檢查段落銜接" in synthesis_system
 
     checker_system, checker_user = build_book_grounding_checker_prompts(
         student_text="阿松爺爺把柿子藏到屋後倉庫",
@@ -113,6 +168,37 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "教材事實核對器" in checker_system
     assert "BOOK_CONTEXT" in checker_system
     assert "學生句子" in checker_user
+
+
+def test_normalize_feedback_focus_o_high_avoids_sequence_regression():
+    long_o = (
+        "一開始阿松爺爺把柿子都藏起來，然後只給哎唷奶奶柿子蒂，隔天，"
+        "哎唷奶奶和小朋友用柿子蒂打陀螺，玩得很開心。"
+    )
+    missing, suggestions = normalize_feedback_focus(
+        stage="O",
+        missing=[""],
+        suggestions=[""],
+        student_text=long_o,
+    )
+    assert "先發生、後發生" not in missing[0]
+    assert ("摘要" in missing[0]) or ("細節" in missing[0]) or ("轉折" in missing[0]) or ("銜接" in missing[0]) or ("旁人" in missing[0]) or ("反應" in missing[0])
+    assert len(suggestions) == 1
+
+
+def test_normalize_feedback_focus_o_high_fallback_never_polish_only_pool():
+    """Hash-picked fallback must not claim 'summary already covered' without real alignment."""
+    long_o = (
+        "一開始阿松爺爺把柿子都藏起來，然後只給哎唷奶奶柿子蒂，隔天，"
+        "哎唷奶奶和小朋友用柿子蒂打陀螺，玩得很開心。"
+    )
+    _missing, suggestions = normalize_feedback_focus(
+        stage="O",
+        missing=[""],
+        suggestions=[""],
+        student_text=long_o,
+    )
+    assert "小升級" not in suggestions[0]
 
 
 def test_prompt_versions_cover_active_surfaces():

@@ -50,6 +50,12 @@ from app.prompts.builders.coach_chat import (
     build_synthesis_coach_system_prompt,
     build_writing_coach_system_prompt,
 )
+from app.prompts.playbook_variants import pick_variant
+from app.prompts.policy.student_input_bucket import (
+    classify_student_input,
+    skip_book_grounding_enforcement,
+    truncate_student_draft_excerpt,
+)
 from app.prompts.policy.feedback_focus import (
     detect_feedback_strength,
     normalize_feedback_focus,
@@ -1549,6 +1555,7 @@ async def _enforce_feedback_book_grounding(
     suggestions: list[str],
     *,
     use_llm_checker: bool = False,
+    input_bucket: Optional[str] = None,
 ) -> Tuple[bool, list[str], list[str]]:
     """
     Ensure feedback path flags likely hallucinations vs book_pack.
@@ -1563,6 +1570,9 @@ async def _enforce_feedback_book_grounding(
     # book events, so grounding checks are irrelevant and cause false positives.
     stage_upper = (stage or "O").strip().upper()
     if stage_upper == "D":
+        return ok, missing, suggestions
+
+    if input_bucket and skip_book_grounding_enforcement(input_bucket):
         return ok, missing, suggestions
 
     bad = False
@@ -1868,14 +1878,31 @@ def _looks_valid_feedback_narration(text: str) -> bool:
     return all(x in t for x in required)
 
 
+def _prev_ai_opener_from_messages(msgs: list[Any]) -> Optional[str]:
+    """Last message is treated as the current student turn; scan earlier AI texts."""
+    if not msgs or len(msgs) < 2:
+        return None
+    for m in reversed(msgs[:-1]):
+        if getattr(m, "sender", None) == "ai":
+            t = (getattr(m, "text", None) or "").strip()
+            if t:
+                return t[:24]
+    return None
+
+
 async def _genai_feedback(
     *,
     stage: str,
     text: str,
     book_pack: Optional[dict[str, Any]],
+    input_bucket: str = "normal",
 ) -> Tuple[bool, list[str], list[str], Optional[str], Optional[str], Optional[str], dict[str, Any]]:
-    sys, user_msg = build_genai_feedback_prompts(stage=stage, text=text, book_pack=book_pack)
-    if looks_likely_ungrounded_in_book(text, book_pack, stage=stage):
+    sys, user_msg = build_genai_feedback_prompts(
+        stage=stage, text=text, book_pack=book_pack, input_bucket=input_bucket
+    )
+    if (not skip_book_grounding_enforcement(input_bucket)) and looks_likely_ungrounded_in_book(
+        text, book_pack, stage=stage
+    ):
         user_msg = (
             "【系統提示：教材核對】學生草稿中的具體人、事、物看起來無法由故事摘要／摘錄支持。"
             "請將 ok 設為 false；missing 須溫和說明須對齊教材、勿使用書中未出現的人或情節；"
@@ -2321,6 +2348,9 @@ async def writing_coach_chat(
                 detail=f"這段內容目前不適合送出：{unsafe_reason}。請改成尊重、安全的說法後再試一次。",
             )
 
+    input_bucket = classify_student_input(body) if body else classify_student_input("")
+    draft_excerpt = truncate_student_draft_excerpt(body)
+
     if not await _allow_chat_message(db, user.id):
         msg = "請慢一點，我們一次說一個重點。"
         db.add(OridChatMessage(session_id=session.id, stage=stage_ctx, sender="ai", text=msg))
@@ -2348,6 +2378,12 @@ async def writing_coach_chat(
         limit=max(ORID_HISTORY_LIMIT + 12, 24),
     )
 
+    coach_turn_seed = f"{user.id}:{session.id}:{len(msgs)}"
+    opening_hint = pick_variant(coach_turn_seed, input_bucket)
+    prev_ai_opener = _prev_ai_opener_from_messages(msgs)
+    display_nm = (getattr(user, "display_name", None) or "").strip() or None
+    login_id = (getattr(user, "email", None) or "").strip() or None
+
     condition = normalize_orid_condition(session.condition, default=DEFAULT_ORID_CONDITION)
     fb_ok: Optional[bool] = None
     fb_missing: list[str] = []
@@ -2366,7 +2402,10 @@ async def writing_coach_chat(
             fb_imp = None
         else:
             fb_ok, fb_missing, fb_sug, fb_ex, fb_imp, fb_praise, fb_rubric = await _genai_feedback(
-                stage=stage_ctx, text=body, book_pack=book_pack
+                stage=stage_ctx,
+                text=body,
+                book_pack=book_pack,
+                input_bucket=input_bucket,
             )
 
         fb_ok, fb_missing, fb_sug = await _enforce_feedback_book_grounding(
@@ -2377,6 +2416,7 @@ async def writing_coach_chat(
             fb_missing,
             fb_sug,
             use_llm_checker=(not is_control_condition(condition, default=DEFAULT_ORID_CONDITION)),
+            input_bucket=input_bucket,
         )
         fb_missing, fb_sug = normalize_feedback_focus(
             stage=stage_ctx,
@@ -2431,7 +2471,14 @@ async def writing_coach_chat(
                 ensure_ascii=False,
             )
             sys_n, user_n = build_feedback_narration_prompt(
-                stage=stage_ctx, feedback_json_summary=summary
+                stage=stage_ctx,
+                feedback_json_summary=summary,
+                student_display_name=display_nm,
+                student_login=login_id,
+                student_draft_excerpt=draft_excerpt,
+                input_bucket=input_bucket,
+                opening_hint=opening_hint,
+                prev_ai_opener=prev_ai_opener,
             )
             try:
                 ai_reply = await _chat_completion(
@@ -2501,6 +2548,10 @@ async def writing_coach_chat(
         sys_p = build_synthesis_coach_system_prompt(
             book_context=book_context,
             week1_orid_lines=week1_slots,
+            student_display_name=display_nm,
+            student_login=login_id,
+            opening_hint=opening_hint,
+            prev_ai_opener=prev_ai_opener,
         )
         hist_syn: list[dict[str, str]] = []
         for m in msgs[-ORID_HISTORY_LIMIT:]:
@@ -2528,6 +2579,11 @@ async def writing_coach_chat(
                 stage=stage_ctx,
                 book_context=book_context,
                 source=source,
+                student_display_name=display_nm,
+                student_login=login_id,
+                input_bucket=input_bucket,
+                opening_hint=opening_hint,
+                prev_ai_opener=prev_ai_opener,
             )
             hist: list[dict[str, str]] = []
             for m in msgs[-ORID_HISTORY_LIMIT:]:
@@ -2565,6 +2621,8 @@ async def writing_coach_chat(
             "source": source,
             "draft": draft_key,
             "feedback_strength": feedback_strength,
+            "input_bucket": input_bucket,
+            "opening_hint": opening_hint,
             **({"rubric_focus": rf} if (rf := (fb_rubric.get("rubric_focus") if source == "feedback_button" else None)) else {}),
             **({"rubric_level_estimate": rl} if (rl := (fb_rubric.get("rubric_level_estimate") if source == "feedback_button" else None)) else {}),
         }
@@ -2637,6 +2695,7 @@ async def writing_feedback(
 
     condition = normalize_orid_condition(session.condition, default=DEFAULT_ORID_CONDITION)
     feedback_strength = detect_feedback_strength(data.stage, text)
+    wf_input_bucket = classify_student_input(text)
 
     praise: Optional[str] = None
     rubric_snap: dict[str, Any] = {}
@@ -2646,7 +2705,10 @@ async def writing_feedback(
         improved = None
     else:
         ok, missing, suggestions, example, improved, praise, rubric_snap = await _genai_feedback(
-            stage=data.stage, text=text, book_pack=book_pack
+            stage=data.stage,
+            text=text,
+            book_pack=book_pack,
+            input_bucket=wf_input_bucket,
         )
 
     ok, missing, suggestions = await _enforce_feedback_book_grounding(
@@ -2657,6 +2719,7 @@ async def writing_feedback(
         missing,
         suggestions,
         use_llm_checker=(not is_control_condition(condition, default=DEFAULT_ORID_CONDITION)),
+        input_bucket=wf_input_bucket,
     )
     missing, suggestions = normalize_feedback_focus(
         stage=data.stage,

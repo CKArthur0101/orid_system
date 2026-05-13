@@ -32,56 +32,143 @@ def _pick_phrase(options: tuple[str, ...], seed: str) -> str:
     return options[idx]
 
 
-def _stage_missing_pool(stage: str) -> tuple[str, ...]:
+def _missing_options(stage: str, strength: str) -> tuple[str, ...]:
+    """Progressive hints: stronger drafts get 'next rung' asks, not repeats of basics."""
     s = (stage or "O").strip().upper()
-    return {
-        "O": (
+    lv = (strength or "mid").strip().lower()
+    if s == "O":
+        if lv == "high":
+            return (
+                "先把故事摘要讀一遍：如果還有一句**比較大的情節**幾乎沒出現在你寫的稿子裡，請先把那一句用你自己的話補進 O（可先寫一句接在合適的位置）。",
+                "目前幾件事寫得很清楚；下一步請對照摘要，挑出**還沒寫到的一段**（例如中間衝突或轉變），先用一段話串一個重點就好。",
+                "若摘要每一句你都已經有寫到，再挑一個：補一句更細的動作、或補一句旁人反應（二選一）。",
+            )
+        if lv == "mid":
+            return (
+                "方向對了，下一步把先後再銜接一句：讓讀者跟上誰先做了什麼",
+                "你有把重點寫出來了，下一步補一句「接著又發生什麼」讓故事更連貫",
+                "下一步試著多寫一句：事情是在哪裡發生的（仍然是客觀描述）",
+            )
+        return (
             "還差一個清楚的事件：是誰做了什麼，事情先後怎麼發生",
             "再補一句事件會更清楚：哪個人先做了哪個動作，後來又怎麼了",
-            "你有碰到重點了，下一步是把「先發生、後發生」說出來",
-        ),
-        "R": (
+            "你有把一點點重點寫出來了，下一步把「誰」跟「做了什麼」寫滿一句",
+        )
+    if s == "R":
+        if lv == "high":
+            return (
+                "感受跟原因都上路了，下一步把感受寫具體一點：哪一個畫面讓你最有感",
+                "你已經連到故事了，下一步試著多說一句「那時候我心裡像什麼」讓讀者更懂",
+                "方向很穩了，下一步把原因再扣回故事裡更細的一句就好",
+            )
+        if lv == "mid":
+            return (
+                "還差一個感受和原因：你當下覺得什麼，為什麼會這樣覺得",
+                "你有在回應故事了，再補一句「我覺得……，因為……」會更清楚",
+                "感受有方向了，現在只差把原因連回故事裡那一幕",
+            )
+        return (
             "還差一個感受和原因：你當下覺得什麼，為什麼會這樣覺得",
-            "你有在回應故事了，再補一句「我覺得……，因為……」會更清楚",
-            "感受有方向了，現在只差把原因連回故事裡那一幕",
-        ),
-        "I": (
+            "先把一個感受寫出來，再補一句因為故事裡哪一幕",
+            "你可以先說我覺得……，再補因為……",
+        )
+    if s == "I":
+        if lv == "high":
+            return (
+                "想法和理由都出來了，下一步把道理說得更貼故事：多一句「因為書裡……」",
+                "方向清楚了，下一步試著用一句話說「這對我有什麼用」",
+                "已經有學到了，下一步把『所以以後我會留意什麼』輕輕帶一句就好",
+            )
+        if lv == "mid":
+            return (
+                "還差一個想法和理由：你明白了什麼，故事裡哪一段可以說明",
+                "你的想法快比較完整了，再補一句「因為故事裡……」就會更清楚",
+                "這段重點是你學到什麼，還差一個故事裡的理由來說明",
+            )
+        return (
             "還差一個想法和理由：你明白了什麼，故事裡哪一段可以說明",
-            "你的想法快比較完整了，再補一句「因為故事裡……」就會更清楚",
-            "這段重點是你學到什麼，還差一個故事裡的理由來說明",
-        ),
-        "D": (
+            "先把一個想法寫出來，再補一句故事裡的例子",
+            "你可以先寫這件事讓我明白……，再補因為……",
+        )
+    if s == "D":
+        if lv == "high":
+            return (
+                "行動已經很具體了，下一步試著加一句「什麼情況下我會提醒自己」",
+                "方向很清楚了，下一步把第一步寫得更小、更像真的做得到",
+                "已經有步驟了，下一步補一句「如果做不到，我先怎麼辦」讓計畫更穩",
+            )
+        if lv == "mid":
+            return (
+                "還差一個做得到的第一步：下次在什麼情況，你會先做什麼",
+                "行動方向有了，請再寫出「下次遇到……我會先……」",
+                "這段要寫成真的做得到，還差一個你可以先做的第一步",
+            )
+        return (
             "還差一個做得到的第一步：下次在什麼情況，你會先做什麼",
-            "行動方向有了，請再寫出「下次遇到……我會先……」",
-            "這段要寫成真的做得到，還差一個你可以先做的第一步",
-        ),
-    }.get(s, ("還差一個明確主點，先補一句就好",))
+            "先寫出下次我會……，再補一句什麼時候做",
+            "你可以先寫遇到……我就先……",
+        )
+    return ("還差一個明確主點，先補一句就好",)
 
 
-def _stage_suggestion_pool(stage: str) -> tuple[str, ...]:
+def _suggestion_options(stage: str, strength: str) -> tuple[str, ...]:
     s = (stage or "O").strip().upper()
-    return {
-        "O": (
-            "你可以先寫：一開始……，後來……",
-            "試著接下去：先發生的是……，接著……",
-            "先用一句整理順序：先……，再……",
-        ),
-        "R": (
+    lv = (strength or "mid").strip().lower()
+    if s == "O":
+        if lv == "high":
+            return (
+                "先掃摘要：選一個你稿子上還沒寫到的**大事件**，用三句話寫出「誰—做了什麼—後來怎麼了」；再讀一次摘要看還缺哪一句。",
+                "試著把摘要裡最長的一條你還沒寫的事補上：先一句開頭介紹那段；再一句寫關鍵動作；最後一句接到你已經寫好的段落。",
+                "如果摘要都已出現，就做小升級：先加一句細節形容；再補一句旁人反應；最後檢查人稱一致。",
+            )
+        if lv == "mid":
+            return (
+                "你可以先寫：一開始……，後來……",
+                "試著接下去：先發生的是……，接著……",
+                "先用一句整理順序：先……，再……",
+            )
+        return (
+            "你可以先寫：故事裡先出現誰，他先做什麼",
+            "試著接下去：先……，後來……",
+            "先用一句寫出誰做了什麼，再補一句後來怎麼了",
+        )
+    if s == "R":
+        if lv == "high":
+            return (
+                "你可以多寫一句：那一幕讓我最……，因為我看到……",
+                "試著把感受變成畫面：像拍照一樣寫出你記得的一個鏡頭",
+                "接著補一句：如果朋友讀不懂，我會怎麼再解釋我的感受",
+            )
+        return (
             "你可以先寫：我覺得……，因為……",
             "試著接下去：我那時候覺得……，因為看到……",
             "先寫感受再寫原因：我覺得……，是因為……",
-        ),
-        "I": (
+        )
+    if s == "I":
+        if lv == "high":
+            return (
+                "你可以多寫一句：所以我以後在學校／家裡會留意……",
+                "試著把道理說成小例子：像我有一次……",
+                "接著補一句：如果朋友不同意，我會怎麼說明我的想法",
+            )
+        return (
             "你可以先寫：這件事讓我明白……，因為……",
             "試著接下去：我學到……，因為故事裡……",
             "先說你的想法，再補理由：這提醒我……，因為……",
-        ),
-        "D": (
+        )
+    if s == "D":
+        if lv == "high":
+            return (
+                "你可以把第一步寫得更小：例如「明天下課我先……」",
+                "試著加一句：我怎麼知道自己有做到",
+                "接著補一句：如果忘記了，我會用什麼方法提醒自己",
+            )
+        return (
             "你可以先寫：下次遇到……，我會先……",
             "先寫第一步就好：下次我會先……，再……",
             "把行動寫小一點：當……的時候，我先……",
-        ),
-    }.get(s, ("試著先寫一句，再補一個小理由",))
+        )
+    return ("試著先寫一句，再補一個小理由",)
 
 
 def _draft_strength(stage: str, student_text: str) -> str:
@@ -98,7 +185,9 @@ def _draft_strength(stage: str, student_text: str) -> str:
         return "low"
 
     if s == "O":
-        if any(k in t for k in ("一開始", "接著", "後來", "最後")) and len(compact) >= 18:
+        if any(k in t for k in ("一開始", "接著", "然後", "後來", "最後", "隔天", "第二天", "接下來")) and len(
+            compact
+        ) >= 18:
             return "high"
         if any(k in t for k in ("先", "後", "然後", "做了", "看到", "聽到")):
             return "mid"
@@ -196,10 +285,17 @@ def normalize_feedback_focus(
     seed = f"{stage}|{strength}|{student_text}|{m0}|{s0}"
 
     if (not m0) or any(tok in m0 for tok in _VAGUE_FEEDBACK_TOKENS):
-        base = _pick_phrase(_stage_missing_pool(stage), seed)
+        miss_opts = _missing_options(stage, strength)
+        # O+high 的第三句是「摘要都已寫到才做小修」；fallback 抽選時沒有真的比對摘要，勿用該句當預設。
+        if (stage or "").strip().upper() == "O" and strength == "high" and len(miss_opts) >= 3:
+            miss_opts = miss_opts[:2]
+        base = _pick_phrase(miss_opts, seed)
         m0 = f"{_strength_prefix(stage, strength)}：{base}"
 
     if (not s0) or any(tok in s0 for tok in _VAGUE_FEEDBACK_TOKENS):
-        s0 = _pick_phrase(_stage_suggestion_pool(stage), f"sug|{seed}")
+        sug_opts = _suggestion_options(stage, strength)
+        if (stage or "").strip().upper() == "O" and strength == "high" and len(sug_opts) >= 3:
+            sug_opts = sug_opts[:2]
+        s0 = _pick_phrase(sug_opts, f"sug|{seed}")
 
     return [_child_friendly_text(m0)], [_child_friendly_text(s0)]
