@@ -3,7 +3,11 @@ from __future__ import annotations
 from typing import Any, Optional, Tuple
 import re
 
-from app.prompts.policy.student_input_bucket import bucket_tone_hint_zh
+from app.prompts.policy.student_input_bucket import (
+    BUCKET_EMPTY,
+    BUCKET_TOO_SHORT,
+    bucket_tone_hint_zh,
+)
 from app.prompts.templates.writing_feedback import (
     BOOK_FACT_RULES,
     FEW_SHOT_BLOCK,
@@ -122,6 +126,35 @@ def _characters_for_prompt(book_pack: Optional[dict[str, Any]]) -> str:
     return "、".join(lines) if lines else "（未提供角色清單）"
 
 
+_O_STUCK_HINT_PHRASES: tuple[str, ...] = (
+    "還不會",
+    "不會寫",
+    "不知道怎麼寫",
+    "不懂怎麼寫",
+    "不知道要寫",
+    "寫不出",
+    "不會下筆",
+    "我不知道",
+    "不知道誰",
+    "不懂誰",
+    "分不清誰",
+    "誰做了什麼",  # 常見 meta：「我不知道誰做了什麼」
+    "想不起來",
+)
+
+
+def _o_needs_book_plot_anchor(*, text: str, input_bucket: str) -> bool:
+    """O 段若幾乎沒內容或學生表達卡住，JSON 層要強制帶書裡具體情節，避免只剩『一步一步』空架。"""
+    if input_bucket in (BUCKET_EMPTY, BUCKET_TOO_SHORT):
+        return True
+    t = (text or "").strip()
+    if not t:
+        return True
+    if any(p in t for p in _O_STUCK_HINT_PHRASES) and len(t) < 72:
+        return True
+    return False
+
+
 def build_genai_feedback_prompts(
     *,
     stage: str,
@@ -172,7 +205,7 @@ def build_genai_feedback_prompts(
 【語氣與長度感】
 學生常在一節課約 **40 分鐘**內寫完 ORID 四格，**suggestions 要夠「一次能跨大步」**：仍是一段口語、不要論文，但要比「只叮一句」更完整。
 用字要適合國小五、六年級：短句、口語、容易懂。不要用「深化、完整度、精準、論述、脈絡、可執行」這類太大人的詞。
-尤其 suggestions 與 example 不能只丟一句很空的提醒；**suggestions 那一條可含 2～4 個清楚小步**（分號或先再最後），讓學生一輪能多寫一點。
+尤其 suggestions 與 example 不能只丟一句很空的提醒；**suggestions 那一條可含 2～4 個清楚小步**（分號或換用不同連接詞），讓學生一輪能多寫一點；**避免**每輪都用「一步一步」當整段主軸。
 
 【本輪輸入語氣（仍只輸出 JSON）】
 {bucket_hint}
@@ -187,7 +220,7 @@ def build_genai_feedback_prompts(
 ====================
 - praise：**必須**看得出你有讀學生原文，盡量點到裡面的人/事/詞（若完全空白再用鼓勵下筆，禁止空泛罐頭讚美）。
 - missing：不多於 1 條，對準本段**一個**主問題（一刀）。
-- suggestions：不多於 1 條，但**這一條可以較長**：用 **2～4 個短句**排成一小段（先…再…最後…；或分號連接），讓學生一輪就能多補齊一點；仍避免抽象空話。
+- suggestions：不多於 1 條，但**這一條可以較長**：用 **2～4 個短句**排成一小段（分號、或換用不同連接詞；不要篇篇固定「先…再…最後…」），讓學生一輪就能多補齊一點；仍避免抽象空話。
 - example：給與學生原文貼近的**示範起頭**；可 **1～2 句**用分號連接，幫學生看懂可以怎麼接寫；不要整篇代寫，也不要只丟一句空句型。
 - improved：通常 null。
 
@@ -211,10 +244,19 @@ def build_genai_feedback_prompts(
     o_summary_priority = ""
     if stage == "O":
         o_summary_priority = (
-            "若學生草稿已寫到多個事件且出現時間銜接，missing 請**優先**對照上方「故事摘要」："
-            "點出摘要裡還**幾乎沒寫到**的一大段情節（用摘要可支持的事實，勿發明）；"
-            "不要只要求加轉折詞、套先後句型或微調用詞，除非摘要重點真的都已出現。\n\n"
+            "若學生草稿已寫到多個事件且出現時間銜接，missing 請**優先**補齊「書裡／故事裡」還**幾乎沒寫到**的一大段情節（只依上方教材可支持的事實，勿發明）；"
+            "用口語直接說缺哪一段，**不要**在 missing／suggestions／example 裡寫「故事摘要」「對照摘要」「掃摘要」等詞。\n"
+            "suggestions 請在同一字串裡**盡量直接寫出 1～2 個尚未寫到的具體情節名稱**（與故事摘要或摘錄用詞一致），不要只叫學生自己去「選一個大事件」。\n"
+            "不要只要求加轉折詞、套先後句型或微調用詞，除非教材重點真的都已出現。\n\n"
         )
+
+    o_plot_anchor = ""
+    if stage == "O" and _o_needs_book_plot_anchor(text=text, input_bucket=input_bucket):
+        o_plot_anchor = """
+【本輪特別：O 段草稿極短或學生表達卡住】
+suggestions 與 example **不可**整段只做「一步一步／慢慢來／先再最後」等抽象流程，卻**完全不提書裡任何一幕**。
+請從上方「故事摘要」或「故事摘錄」**至少挑一個**口語好懂的情節（誰＋做了什麼），寫進 suggestions 或 example，讓學生看完能直接照著接寫一句；仍禁止發明教材沒有的事。
+""".strip()
 
     user_prompt = f"""
 學生「{stage}」段原文如下（你回饋時稱讚要對準這些字，不要重複罐頭句）：
@@ -223,7 +265,7 @@ def build_genai_feedback_prompts(
 {text}
 ---
 
-{o_summary_priority}請輸出 JSON。missing 與 suggestions 陣列各至多只放 1 個字串；**suggestions 那一個字串裡可以一次排 2～4 個小步**（用分號或「先…再…最後…」），方便一節課內寫完四格。請用國小五、六年級看得懂的口吻。example 可給兩句示範起頭（分號連接）或一句支架，仍不要整篇代寫。improved 多數情況為 null。
+{o_summary_priority}{o_plot_anchor + chr(10) + chr(10) if o_plot_anchor else ""}請輸出 JSON。missing 與 suggestions 陣列各至多只放 1 個字串；**suggestions 那一個字串裡可以一次排 2～4 個小步**（分號或換用不同連接詞，不要篇篇固定「先…再…最後…」），方便一節課內寫完四格。請用國小五、六年級看得懂的口吻。example 可給兩句示範起頭（分號連接）或一句支架，仍不要整篇代寫。improved 多數情況為 null。
 """.strip()
 
     return system_prompt, user_prompt

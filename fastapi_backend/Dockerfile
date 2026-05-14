@@ -26,6 +26,8 @@ ENV PATH="/app/.venv/bin:$PATH"
 # Copy the rest of the application code
 COPY . .
 
+RUN sed -i 's/\r$//' /app/start.sh /app/start.prod.sh
+
 RUN chmod +x /app/start.sh /app/start.prod.sh
 
 # Expose the application port

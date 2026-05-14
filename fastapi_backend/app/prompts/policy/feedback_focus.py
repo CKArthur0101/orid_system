@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from app.prompts.policy.turn_destination import GENAI_META_MISSING_FALLBACK, student_o_meta_stuck
+
 
 _VAGUE_FEEDBACK_TOKENS = (
     "深化內容",
@@ -39,9 +41,9 @@ def _missing_options(stage: str, strength: str) -> tuple[str, ...]:
     if s == "O":
         if lv == "high":
             return (
-                "先把故事摘要讀一遍：如果還有一句**比較大的情節**幾乎沒出現在你寫的稿子裡，請先把那一句用你自己的話補進 O（可先寫一句接在合適的位置）。",
-                "目前幾件事寫得很清楚；下一步請對照摘要，挑出**還沒寫到的一段**（例如中間衝突或轉變），先用一段話串一個重點就好。",
-                "若摘要每一句你都已經有寫到，再挑一個：補一句更細的動作、或補一句旁人反應（二選一）。",
+                "想一想書裡接下來還發生什麼：若還有一句**比較大的情節**幾乎沒出現在你寫的稿子裡，請先把那一句用你自己的話補進 O（可先寫一句接在合適的位置）。",
+                "目前幾件事寫得很清楚；下一步試著寫出**故事裡還沒提到的一段**（例如中間衝突或轉變），先用一段話串一個重點就好。",
+                "若書裡重點情節你都已經有寫到，再挑一個：補一句更細的動作、或補一句旁人反應（二選一）。",
             )
         if lv == "mid":
             return (
@@ -117,9 +119,9 @@ def _suggestion_options(stage: str, strength: str) -> tuple[str, ...]:
     if s == "O":
         if lv == "high":
             return (
-                "先掃摘要：選一個你稿子上還沒寫到的**大事件**，用三句話寫出「誰—做了什麼—後來怎麼了」；再讀一次摘要看還缺哪一句。",
-                "試著把摘要裡最長的一條你還沒寫的事補上：先一句開頭介紹那段；再一句寫關鍵動作；最後一句接到你已經寫好的段落。",
-                "如果摘要都已出現，就做小升級：先加一句細節形容；再補一句旁人反應；最後檢查人稱一致。",
+                "先挑書裡一件你稿子上還沒寫到的事，用三句話寫「誰、做了什麼、後來怎麼了」；再挑第二件也各用一小句補上，兩件之間用分號連起來。",
+                "你可以先寫一句「接下來故事裡還有……」（要寫出具體事，不要只寫空話）；再寫一句接到你已經寫好的段落；最後檢查時間詞有沒有讓讀者跟上。",
+                "如果書裡重點情節都已出現，就做小升級：先加一句細節形容；再補一句旁人反應；最後檢查人稱一致。",
             )
         if lv == "mid":
             return (
@@ -278,7 +280,7 @@ def normalize_feedback_focus(
 
     if "對齊教材" in m0:
         if not s0:
-            s0 = "請對照故事摘要，改用書中真實的人與事件重寫"
+            s0 = "請依書裡真實的人與事件重寫"
         return [m0], [s0]
 
     strength = _draft_strength(stage, student_text)
@@ -286,7 +288,7 @@ def normalize_feedback_focus(
 
     if (not m0) or any(tok in m0 for tok in _VAGUE_FEEDBACK_TOKENS):
         miss_opts = _missing_options(stage, strength)
-        # O+high 的第三句是「摘要都已寫到才做小修」；fallback 抽選時沒有真的比對摘要，勿用該句當預設。
+        # O+high 的第三句是「書裡重點都已寫到才做小修」；fallback 抽選時沒有真的比對全文，勿用該句當預設。
         if (stage or "").strip().upper() == "O" and strength == "high" and len(miss_opts) >= 3:
             miss_opts = miss_opts[:2]
         base = _pick_phrase(miss_opts, seed)
@@ -298,4 +300,154 @@ def normalize_feedback_focus(
             sug_opts = sug_opts[:2]
         s0 = _pick_phrase(sug_opts, f"sug|{seed}")
 
+    if (stage or "").strip().upper() == "O" and student_o_meta_stuck((student_text or "").strip()):
+        bookish = any(
+            k in m0
+            for k in (
+                "阿松",
+                "爺爺",
+                "柿子",
+                "倉庫",
+                "書裡",
+                "教材",
+                "故事裡",
+                "主人公",
+                "哎唷",
+            )
+        )
+        canned = ("讀的人還看不出" in m0) or ("看不出故事" in m0)
+        if canned and not bookish:
+            m0 = GENAI_META_MISSING_FALLBACK
+            if "摘要" not in s0 and "摘錄" not in s0:
+                s0 = "先翻到故事摘要，挑一句「誰做了什麼」，照那句的精神寫成你的第一段。"
+
     return [_child_friendly_text(m0)], [_child_friendly_text(s0)]
+
+_O_GENERIC_PHRASES = (
+    "中間衝突",
+    "轉變",
+    "挑一件",
+    "選一個",
+    "先挑書裡",
+    "三句話",
+    "誰—做了什麼",
+    "誰、做了什麼",
+    "再去想",
+    "還沒提到的一段",
+)
+
+
+def _o_missing_looks_grounding_priority(missing: list[str]) -> bool:
+    m = (missing[0] if missing else "").strip()
+    return any(
+        k in m
+        for k in (
+            "不在書裡",
+            "書裡說的是",
+            "書裡叫做",
+            "看起來不在書裡",
+            "對齊教材",
+        )
+    )
+
+
+def _o_feedback_looks_generic_coaching(missing: list[str], suggestions: list[str]) -> bool:
+    blob = (missing[0] if missing else "") + (suggestions[0] if suggestions else "")
+    return any(p in blob for p in _O_GENERIC_PHRASES)
+
+
+def _compact_zh(text: str) -> str:
+    return re.sub(r"\s+", "", text or "")
+
+
+def _clauses_from_event_line(ev: str) -> list[str]:
+    parts = re.split(r"[，。、；：／\n]+", ev)
+    return [p.strip() for p in parts if len(p.strip()) >= 8]
+
+
+def _story_event_kw_score(clause: str) -> int:
+    for i, kw in enumerate(("倉庫", "柿子葉", "葉子", "樹枝", "砍", "樹樁", "樹椿", "種子", "獨占", "炫耀", "羨慕")):
+        if kw in clause:
+            return 50 - i
+    return 0
+
+
+def apply_o_key_event_gaps(
+    *,
+    stage: str,
+    strength: str,
+    student_text: str,
+    key_events: Any,
+    missing: list[str],
+    suggestions: list[str],
+) -> tuple[list[str], list[str]]:
+    """
+    When O draft already has several beats (high), replace generic「挑一段／中間衝突」
+    with concrete clauses from key_events that do not appear in the student text.
+    Does not override book-grounding corrections.
+    """
+    if (stage or "").strip().upper() != "O" or (strength or "").strip().lower() != "high":
+        return missing, suggestions
+    if _o_missing_looks_grounding_priority(missing):
+        return missing, suggestions
+    if not isinstance(key_events, list) or not key_events:
+        return missing, suggestions
+
+    compact_s = _compact_zh(student_text)
+    if len(compact_s) < 18:
+        return missing, suggestions
+
+    hints: list[str] = []
+    for raw in key_events:
+        ev = str(raw).strip()
+        if len(ev) < 10:
+            continue
+        ev_c = ev.replace(" ", "")
+        if ev_c and ev_c in compact_s:
+            continue
+        clauses = _clauses_from_event_line(ev)
+        if not clauses and len(ev) >= 10:
+            clauses = [ev[: min(36, len(ev))]]
+        miss_candidates = [c for c in clauses if c and c not in compact_s]
+        if not miss_candidates:
+            continue
+        best = max(miss_candidates, key=lambda c: (_story_event_kw_score(c), len(c)))
+        cand = best.strip()[:42]
+        if cand and cand not in hints:
+            hints.append(cand)
+        if len(hints) >= 4:
+            break
+
+    if len(hints) < 2 and not _o_feedback_looks_generic_coaching(missing, suggestions):
+        return missing, suggestions
+    if not hints:
+        return missing, suggestions
+
+    hints.sort(key=_story_event_kw_score, reverse=True)
+    hints = hints[:3]
+
+    mprev = (missing[0] if missing else "").strip()
+    if mprev:
+        covered = 0
+        for h in hints:
+            frag = h[:12] if len(h) >= 12 else h
+            if len(frag) >= 4 and frag in mprev:
+                covered += 1
+        if covered >= len(hints):
+            return missing, suggestions
+
+    joined = "；".join(f"「{h}」" for h in hints[:3])
+    miss = f"書裡還有這些情節你幾乎還沒寫進稿子：{joined}。先挑最容易接的一句補在合適的位置就好。"
+    if len(miss) > 200:
+        miss = miss[:197] + "…"
+
+    if len(hints) >= 2:
+        sug = (
+            f"先加一小句接在「藏柿子／柿子蒂」附近，寫到「{hints[0]}」；"
+            f"再加一小句寫「{hints[1]}」；最後用「然後／隔天／最後」把順序讀一次，看讀者跟不跟得上。"
+        )
+    else:
+        sug = f"先加一小句寫「{hints[0]}」，再用分號接到你已經寫好的段落，讀者就比較跟得上。"
+
+    return [_child_friendly_text(miss)], [_child_friendly_text(sug)]
+

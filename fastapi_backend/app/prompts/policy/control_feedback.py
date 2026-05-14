@@ -1,18 +1,25 @@
 from __future__ import annotations
 
 from app.prompts.policy.feedback_focus import normalize_feedback_focus
+from app.prompts.policy.turn_destination import (
+    personalized_control_praise_line,
+    strip_orid_stage_tag,
+    student_o_meta_stuck,
+)
 from app.prompts.shared_parts.stage_text import stage_name_zh
 
 
 def _praise_line_from_draft(t: str, stage: str) -> str:
     """從學生草稿截一小段用於稱讚，避免全篇罐頭句（無 LLM 或 praise 不具體時）。"""
-    t = (t or "").strip()
+    raw = (t or "").strip()
     s = (stage or "O").strip().upper()
     stage_zh = stage_name_zh(s)
-    if not t:
+    if not strip_orid_stage_tag(raw):
         return "你願意寫，我已經看到了，我們一起再補一小步就好。"
-
-    one = t.replace("\n", " ")
+    alt = personalized_control_praise_line(raw, stage_zh)
+    if alt:
+        return alt
+    one = raw.replace("\n", " ")
     for sep in ("。", "！", "？", "，"):
         if sep in one:
             one = one.split(sep, 1)[0].strip()
@@ -107,8 +114,22 @@ def format_control_feedback_reply(
     else:
         line2 = m0 if m0 else "我們先只改一個地方，這段就會更清楚。"
 
-    if s0 and "用。結尾" in s0:
-        base_line3 = "我們一步一步來，先把同一件事寫成完整一句，再加上句號；先寫誰做了什麼，再補後來怎樣。"
+    st = (student_draft or "").strip()
+    core_st = strip_orid_stage_tag(st).replace(" ", "")
+    o_meta_anchor = s_up == "O" and bool(anchor) and student_o_meta_stuck(st)
+    if o_meta_anchor:
+        line2 = (
+            "你現在比較像在想「故事裡到底是誰做了什麼」，還沒把書裡的事寫出來；"
+            "下面我先用本週故事裡的一句情節，帶你寫出第一句客觀描述。"
+        )
+
+    short_o_plain = s_up == "O" and len(core_st) < 14 and bool(anchor) and not o_meta_anchor
+    line3_custom: str | None = None
+
+    if o_meta_anchor and nudge:
+        base_line3 = nudge
+    elif s0 and "用。結尾" in s0:
+        base_line3 = "先把同一件事寫成完整一句，句尾加上句號；先寫誰做了什麼，再補後來怎樣。"
     elif "對齊教材" in m0:
         grounding_stem_map = {
             "O": "我們先對回書中真的人物和事情，再按順序把前面和後面寫清楚，不要只寫最後一小段。",
@@ -117,20 +138,33 @@ def format_control_feedback_reply(
             "D": "我們先想想書裡帶給你的提醒，再把你下次會做的行動寫清楚。",
         }
         base_line3 = grounding_stem_map.get(s_up, "我們先對回書裡真的人物和事情，再照順序把內容寫清楚。")
+    elif short_o_plain:
+        shown = anchor if len(anchor) <= 56 else anchor[:53] + "…"
+        snippet = shown if len(shown) <= 44 else shown[:41] + "…"
+        base_line3 = f"第一步：用一句話寫出「{snippet}」在書裡發生的事（可以換自己的說法，但不要改變教材裡的事實）。"
+        line3_custom = (
+            f"{base_line3}\n"
+            "第二步：同一段再接「後來……」寫出故事裡下一件真的事；兩句都要能從教材找到依據，不要自己編新角色或新情節。"
+        )
     elif s0 and not any(
         x in s0 for x in ("補充更多細節", "內容完整度", "深化內容", "增加完整度")
     ):
-        base_line3 = f"我們一步一步來，{s0}"
+        # 不要固定加「一步一步」前綴（學生覺得像複製貼上）；suggestions 本身應已是完整引導句。
+        # O 段「想不到書裡誰做了什麼」時已在上方改用書本錨點 nudge，避免重複空話。
+        base_line3 = s0
     elif nudge:
         base_line3 = nudge
     else:
-        base_line3 = "我們先補一個最重要的地方就好，寫成 1 到 2 句，讓讀的人一下就看懂你在說什麼。"
+        base_line3 = "我們先補一個最重要的地方就好，寫成 1 到 2 句，你自己等一下重讀也會更清楚在寫什麼。"
 
-    ex = (example or "").strip() or _default_example_line(stage, anchor)
-    if ex.startswith("例如："):
-        line3 = f"{base_line3}\n{ex}"
+    if line3_custom is not None:
+        line3 = line3_custom
     else:
-        line3 = f"{base_line3}\n例如：{ex}"
+        ex = (example or "").strip() or _default_example_line(stage, anchor)
+        if ex.startswith("例如："):
+            line3 = f"{base_line3}\n{ex}"
+        else:
+            line3 = f"{base_line3}\n例如：{ex}"
 
     return (
         f"你已經做到：\n{line1}\n\n"

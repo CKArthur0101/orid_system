@@ -1,19 +1,21 @@
+# Compose 的 ${VAR} 只從專案目錄 `.env` 或 shell 替換，不會讀各 service 的 env_file。
+# db 僅用 env_file；後端 DATABASE_URL 由 start.prod.sh / Alembic env 依 POSTGRES_* 組出。
+# 若出現「Bind 127.0.0.1:15434 failed」：換 PROD_DB_PORT 或關掉佔用該埠的 Postgres（例如另一組 compose）。
+# 若出現「Bind 127.0.0.1:18082 failed」：換 PROD_BACKEND_PORT 或關掉佔用該埠的 backend。
 services:
   db:
     image: postgres:17
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+    env_file:
+      - .env.prod
     ports:
-      - "127.0.0.1:${PROD_DB_PORT:-15433}:5432"
+      - "127.0.0.1:${PROD_DB_PORT:-15434}:5432"
     volumes:
       - postgres_prod_data:/var/lib/postgresql/data
     networks:
       - orid_prod_net
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -23,12 +25,9 @@ services:
       context: ./fastapi_backend
     env_file:
       - .env.prod
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      OPENAPI_OUTPUT_FILE: ${OPENAPI_OUTPUT_FILE:-./shared-data/openapi.json}
     command: ["./start.prod.sh"]
     ports:
-      - "127.0.0.1:${PROD_BACKEND_PORT:-18080}:8000"
+      - "127.0.0.1:${PROD_BACKEND_PORT:-18082}:8000"
     volumes:
       - ./local-shared-data:/app/shared-data:ro
     depends_on:
@@ -45,9 +44,15 @@ services:
       NODE_ENV: production
       API_BASE_URL: ${API_BASE_URL:-http://backend:8000}
       ACCESS_TOKEN_COOKIE_MAX_AGE_SEC: ${ACCESS_TOKEN_COOKIE_MAX_AGE_SEC:-43200}
-    command: ["./start.prod.sh"]
+    # 不依賴 start.prod.sh（避免舊容器仍用 ./start.prod.sh 或未把腳本打進映像）
+    command:
+      [
+        "/bin/sh",
+        "-c",
+        "set -eu && cd /app && pnpm run build && exec pnpm exec next start --hostname 0.0.0.0 --port 3000",
+      ]
     ports:
-      - "127.0.0.1:${PROD_FRONTEND_PORT:-3200}:3000"
+      - "127.0.0.1:${PROD_FRONTEND_PORT:-3201}:3000"
     depends_on:
       backend:
         condition: service_started

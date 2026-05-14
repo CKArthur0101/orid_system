@@ -2,6 +2,29 @@
 
 set -e
 
+# Default CMD runs this script in Docker; if DATABASE_URL is missing but POSTGRES_* is set
+# (e.g. env_file without compose ${...} substitution), build asyncpg URL like start.prod.sh.
+if [[ -f /.dockerenv && -z "${DATABASE_URL:-}" && -n "${POSTGRES_USER:-}" && -n "${POSTGRES_PASSWORD:-}" && -n "${POSTGRES_DB:-}" ]]; then
+    export DATABASE_URL="$(
+        python -c "
+import os
+from urllib.parse import quote
+e = os.environ
+u, p, d = e['POSTGRES_USER'], e['POSTGRES_PASSWORD'], e['POSTGRES_DB']
+host = (e.get('POSTGRES_HOST') or '').strip() or 'db'
+port = (e.get('POSTGRES_PORT') or '').strip() or '5432'
+print(
+    'postgresql+asyncpg://'
+    + quote(u, safe='')
+    + ':'
+    + quote(p, safe='')
+    + f'@{host}:{port}/'
+    + quote(d, safe='')
+)
+"
+    )"
+fi
+
 run_migrations() {
     local max_retries=20
     local retry_delay=2

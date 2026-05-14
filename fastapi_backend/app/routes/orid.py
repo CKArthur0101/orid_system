@@ -51,18 +51,28 @@ from app.prompts.builders.coach_chat import (
     build_writing_coach_system_prompt,
 )
 from app.prompts.playbook_variants import pick_variant
+from app.utils import strip_markdown_for_student_chat
 from app.prompts.policy.student_input_bucket import (
     classify_student_input,
     skip_book_grounding_enforcement,
     truncate_student_draft_excerpt,
 )
 from app.prompts.policy.feedback_focus import (
+    apply_o_key_event_gaps,
     detect_feedback_strength,
     normalize_feedback_focus,
 )
 from app.prompts.policy.control_feedback import (
     format_control_feedback_reply,
     format_control_free_text_reply,
+)
+from app.prompts.policy.turn_destination import (
+    CONTROL_O_META_MISSING,
+    CONTROL_O_META_SUGGESTION,
+    is_o_placeholder_or_stuck_draft,
+    personalized_control_praise_line,
+    strip_orid_stage_tag,
+    student_o_meta_stuck,
 )
 from app.prompts.builders.checker import build_book_grounding_checker_prompts
 from app.prompts.policy.grounding import (
@@ -197,7 +207,12 @@ ORID_FEEDBACK_RETRY_MAX_COMPLETION_TOKENS = int(
         str(max(ORID_FEEDBACK_MAX_COMPLETION_TOKENS, 3000)),
     )
 )
+# 第二段 LLM（JSON→三段敘述）：預設給比 400 稍多空間，較能帶進書中具體情節（仍受 OPENAI_MAX_COMPLETION_TOKENS 上限）。
+ORID_FEEDBACK_NARRATION_MAX_COMPLETION_TOKENS = int(
+    os.getenv("ORID_FEEDBACK_NARRATION_MAX_COMPLETION_TOKENS", "640")
+)
 ORID_OFFTOPIC_STRICT = _env_bool("ORID_OFFTOPIC_STRICT", False)
+ORID_FEEDBACK_INTERNAL_PLANNER = _env_bool("ORID_FEEDBACK_INTERNAL_PLANNER", False)
 ORID_CHAT_PROMPT_VERSION = os.getenv("ORID_CHAT_PROMPT_VERSION", "orid-chat-v2.2")
 ORID_LIMIT_PER_MINUTE = int(os.getenv("ORID_LIMIT_PER_MINUTE", "30"))
 ORID_LIMIT_WINDOW_SECONDS = int(os.getenv("ORID_LIMIT_WINDOW_SECONDS", "60"))
@@ -813,15 +828,27 @@ async def seed_writing_coach_welcome_if_needed(
 
 
 def book_anchor_one_line(book_pack: Optional[dict[str, Any]], max_len: int = 72) -> str:
+    """給控制組／試試看：優先用 key_events，其次摘錄一句，最後用書名引導。"""
     ev = (book_pack or {}).get("key_events") or []
-    if not isinstance(ev, list) or not ev:
-        return ""
-    s = str(ev[0]).strip()
-    if not s:
-        return ""
-    if len(s) > max_len:
-        return s[: max_len - 1] + "…"
-    return s
+    if isinstance(ev, list) and ev:
+        s = str(ev[0]).strip()
+        if s:
+            return s[: max_len - 1] + "…" if len(s) > max_len else s
+    ex = (book_pack or {}).get("story_excerpts") or []
+    if isinstance(ex, list):
+        for item in ex:
+            t = ""
+            if isinstance(item, dict):
+                t = str(item.get("text") or "").strip()
+            else:
+                t = str(item).strip()
+            if t and "（無文字）" not in t:
+                return t[: max_len - 1] + "…" if len(t) > max_len else t
+    title = str((book_pack or {}).get("book_title") or "").strip()
+    if title:
+        tip = f"《{title}》故事開頭，主角做的一件小事"
+        return tip[: max_len - 1] + "…" if len(tip) > max_len else tip
+    return ""
 
 
 def pick_prompt_from_bank(book_pack: Optional[dict[str, Any]], stage: str, idx: int) -> str:
@@ -1643,14 +1670,18 @@ def _book_grounding_praise(stage: str) -> str:
 
 
 
-def _draft_praise_line(t: str, stage: str) -> str:
+def _draft_praise_line(text: str, stage: str) -> str:
     """稱讚要看得出有讀到原文（人／事／感受／行動片語），避免空泛句。"""
-    t = (t or "").strip()
+    raw = (text or "").strip()
+    t = strip_orid_stage_tag(raw)
     s = (stage or "O").strip().upper()
     zh = _stage_name_zh_for_feedback(s)
     if not t:
         return "願意下筆就很棒，我們先寫一點點。"
-    one = t.replace("\n", " ")
+    alt = personalized_control_praise_line(raw, zh)
+    if alt:
+        return alt
+    one = raw.replace("\n", " ")
     for sep in ("。", "！", "？", "，"):
         if sep in one:
             one = one.split(sep, 1)[0].strip()
@@ -1665,7 +1696,8 @@ def _control_feedback(stage: str, text: str) -> Tuple[bool, list[str], list[str]
     無 LLM 時的規則回饋：只給一組「一個主點」的 missing + suggestion，加一句句型支架（example）。
     回傳：(ok, missing[:1], suggestions[:1], example_stem, praise)
     """
-    t = (text or "").strip()
+    raw = (text or "").strip()
+    t = strip_orid_stage_tag(raw)
     s = (stage or "O").strip().upper()
 
     def _has_sentence() -> bool:
@@ -1690,37 +1722,52 @@ def _control_feedback(stage: str, text: str) -> Tuple[bool, list[str], list[str]
     prior: list[tuple[str, str]] = []
 
     if s == "O":
-        _feel = ("我覺得", "感到", "很溫暖", "很感人", "感動", "很好", "我喜歡", "讓人")
-        _plot = (
-            "把",
-            "分給",
-            "藏",
-            "做",
-            "最後",
-            "然後",
-            "一開始",
-            "接著",
-            "看到",
-            "聽到",
-            "做了",
-            "主角",
-            "同學",
-            "爺",
-            "柿",
-        )
-        if any(f in t for f in _feel) and not any(p in t for p in _plot) and len(t) < 55:
-            prior.append(
-                (
-                    "這段讀起來比較像在寫感覺；O 段我們先寫故事裡真的發生了什麼事。",
-                    "你可以先寫「一開始誰做了什麼」，再補後來發生了什麼。",
-                )
+        if student_o_meta_stuck(t):
+            prior.append((CONTROL_O_META_MISSING, CONTROL_O_META_SUGGESTION))
+        else:
+            _feel = ("我覺得", "感到", "很溫暖", "很感人", "感動", "很好", "我喜歡", "讓人")
+            _plot = (
+                "把",
+                "分給",
+                "藏",
+                "做",
+                "最後",
+                "然後",
+                "一開始",
+                "接著",
+                "看到",
+                "聽到",
+                "做了",
+                "主角",
+                "同學",
+                "爺",
+                "柿",
             )
-        elif len(t) < 12:
-            prior.append(("內容還有點短，讀的人還看不出故事在演什麼", "我們先補一句「是誰做了什麼」，事情就會更清楚。"))
-        elif not _has_sentence():
-            prior.append(("讀起來還沒用一句話說完一件事", "我們先把同一件事寫成完整一句，再用句號收尾，讓人知道先發生了什麼。"))
-        elif len(t) < 25:
-            prior.append(("事件順序還能再清楚一點", "你可以先寫前面發生什麼，再寫後來怎樣，讀的人就更容易懂。"))
+            if any(f in t for f in _feel) and not any(p in t for p in _plot) and len(t) < 55:
+                prior.append(
+                    (
+                        "這段讀起來比較像在寫感覺；O 段我們先寫故事裡真的發生了什麼事。",
+                        "你可以先寫「一開始誰做了什麼」，再補後來發生了什麼。",
+                    )
+                )
+            elif len(t) < 12:
+                prior.append(
+                    (
+                        "內容還有點短，你可以試著多寫一點；也可以先看看下方「試試看這樣寫」的起頭，跟著接一句就好。",
+                        "你可以先寫出故事裡「誰做了什麼」一句，再補「後來……」接下去。",
+                    )
+                )
+            elif not _has_sentence():
+                prior.append(
+                    (
+                        "讀起來還沒用一句話說完一件事",
+                        "我們先把同一件事寫成完整一句，再用句號收尾，讓人知道先發生了什麼。",
+                    )
+                )
+            elif len(t) < 25:
+                prior.append(
+                    ("事件順序還能再清楚一點", "你可以先寫前面發生什麼，再寫後來怎樣，順序會更清楚。")
+                )
     elif s == "R":
         emo_kw = ["開心", "難過", "生氣", "害怕", "擔心", "緊張", "失望", "感動", "驚訝", "不公平", "高興", "難受"]
         if not any(k in t for k in emo_kw):
@@ -1769,12 +1816,12 @@ def _control_feedback(stage: str, text: str) -> Tuple[bool, list[str], list[str]
         miss = [m0]
         sug = [s0]
         ok = False
-        praise = _draft_praise_line(t, s)
+        praise = _draft_praise_line(raw, s)
     else:
         miss = []
         sug = []
         ok = True
-        praise = _draft_praise_line(t, s)
+        praise = _draft_praise_line(raw, s)
 
     return ok, miss, sug, stem, praise
 
@@ -1890,6 +1937,63 @@ def _prev_ai_opener_from_messages(msgs: list[Any]) -> Optional[str]:
     return None
 
 
+async def _orid_feedback_internal_planner_o(
+    *,
+    stage: str,
+    text: str,
+    book_pack: Optional[dict[str, Any]],
+    input_bucket: str,
+    base_user_msg: str,
+) -> str:
+    """
+    Optional Phase-B path: one unstructured call before structured JSON feedback.
+    Gated by ORID_FEEDBACK_INTERNAL_PLANNER; O + meta-stuck + key_events only.
+    """
+    if not ORID_FEEDBACK_INTERNAL_PLANNER:
+        return base_user_msg
+    if (stage or "").strip().upper() != "O":
+        return base_user_msg
+    ke = (book_pack or {}).get("key_events")
+    if not isinstance(ke, list) or not ke:
+        return base_user_msg
+    if not student_o_meta_stuck(text):
+        return base_user_msg
+    lines = [str(x).strip() for x in ke[:8] if str(x).strip()]
+    if not lines:
+        return base_user_msg
+    ev_text = "\n".join(f"・{x}" for x in lines)
+    planner_sys = (
+        "你是內部教研備註助理；輸出只給下一個模型看，學生不會直接看到這段。"
+        "用繁體中文，3～6 行短句：學生卡在哪、建議優先用哪一個書中事件當接寫錨、一句可照抄接寫的起頭。"
+        "不要輸出 JSON，不要寫成整篇教學講稿。"
+    )
+    planner_user = (
+        f"【input_bucket】{input_bucket}\n"
+        f"【學生 O 段】\n{text.strip()}\n\n"
+        f"【故事摘要關鍵事件】\n{ev_text}\n"
+    )
+    try:
+        note = await _chat_completion(
+            [
+                {"role": "system", "content": planner_sys},
+                {"role": "user", "content": planner_user},
+            ],
+            max_completion_tokens=400,
+            temperature=None,
+        )
+    except Exception:
+        logger.warning("ORID internal feedback planner (O) failed; continuing without note")
+        return base_user_msg
+    note = (note or "").strip()
+    if not note:
+        return base_user_msg
+    return (
+        "【內部分析備註（供你理解學生狀態；你仍必須只輸出規定的 JSON schema）】\n"
+        f"{note}\n\n---\n\n"
+        + base_user_msg
+    )
+
+
 async def _genai_feedback(
     *,
     stage: str,
@@ -1909,6 +2013,14 @@ async def _genai_feedback(
             "suggestions 要引導學生改用摘要已列事件；example 只給問句或句型起頭，improved 填 null，不要代寫整段。\n\n"
             + user_msg
         )
+
+    user_msg = await _orid_feedback_internal_planner_o(
+        stage=stage,
+        text=text,
+        book_pack=book_pack,
+        input_bucket=input_bucket,
+        base_user_msg=user_msg,
+    )
 
     if client is None:
         ok2, miss2, sug2, ex2, pr2 = _control_feedback(stage, text)
@@ -2400,6 +2512,12 @@ async def writing_coach_chat(
         if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
             fb_ok, fb_missing, fb_sug, fb_ex, fb_praise = _control_feedback(stage_ctx, body)
             fb_imp = None
+            if (
+                stage_ctx.strip().upper() == "O"
+                and (anchor_line or "").strip()
+                and is_o_placeholder_or_stuck_draft(body)
+            ):
+                fb_ex = None
         else:
             fb_ok, fb_missing, fb_sug, fb_ex, fb_imp, fb_praise, fb_rubric = await _genai_feedback(
                 stage=stage_ctx,
@@ -2423,6 +2541,14 @@ async def writing_coach_chat(
             missing=fb_missing,
             suggestions=fb_sug,
             student_text=body,
+        )
+        fb_missing, fb_sug = apply_o_key_event_gaps(
+            stage=stage_ctx,
+            strength=feedback_strength or "mid",
+            student_text=body,
+            key_events=(book_pack or {}).get("key_events"),
+            missing=fb_missing,
+            suggestions=fb_sug,
         )
         if _has_feedback_book_grounding_issue(fb_missing):
             fb_praise = _book_grounding_praise(stage_ctx)
@@ -2486,7 +2612,10 @@ async def writing_coach_chat(
                         {"role": "system", "content": sys_n},
                         {"role": "user", "content": user_n},
                     ],
-                    max_completion_tokens=min(400, OPENAI_MAX_COMPLETION_TOKENS),
+                    max_completion_tokens=min(
+                        ORID_FEEDBACK_NARRATION_MAX_COMPLETION_TOKENS,
+                        int(OPENAI_MAX_COMPLETION_TOKENS or 2000),
+                    ),
                     temperature=ORID_FOLLOWUP_TEMPERATURE,
                 )
             except Exception:
@@ -2602,7 +2731,9 @@ async def writing_coach_chat(
             if not (ai_reply or "").strip():
                 ai_reply = "我有看到你的訊息，你可以再具體說一下想改哪一句嗎？"
 
-    db.add(OridChatMessage(session_id=session.id, stage=stage_ctx, sender="ai", text=ai_reply.strip()))
+    ai_reply = strip_markdown_for_student_chat((ai_reply or "").strip())
+
+    db.add(OridChatMessage(session_id=session.id, stage=stage_ctx, sender="ai", text=ai_reply))
     await db.commit()
 
     logger.info(
@@ -2629,7 +2760,7 @@ async def writing_coach_chat(
     )
     return WritingCoachChatResponse(
         session_id=session.id,
-        ai_reply=ai_reply.strip(),
+        ai_reply=ai_reply,
         stage=stage_ctx,
         feedback_ok=fb_ok,
         feedback_praise=fb_praise,
@@ -2726,6 +2857,14 @@ async def writing_feedback(
         missing=missing,
         suggestions=suggestions,
         student_text=text,
+    )
+    missing, suggestions = apply_o_key_event_gaps(
+        stage=data.stage,
+        strength=feedback_strength,
+        student_text=text,
+        key_events=(book_pack or {}).get("key_events"),
+        missing=missing,
+        suggestions=suggestions,
     )
     if _has_feedback_book_grounding_issue(missing):
         praise = _book_grounding_praise(data.stage)

@@ -15,6 +15,9 @@ RUN pnpm install --frozen-lockfile
 # Copy the rest of your application code
 COPY . .
 
+# Windows checkout may leave CRLF; strip so `#!/bin/sh` resolves in Linux containers.
+RUN sed -i 's/\r$//' /app/start.sh /app/start.prod.sh
+
 RUN chown -R node:node /app && chmod +x /app/start.sh /app/start.prod.sh
 
 ## Switch to the non-root user
