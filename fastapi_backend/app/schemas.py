@@ -168,6 +168,30 @@ class WritingCoachChatRequest(BaseModel):
     source: str = Field(..., pattern="^(free_text|feedback_button|synthesis_feedback)$")
     week: int = Field(1, ge=1, le=6)
     save_feedback: bool = True
+    # Week-2 synthesis_feedback only (optional; omitted = legacy behavior)
+    synthesis_phase: str | None = None
+    feedback_round: int = Field(1, ge=1, le=2)
+    reading_excerpt: str | None = Field(None, max_length=4000)
+    synthesis_clarify: bool = False
+
+    @field_validator("synthesis_phase", mode="before")
+    @classmethod
+    def _normalize_synthesis_phase(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip().lower()
+        if not s:
+            return None
+        allowed = {"select_evidence", "align_prompt", "short_draft", "expand_revise"}
+        return s if s in allowed else None
+
+    @field_validator("reading_excerpt", mode="before")
+    @classmethod
+    def _strip_reading_excerpt(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        t = str(v).strip()
+        return t or None
 
 
 class WritingCoachChatResponse(BaseModel):

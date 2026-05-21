@@ -3,7 +3,11 @@ import type { NextRequest } from "next/server";
 
 const API_BASE_URL = process.env.API_BASE_URL ?? "http://backend:8000";
 
+/** 與後端 ENABLE_PUBLIC_REGISTRATION_AND_PASSWORD_RESET 一併收斂；僅在明確設 false 時封鎖註冊／忘記密碼頁 */
 function isDisabledAuthPath(pathname: string) {
+  if (process.env.NEXT_PUBLIC_ENABLE_PUBLIC_REGISTRATION_AND_PASSWORD_RESET !== "false") {
+    return false;
+  }
   return (
     pathname === "/register" ||
     pathname === "/password-recovery" ||

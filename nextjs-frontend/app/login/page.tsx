@@ -1,11 +1,15 @@
 "use client";
 
+import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { login } from "@/components/actions/login-action";
 import { useActionState } from "react";
 import { SubmitButton } from "@/components/ui/submitButton";
 import { FieldError, FormError } from "@/components/ui/FormError";
+
+const showRegisterLink =
+  process.env.NEXT_PUBLIC_ENABLE_PUBLIC_REGISTRATION_AND_PASSWORD_RESET !== "false";
 
 export default function Page() {
   const [state, dispatch] = useActionState(login, undefined);
@@ -75,6 +79,18 @@ export default function Page() {
             <FormError state={state} />
           </div>
         </form>
+
+        {showRegisterLink && (
+          <p className="mt-4 text-center text-sm text-slate-600 sm:text-base">
+            還沒有帳號？{" "}
+            <Link
+              href="/register"
+              className="font-medium text-sky-600 underline-offset-2 hover:text-sky-700 hover:underline"
+            >
+              前往註冊
+            </Link>
+          </p>
+        )}
 
         {/* ORID steps hint */}
         <div className="mt-5 flex flex-wrap items-center justify-center gap-2 text-sm text-slate-400 sm:gap-3">

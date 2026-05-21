@@ -2477,7 +2477,14 @@ async def writing_coach_chat(
     if source == "feedback_button":
         display_student = f"[{stage_ctx} {_draft_label_zh(draft_key)}]\n{body}"
     elif source == "synthesis_feedback":
-        display_student = f"[整合寫作]\n{body}"
+        syn_tags = ["整合寫作"]
+        sp = getattr(data, "synthesis_phase", None)
+        if sp:
+            syn_tags.append(str(sp).replace("_", " "))
+        fr = int(getattr(data, "feedback_round", None) or 1)
+        if fr != 1:
+            syn_tags.append(f"第{fr}輪")
+        display_student = f"[{'·'.join(syn_tags)}]\n{body}"
     else:
         display_student = body
 
@@ -2674,6 +2681,12 @@ async def writing_coach_chat(
         week1_raw = await _fetch_latest_writing_content_for_week(db, user.id, session.id, 1)
         week1_slots = _orid_stage_d1_from_writing_content(week1_raw)
         book_context = build_book_context_block(book_pack)
+        syn_phase = getattr(data, "synthesis_phase", None)
+        syn_round = int(getattr(data, "feedback_round", None) or 1)
+        if syn_round not in (1, 2):
+            syn_round = 1
+        reading_ex = getattr(data, "reading_excerpt", None)
+        syn_clarify = bool(getattr(data, "synthesis_clarify", False))
         sys_p = build_synthesis_coach_system_prompt(
             book_context=book_context,
             week1_orid_lines=week1_slots,
@@ -2681,6 +2694,10 @@ async def writing_coach_chat(
             student_login=login_id,
             opening_hint=opening_hint,
             prev_ai_opener=prev_ai_opener,
+            synthesis_phase=syn_phase,
+            feedback_round=syn_round,
+            reading_excerpt=reading_ex,
+            synthesis_clarify=syn_clarify,
         )
         hist_syn: list[dict[str, str]] = []
         for m in msgs[-ORID_HISTORY_LIMIT:]:
@@ -2699,6 +2716,10 @@ async def writing_coach_chat(
         if not (ai_reply or "").strip():
             ai_reply = "我有看到你的整合草稿，你可以再說一下最想調整的是銜接、具體例子，還是心得的深度？"
         coach_meta["synthesis_context"] = True
+        coach_meta["synthesis_phase"] = syn_phase
+        coach_meta["feedback_round"] = syn_round
+        if reading_ex:
+            coach_meta["reading_excerpt_injected"] = True
     else:
         if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
             ai_reply = format_control_free_text_reply(stage_ctx)

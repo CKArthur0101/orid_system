@@ -16,7 +16,7 @@ class TestPasswordValidation:
                 {
                     "detail": {
                         "code": ErrorCode.REGISTER_INVALID_PASSWORD.value,
-                        "reason": ["Password should be at least 8 characters."],
+                        "reason": ["Password should be at least 6 characters."],
                     }
                 },
             ),
@@ -33,41 +33,39 @@ class TestPasswordValidation:
             ),
             (
                 "test@example.com",
-                "lowercasepassword",
+                "onlyletters",
                 status.HTTP_400_BAD_REQUEST,
                 {
                     "detail": {
                         "code": ErrorCode.REGISTER_INVALID_PASSWORD.value,
                         "reason": [
-                            "Password should contain at least one uppercase letter."
+                            "Password should contain at least one number.",
                         ],
                     }
                 },
             ),
             (
                 "test@example.com",
-                "Nosppecialchar1",
+                "12345678",
                 status.HTTP_400_BAD_REQUEST,
                 {
                     "detail": {
                         "code": ErrorCode.REGISTER_INVALID_PASSWORD.value,
                         "reason": [
-                            "Password should contain at least one special character."
+                            "Password should contain at least one letter.",
                         ],
                     }
                 },
             ),
             (
                 "test@example.com",
-                "shorttest",
+                "bad!pass1",
                 status.HTTP_400_BAD_REQUEST,
                 {
                     "detail": {
                         "code": ErrorCode.REGISTER_INVALID_PASSWORD.value,
                         "reason": [
-                            "Password should be at least 8 characters.",
-                            "Password should contain at least one uppercase letter.",
-                            "Password should contain at least one special character.",
+                            "Password should contain only letters and numbers.",
                         ],
                     }
                 },
@@ -89,7 +87,7 @@ class TestPasswordValidation:
         """Test user registration with success"""
         json = {
             "email": "114524099",
-            "password": "Sppecialchar1#",
+            "password": "test01ab",
             "display_name": "測試生",
         }
         response = await test_client.post("/auth/register", json=json)

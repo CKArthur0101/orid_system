@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from app.models import OridChatMessage, OridSession, Reading
+from app.routes import orid
 
 
 def _minimal_book_pack() -> str:
@@ -304,3 +305,52 @@ async def test_writing_coach_control_flags_unsupported_character_event(
     assert data["feedback_ok"] is False
     assert data["feedback_missing"]
 
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_writing_coach_synthesis_feedback_default_includes_three_part_reply_contract(
+    test_client, db_session, authenticated_user, monkeypatch
+):
+    captured: dict[str, str] = {}
+
+    async def fake_chat_completion(messages, **kwargs):
+        captured["system"] = messages[0]["content"]
+        return "先把你最想讀者跟上的一句寫清楚，再補一句故事細節。"
+
+    monkeypatch.setattr(orid, "_chat_completion", fake_chat_completion)
+
+    user = authenticated_user["user"]
+    reading = Reading(title="整合寫作 測試", content=_minimal_book_pack())
+    db_session.add(reading)
+    await db_session.commit()
+    await db_session.refresh(reading)
+
+    session = OridSession(
+        user_id=user.id,
+        reading_id=reading.id,
+        condition="genai",
+        current_stage="O",
+        stage_turn=0,
+    )
+    db_session.add(session)
+    await db_session.commit()
+    await db_session.refresh(session)
+
+    r = await test_client.post(
+        "/orid/writing-coach/chat",
+        json={
+            "session_id": str(session.id),
+            "student_text": "我把上週的感想串成一段，想請你幫我看銜接。",
+            "stage": "ALL",
+            "draft": "d1",
+            "source": "synthesis_feedback",
+            "week": 2,
+            "save_feedback": False,
+        },
+        headers=authenticated_user["headers"],
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["meta"].get("synthesis_context") is True
+    sys_p = captured.get("system", "")
+    assert "你已經做到：" in sys_p
+    assert "【學生自填閱讀心得／摘記節選（唯讀）】" not in sys_p

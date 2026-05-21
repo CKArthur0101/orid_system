@@ -246,6 +246,25 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "O 客觀" in synthesis_system
     assert "小華" in synthesis_system
     assert "先檢查段落銜接" in synthesis_system
+    assert "你已經做到：" in synthesis_system
+    assert "你可以再加強：" in synthesis_system
+    assert "試試看這樣寫：" in synthesis_system
+    # 可選 meta 仍會插入中段；預設不傳時僅有 playbook 內建「三段標題」與週一區塊，無【學生自填閱讀心得】中段
+    assert "【學生自填閱讀心得" not in synthesis_system
+    assert "【當前寫作階段】" not in synthesis_system
+
+    syn_layered = build_synthesis_coach_system_prompt(
+        book_context=build_book_context_block(_book_pack()),
+        week1_orid_lines={"O": "他把柿子藏起來", "R": "", "I": "", "D": ""},
+        synthesis_phase="short_draft",
+        feedback_round=1,
+        reading_excerpt="我讀到分享很重要。",
+    )
+    assert "【學生自填閱讀心得／摘記節選（唯讀）】" in syn_layered
+    assert "我讀到分享很重要" in syn_layered
+    assert "【當前寫作階段】" in syn_layered
+    assert "【本輪回饋層級" in syn_layered
+    assert "R1" in syn_layered and "R2" in syn_layered
 
     checker_system, checker_user = build_book_grounding_checker_prompts(
         student_text="阿松爺爺把柿子藏到屋後倉庫",

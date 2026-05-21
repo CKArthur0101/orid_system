@@ -35,6 +35,13 @@ type OridWritingV1 = {
   stages: Record<StageKey, OridWritingStage>;
   week2_flow?: Week2Flow;
   synthesis_draft?: string;
+  synthesis_reading_reflection?: string;
+  synthesis_round1_completed?: boolean;
+  /** 舊版精靈資料；讀檔時保留，新 UI 不再寫入 */
+  synthesis_evidence_notes?: string;
+  synthesis_align_scaffold?: string;
+  synthesis_short_draft?: string;
+  synthesis_active_phase?: string;
 };
 
 type BookPackV1 = {
@@ -165,13 +172,31 @@ function normalizeWritingContent(raw: unknown, week: number): OridWritingV1 {
   const flow: Week2Flow | undefined =
     obj?.week2_flow === "synthesis" || obj?.week2_flow === "orid_review" ? obj.week2_flow : weekNum === 2 ? "orid_review" : undefined;
 
-  return {
+  const o = obj as any;
+  const base: OridWritingV1 = {
     schema: "orid_writing_v1",
     week: weekNum,
     stages,
     ...(flow ? { week2_flow: flow } : {}),
-    ...(typeof (obj as any)?.synthesis_draft === "string" ? { synthesis_draft: (obj as any).synthesis_draft } : {}),
+    ...(typeof o?.synthesis_draft === "string" ? { synthesis_draft: o.synthesis_draft } : {}),
   };
+
+  if (weekNum === 2 && flow === "synthesis") {
+    const out: OridWritingV1 = {
+      ...base,
+      synthesis_draft: typeof o.synthesis_draft === "string" ? o.synthesis_draft : "",
+      synthesis_reading_reflection:
+        typeof o.synthesis_reading_reflection === "string" ? o.synthesis_reading_reflection : "",
+      synthesis_round1_completed: !!o.synthesis_round1_completed,
+    };
+    if (typeof o.synthesis_evidence_notes === "string") out.synthesis_evidence_notes = o.synthesis_evidence_notes;
+    if (typeof o.synthesis_align_scaffold === "string") out.synthesis_align_scaffold = o.synthesis_align_scaffold;
+    if (typeof o.synthesis_short_draft === "string") out.synthesis_short_draft = o.synthesis_short_draft;
+    if (typeof o.synthesis_active_phase === "string") out.synthesis_active_phase = o.synthesis_active_phase;
+    return out;
+  }
+
+  return base;
 }
 
 function parseWritingRecordContent(content: unknown, week: number): OridWritingV1 {
@@ -199,6 +224,34 @@ function buildCoachWelcomeMsg(bookPack: BookPackV1 | null): ChatMsg {
     role: "ai",
     text: `先從左邊任一格開始寫都可以喔！這裡是 ${book} 的 ORID 反思。寫一寫若卡住，按該格的「取得回饋」，我就會在這裡幫你看。`,
   };
+}
+
+/** 第 2 週整合寫作：進聊天室時顯示，嵌入上週四格摘要與寫作架構（週一資料載入後會再刷新一次）。 */
+function buildSynthesisWelcomeScaffold(week1: OridWritingV1 | null, bookPack: BookPackV1 | null): ChatMsg {
+  const title = String(bookPack?.book_title ?? "").trim();
+  const book = title ? `《${title}》` : "這本書";
+  const w1 = week1 ?? createEmptyWriting(1);
+  const blocks = STAGES.map(({ key }) => {
+    const t = String(w1.stages[key].d1 ?? "").trim();
+    return `${STAGE_TITLES[key]}\n${t || "（這一格還沒有內容）"}`;
+  });
+  const text = [
+    `歡迎來到第 2 週「整合寫作」！`,
+    `這週請把你在第 1 週寫的四段 ORID，收成一段讀起來順、又跟 ${book} 扣得住的心得。`,
+    "",
+    "── 你上週寫了什麼（也可對照左邊唯讀四格）──",
+    "",
+    ...blocks,
+    "",
+    "── 可以怎麼發揮（自由寫，不必照抄）──",
+    "・開頭：一句話帶出「故事裡讓我印象最深的是…」",
+    "・中間：把 O／R／I 用連接詞串起來，可以沿用你上週的句子做刪修、順一順。",
+    "・收尾：呼應你上週 D，用一句寫「如果以後…我想先試試看…」。",
+    "",
+    "請在**中間大空白**寫整合稿；寫好後按下面的「取得整合回饋」。",
+    "我會用三小段回覆你，標題跟第 1 週一樣好讀：「你已經做到：」「你可以再加強：」「試試看這樣寫：」。",
+  ].join("\n");
+  return { role: "ai", text };
 }
 
 function getForceNewFromUrl(): boolean {
@@ -576,14 +629,41 @@ export default function WeekBookPage() {
     return () => ac.abort();
   }, [sessionId, weekNum, writingHydratedSessionId]);
 
-  /** 尚無訊息時插入寫作教練開場（等教材載入以顯示書名）。 */
+  /** 聊天載入後：第 2 週整合寫作保證出現一次開場架構（不受 seededInitial 影響）；其餘週次維持原「空聊天才種 ORID 開場」。 */
   useEffect(() => {
-    if (!seededInitial || !readingContentReady) return;
+    if (!historyLoaded || !readingContentReady) return;
+
     setMessages((prev) => {
+      if (weekNum === 2 && writingData.week2_flow === "synthesis") {
+        const hasScaffold = prev.some(
+          (m) => m.role === "ai" && m.text.startsWith("歡迎來到第 2 週「整合寫作」"),
+        );
+        if (hasScaffold) return prev;
+        const scaffold = buildSynthesisWelcomeScaffold(week1Data, bookPack);
+        if (prev.length === 0) return [scaffold];
+        if (prev.length === 1 && prev[0].role === "ai" && prev[0].text.includes("先從左邊任一格")) {
+          return [scaffold];
+        }
+        return [...prev, scaffold];
+      }
+
+      if (!seededInitial) return prev;
       if (prev.length > 0) return prev;
       return [buildCoachWelcomeMsg(bookPack)];
     });
-  }, [seededInitial, readingContentReady, bookPack]);
+  }, [historyLoaded, readingContentReady, seededInitial, bookPack, weekNum, writingData.week2_flow, week1Data]);
+
+  /** 週一資料晚到時，更新已存在的整合寫作開場內容。 */
+  useEffect(() => {
+    if (weekNum !== 2 || writingData.week2_flow !== "synthesis" || !week1Data) return;
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.role === "ai" && m.text.startsWith("歡迎來到第 2 週「整合寫作」"));
+      if (idx < 0) return prev;
+      const next = [...prev];
+      next[idx] = buildSynthesisWelcomeScaffold(week1Data, bookPack);
+      return next;
+    });
+  }, [weekNum, writingData.week2_flow, week1Data, bookPack]);
 
   function appendAiReply(text: unknown) {
     const reply = String(text ?? "").trim();
@@ -675,16 +755,16 @@ export default function WeekBookPage() {
   async function runSynthesisFeedback() {
     if (!sessionId || weekNum !== 2) return;
 
-    const text = String(writingData.synthesis_draft ?? "").trim();
-    if (!text) {
-      setFbError("請先寫一段整合草稿，再取得整合回饋。");
+    const draft = String(writingData.synthesis_draft ?? "").trim();
+    if (draft.length < 12) {
+      setFbError("請先在整合稿區多寫一小段，再取得回饋。");
       return;
     }
 
     fbInflightRef.current += 1;
     setFbLoading(true);
     setFbError(null);
-    const optimisticStudent = `[整合寫作]\n${text}`;
+    const optimisticStudent = `[整合寫作]\n${draft}`;
     setMessages((prev) => [...prev, { role: "student", text: optimisticStudent }]);
 
     try {
@@ -694,7 +774,7 @@ export default function WeekBookPage() {
         credentials: "include",
         body: JSON.stringify({
           session_id: sessionId,
-          student_text: text,
+          student_text: draft,
           stage: "ALL",
           draft: "d1",
           source: "synthesis_feedback",
@@ -787,6 +867,7 @@ export default function WeekBookPage() {
         ...writingData,
         week: weekNum,
         week2_flow: "synthesis",
+        synthesis_draft: writingData.synthesis_draft ?? "",
       };
       const content = JSON.stringify(next);
       const r = await fetch(`/api/orid/writings`, {
@@ -817,6 +898,13 @@ export default function WeekBookPage() {
 
       setWritingData(next);
       setSaveMsg("已進入整合寫作階段 ✅");
+      setMessages((prev) => {
+        const scaffold = buildSynthesisWelcomeScaffold(week1Data, bookPack);
+        if (prev.length === 1 && prev[0].role === "ai" && prev[0].text.includes("先從左邊任一格")) {
+          return [scaffold];
+        }
+        return [...prev, scaffold];
+      });
     } catch (e: any) {
       setWritingError(e?.message ?? "儲存失敗");
     } finally {
@@ -1026,8 +1114,8 @@ export default function WeekBookPage() {
             </div>
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2">
               <textarea
-                className="min-h-0 w-full flex-1 resize-none rounded-xl border border-slate-200 bg-white p-2 text-sm leading-relaxed outline-none focus:border-sky-400 focus:ring-1 focus:ring-sky-400/25"
-                placeholder="把 O‧R‧I‧D 串成一段順、好讀的心得；寫完可按「取得整合回饋」。"
+                className="min-h-0 w-full flex-1 resize-none rounded-xl border border-slate-200 bg-white p-3 text-sm leading-relaxed outline-none focus:border-sky-400 focus:ring-1 focus:ring-sky-400/25"
+                placeholder="在這裡撰寫整合稿…（怎麼寫可參考右側聊天室開場說明）"
                 value={writingData.synthesis_draft ?? ""}
                 onChange={(e) =>
                   setWritingData((prev) => ({
@@ -1126,7 +1214,7 @@ export default function WeekBookPage() {
             {showStageFeedbackButtons
               ? "點左側任一格的「取得回饋」，回覆會出現在這裡。"
               : showSynthesisColumn
-                ? "整合區的「取得整合回饋」與右側對話都會出現在這裡。"
+                ? "整合稿寫在中欄；按「取得整合回饋」後，教練回覆會出現在這裡。"
                 : "請用右側對話與寫作教練聊聊。"}
           </div>
         </div>

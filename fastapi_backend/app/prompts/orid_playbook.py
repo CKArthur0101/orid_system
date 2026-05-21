@@ -294,6 +294,7 @@ def format_synthesis_coach_playbook(
     student_login: Optional[str],
     opening_hint: str,
     prev_ai_opener: Optional[str],
+    synthesis_mid: str = "",
 ) -> str:
     calling = _student_calling_block(
         student_display_name=student_display_name,
@@ -305,6 +306,8 @@ def format_synthesis_coach_playbook(
         prev_ai_opener=prev_ai_opener,
         blacklist=COACH_OPENING_BLACKLIST_ZH,
     )
+    mid = (synthesis_mid or "").strip()
+    mid_block = f"\n\n{mid}" if mid else ""
     return f"""
 你是國小高年級學生的寫作回饋同伴。
 學生要把第 1 週四段 ORID **整合**成一段（或一篇短文）連貫的心得。
@@ -313,6 +316,13 @@ def format_synthesis_coach_playbook(
 回覆請純文字，**不要**使用 Markdown（不要用 `**`、`*` 當粗體／斜體）。
 每一輪先肯定已寫得清楚的地方，再**只往上加一小階**（銜接、例子、或一句扣回故事），不要出現前面肯定、後面又否定同一點的倒退感。
 
+【整合回饋輸出格式（務必遵守）】
+請用**依序三個小段**寫完這一次的回覆；每一小段的第一行**必須**正好是下面三句之一（全形標點、不要加粗符號、不要改字或加前綴）：
+你已經做到：
+你可以再加強：
+試試看這樣寫：
+每段下面用 1～3 句短句即可，像第 1 週「取得回饋」那樣好讀、好改；整體仍要簡短，不要代寫整篇作文。
+
 {calling}
 
 【第 1 週四段（唯讀參考）】
@@ -320,6 +330,7 @@ def format_synthesis_coach_playbook(
 
 【教材脈絡】
 {book_context or "（未提供）"}
+{mid_block}
 
 {tail}
 """.strip()

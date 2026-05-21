@@ -13,6 +13,122 @@ from app.prompts.templates.coach_chat import (
     FEEDBACK_NARRATION_SECTION_TITLES,
 )
 
+_SYNTHESIS_PHASE_CHOICES = frozenset({"select_evidence", "align_prompt", "short_draft", "expand_revise"})
+
+_SYNTHESIS_RUBRICS: tuple[tuple[str, str], ...] = (
+    ("R1", "有具體呼應第 1 週 ORID 或閱讀摘記的材料，避免空泛形容。"),
+    ("R2", "讀者跟得上「故事／提問」主線，知道你在回應什麼。"),
+    ("R3", "段落之間有銜接，先說什麼、再說什麼不會突然跳走。"),
+    ("R4", "句子長度與指稱清楚，少用讓人猜的「那個、這樣」。"),
+)
+
+
+def _synthesis_phase_zh(phase: str) -> str:
+    return {
+        "select_evidence": "階段 A：選證據／帶材料",
+        "align_prompt": "階段 B：對齊題幹（鷹架句）",
+        "short_draft": "階段 C：短初稿",
+        "expand_revise": "階段 D：擴寫／修訂",
+    }.get(phase, phase)
+
+
+def _synthesis_operational_instructions(
+    *,
+    phase: Optional[str],
+    feedback_round: int,
+    synthesis_clarify: bool,
+) -> str:
+    """分階、分層、兩輪制；phase 為 None 且僅第二輪時給精簡第二輪說明。"""
+    r1 = feedback_round == 1
+    lines: list[str] = []
+
+    if phase and phase in _SYNTHESIS_PHASE_CHOICES:
+        lines.append(f"【當前寫作階段】{_synthesis_phase_zh(phase)}")
+        layer, rubric_ids = _synthesis_layer_and_rubrics(phase=phase, feedback_round=feedback_round)
+        lines.append(f"【本輪回饋層級（只談這一層為主，必要時一句帶過其他）】\n{layer}")
+        rubric_lines = [f"- {rid}：{text}" for rid, text in _SYNTHESIS_RUBRICS if rid in rubric_ids]
+        lines.append("【本輪檢查重點（對照下列 1～2 條即可）】\n" + "\n".join(rubric_lines))
+    elif not r1:
+        lines.append("【本輪為第二輪】可在銜接、例子與語句清楚度上給較具體建議，仍以短段落、不要代寫全文。")
+        lines.append(
+            "【本輪檢查重點（對照下列 1～2 條即可）】\n"
+            "- R3：段落之間有銜接，先說什麼、再說什麼不會突然跳走。\n"
+            "- R4：句子長度與指稱清楚，少用讓人猜的「那個、這樣」。"
+        )
+
+    if r1:
+        lines.append(
+            "【兩輪制／份量】這是**第一輪**：請**只給「一個」最小下一步**（一句方向 + 可選半句示例提示），"
+            "不要一次列很多缺點、不要代寫整段。"
+        )
+    else:
+        lines.append(
+            "【兩輪制／份量】這是**第二輪**：可以再多一小層（例如補一句銜接或一個更清楚的例子），"
+            "仍請維持短段落，不要代寫整篇。"
+        )
+
+    if synthesis_clarify:
+        lines.append(
+            "【可選澄清】若你覺得缺少關鍵資訊才能回饋，可在整段文字**最末另起一行**，"
+            "用「想問你：……」**只問一個**極短的問題；不要放在開頭、不要多問。"
+        )
+
+    return "\n\n".join(lines)
+
+
+def _synthesis_layer_and_rubrics(*, phase: str, feedback_round: int) -> tuple[str, frozenset[str]]:
+    """回傳（層級說明, rubric id 集合）。"""
+    r2 = feedback_round == 2
+    if phase == "select_evidence":
+        if not r2:
+            return "證據層：材料是否具體、是否真能支持後面想說的。", frozenset({"R1", "R2"})
+        return "證據層為主，並輕輕點一下如何接到下一段（一句）。", frozenset({"R1", "R2"})
+    if phase == "align_prompt":
+        if not r2:
+            return "扣題層：鷹架句子是否把「故事／提問」對準了。", frozenset({"R2", "R3"})
+        return "結構層：鷹架之間是否順、有沒有跳題。", frozenset({"R2", "R3"})
+    if phase == "short_draft":
+        if not r2:
+            return "證據＋扣題：短稿有沒有帶到材料、讀者懂不懂主線。", frozenset({"R1", "R2"})
+        return "結構層：句序與小段之間的銜接。", frozenset({"R3", "R4"})
+    # expand_revise
+    if not r2:
+        return "結構層為主：段落功能與銜接。", frozenset({"R2", "R3"})
+    return "語言層為主（必要時一句結構）：句長、指稱、讀起來是否順。", frozenset({"R3", "R4"})
+
+
+def compose_synthesis_coach_mid_block(
+    *,
+    synthesis_phase: Optional[str],
+    feedback_round: int,
+    reading_excerpt: Optional[str],
+    synthesis_clarify: bool,
+) -> str:
+    """
+    Inserted between 【教材脈絡】 and personal tail.
+    Empty when legacy defaults (round 1, no phase, no excerpt, no clarify).
+    """
+    pieces: list[str] = []
+    rex = (reading_excerpt or "").strip()
+    if rex:
+        cap = rex[:2000]
+        tail_note = "\n（以上節選已截斷至約 2000 字）" if len(rex) > 2000 else ""
+        pieces.append(f"【學生自填閱讀心得／摘記節選（唯讀）】\n{cap}{tail_note}")
+
+    phase = synthesis_phase if (synthesis_phase or "") in _SYNTHESIS_PHASE_CHOICES else None
+    rnd = 2 if int(feedback_round) == 2 else 1
+
+    if phase or rnd == 2 or synthesis_clarify:
+        pieces.append(_synthesis_operational_instructions(phase=phase, feedback_round=rnd, synthesis_clarify=synthesis_clarify))
+    elif rex:
+        # 僅有心得節選、其餘皆預設：提醒納入考量即可
+        pieces.append(
+            "【回饋注意】學生另提供了上方「閱讀心得／摘記節選」；若與【整合草稿】有關，請一併考量是否呼應；"
+            "若無關則不必硬扯。"
+        )
+
+    return "\n\n".join(p for p in pieces if p.strip())
+
 
 def build_synthesis_coach_system_prompt(
     *,
@@ -22,6 +138,10 @@ def build_synthesis_coach_system_prompt(
     student_login: Optional[str] = None,
     opening_hint: str = "",
     prev_ai_opener: Optional[str] = None,
+    synthesis_phase: Optional[str] = None,
+    feedback_round: int = 1,
+    reading_excerpt: Optional[str] = None,
+    synthesis_clarify: bool = False,
 ) -> str:
     """
     Week-2 synthesis: feedback on the student's integrated paragraph using Week-1 ORID slots as context.
@@ -33,6 +153,12 @@ def build_synthesis_coach_system_prompt(
         lines.append(f"- {labels[k]}：{t or '（尚未撰寫）'}")
     joined = "\n".join(lines)
     hint = opening_hint or "先鎖定一段最想讀者跟上你的地方，再補一句銜接。"
+    mid = compose_synthesis_coach_mid_block(
+        synthesis_phase=synthesis_phase,
+        feedback_round=feedback_round,
+        reading_excerpt=reading_excerpt,
+        synthesis_clarify=synthesis_clarify,
+    )
     return format_synthesis_coach_playbook(
         week1_block=joined,
         book_context=book_context,
@@ -40,6 +166,7 @@ def build_synthesis_coach_system_prompt(
         student_login=student_login,
         opening_hint=hint,
         prev_ai_opener=prev_ai_opener,
+        synthesis_mid=mid,
     )
 
 
