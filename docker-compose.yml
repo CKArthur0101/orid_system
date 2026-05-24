@@ -12,6 +12,8 @@ services:
       - TEST_DATABASE_URL=postgresql+asyncpg://postgres:password@db_test:5432/testdatabase
       - DB_DISABLE_POOLING=false
       - MAIL_SERVER=mailhog
+      - ENABLE_PUBLIC_REGISTRATION_AND_PASSWORD_RESET=false
+      - ORID_FORCE_NEW_ALLOWLIST=${ORID_FORCE_NEW_ALLOWLIST:-114524020}
     ports:
       - "127.0.0.1:18000:8000"
     networks:
@@ -67,6 +69,7 @@ services:
       API_BASE_URL: http://backend:8000 # ✅ 容器內用 backend:8000
       ACCESS_TOKEN_COOKIE_MAX_AGE_SEC: 43200
       OPENAPI_OUTPUT_FILE: ./shared-data/openapi.json
+      NEXT_PUBLIC_ENABLE_PUBLIC_REGISTRATION_AND_PASSWORD_RESET: "false"
     volumes:
       - ./nextjs-frontend:/app
       - nextjs-node-modules:/app/node_modules

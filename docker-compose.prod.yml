@@ -25,6 +25,10 @@ services:
       context: ./fastapi_backend
     env_file:
       - .env.prod
+    environment:
+      ENABLE_PUBLIC_REGISTRATION_AND_PASSWORD_RESET: "false"
+      # 與 .env.prod 同步；Compose 明確注入，避免 restart 未重載 env_file 導致清單為空
+      ORID_FORCE_NEW_ALLOWLIST: ${ORID_FORCE_NEW_ALLOWLIST:-114524020}
     command: ["./start.prod.sh"]
     ports:
       - "127.0.0.1:${PROD_BACKEND_PORT:-18082}:8000"
@@ -46,6 +50,7 @@ services:
       NODE_ENV: production
       API_BASE_URL: ${API_BASE_URL:-http://backend:8000}
       ACCESS_TOKEN_COOKIE_MAX_AGE_SEC: ${ACCESS_TOKEN_COOKIE_MAX_AGE_SEC:-43200}
+      NEXT_PUBLIC_ENABLE_PUBLIC_REGISTRATION_AND_PASSWORD_RESET: "false"
     # 不依賴 start.prod.sh（避免舊容器仍用 ./start.prod.sh 或未把腳本打進映像）
     command:
       [

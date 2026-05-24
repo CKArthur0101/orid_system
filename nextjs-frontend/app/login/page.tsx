@@ -44,14 +44,13 @@ export default function Page() {
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="username" className="text-base font-medium text-slate-600">
-                帳號（學號）
+                帳號
               </Label>
               <Input
                 id="username"
                 name="username"
                 type="text"
                 autoComplete="username"
-                placeholder="例如：114524020"
                 required
                 className="h-11 rounded-xl border-slate-200 bg-slate-50 text-base text-slate-800 placeholder:text-slate-400 focus-visible:ring-2 focus-visible:ring-sky-400/50 focus-visible:border-sky-400"
               />
@@ -91,22 +90,6 @@ export default function Page() {
             </Link>
           </p>
         )}
-
-        {/* ORID steps hint */}
-        <div className="mt-5 flex flex-wrap items-center justify-center gap-2 text-sm text-slate-400 sm:gap-3">
-          {[
-            { icon: "📖", label: "閱讀" },
-            { icon: "💬", label: "對話" },
-            { icon: "✍️", label: "寫作" },
-            { icon: "💡", label: "反思" },
-          ].map(({ icon, label }, i) => (
-            <div key={label} className="flex items-center gap-1.5">
-              {i > 0 && <span className="mr-1 text-slate-300 sm:mr-2">→</span>}
-              <span className="text-lg sm:text-xl">{icon}</span>
-              <span className="text-sm sm:text-base">{label}</span>
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   );

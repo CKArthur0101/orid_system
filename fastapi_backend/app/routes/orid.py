@@ -650,6 +650,15 @@ def _email_allowed_force_new(email: str | None) -> bool:
     return bool(e) and e in allow
 
 
+def _user_can_force_new(user: User) -> bool:
+    """重新開始本週：admin / is_superuser，或 ORID_FORCE_NEW_ALLOWLIST 內的登入帳號。"""
+    if getattr(user, "is_superuser", False):
+        return True
+    if _user_role(user) == "admin":
+        return True
+    return _email_allowed_force_new(getattr(user, "email", None))
+
+
 async def _get_or_create_reading_for_week(db: AsyncSession, week: int) -> Reading:
     title = DEFAULT_READING_TITLE_TEMPLATE.format(week=week)
     r_stmt = (
@@ -2259,8 +2268,7 @@ async def _try_dual_write_feedback(
 # ----------------------------
 @router.get("/me/capabilities", response_model=OridMeCapabilitiesRead)
 async def orid_me_capabilities(user: User = Depends(current_active_user)):
-    ok = _email_allowed_force_new(getattr(user, "email", None))
-    return OridMeCapabilitiesRead(orid_can_force_new=ok)
+    return OridMeCapabilitiesRead(orid_can_force_new=_user_can_force_new(user))
 
 
 @router.post("/readings", response_model=ReadingRead)
@@ -2333,7 +2341,7 @@ async def ensure_session(
     user_email = getattr(user, "email", None)
 
     if force_new:
-        if not _email_allowed_force_new(user_email):
+        if not _user_can_force_new(user):
             raise HTTPException(status_code=403, detail="force_new 未授權")
         reading = await _get_or_create_reading_for_week(db, week)
         new_condition = normalize_orid_condition(condition, default=DEFAULT_ORID_CONDITION)
