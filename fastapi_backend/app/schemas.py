@@ -1,7 +1,8 @@
-import uuid
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
+
+import uuid
 
 from fastapi_users import schemas
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
@@ -77,6 +78,142 @@ class OridMeCapabilitiesRead(BaseModel):
     """與後端 ORID_FORCE_NEW_ALLOWLIST 一致，供前端決定是否顯示強制開新 session。"""
 
     orid_can_force_new: bool
+
+
+# ----------------------------
+# Admin (user / class management)
+# ----------------------------
+ADMIN_ASSIGNABLE_ROLES = frozenset({"student", "teacher"})
+
+
+class AdminClassSummary(BaseModel):
+    id: UUID
+    name: str
+    year: int
+    external_code: str | None = None
+    student_count: int = 0
+    teacher_count: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminClassCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    year: int = Field(default_factory=lambda: datetime.now().year)
+    external_code: str | None = Field(None, max_length=64)
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, v: str) -> str:
+        s = (v or "").strip()
+        if not s:
+            raise ValueError("Class name is required")
+        return s
+
+    @field_validator("external_code")
+    @classmethod
+    def strip_code(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        s = v.strip()
+        return s or None
+
+
+class AdminClassUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=128)
+    year: int | None = None
+    external_code: str | None = Field(None, max_length=64)
+
+
+class AdminUserListItem(BaseModel):
+    id: UUID
+    email: str
+    display_name: str | None = None
+    role: str
+    is_active: bool
+    class_names: list[str] = Field(default_factory=list)
+    class_ids: list[UUID] = Field(default_factory=list)
+
+
+class AdminUserDetail(AdminUserListItem):
+    is_verified: bool
+    is_superuser: bool
+
+
+class AdminUserCreate(BaseModel):
+    email: str = Field(..., min_length=1, max_length=128)
+    password: str = Field(..., min_length=1, max_length=128)
+    display_name: str | None = Field(None, max_length=128)
+    role: str = "student"
+    class_ids: list[UUID] = Field(default_factory=list)
+
+    @field_validator("email")
+    @classmethod
+    def strip_email(cls, v: str) -> str:
+        s = (v or "").strip()
+        if not s:
+            raise ValueError("Account is required")
+        return s
+
+    @field_validator("display_name")
+    @classmethod
+    def strip_display_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        s = v.strip()
+        return s or None
+
+    @field_validator("role")
+    @classmethod
+    def normalize_role(cls, v: str) -> str:
+        r = (v or "student").strip().lower()
+        if r not in ADMIN_ASSIGNABLE_ROLES:
+            raise ValueError("role must be student or teacher")
+        return r
+
+
+class AdminUserUpdate(BaseModel):
+    email: str | None = Field(None, max_length=128)
+    display_name: str | None = Field(None, max_length=128)
+    role: str | None = None
+    is_active: bool | None = None
+    new_password: str | None = Field(None, min_length=1, max_length=128)
+    class_ids: list[UUID] | None = None
+
+    @field_validator("email")
+    @classmethod
+    def strip_email_optional(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        s = v.strip()
+        return s or None
+
+    @field_validator("role")
+    @classmethod
+    def normalize_role(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        r = v.strip().lower()
+        if r not in ADMIN_ASSIGNABLE_ROLES:
+            raise ValueError("role must be student or teacher")
+        return r
+
+
+class AdminUserCreateResponse(BaseModel):
+    user: AdminUserDetail
+    password_once: str
+
+
+class AdminUserUpdateResponse(BaseModel):
+    user: AdminUserDetail
+    password_once: str | None = None
+
+
+class AdminUserListResponse(BaseModel):
+    items: list[AdminUserListItem]
+    total: int
+    page: int
+    page_size: int
 
 
 # ----------------------------

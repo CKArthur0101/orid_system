@@ -56,7 +56,9 @@ export async function login(prevState: unknown, formData: FormData) {
       if (meRes.ok) {
         const me = await meRes.json();
         const role = String(me?.role ?? "student").toLowerCase();
-        if (role === "teacher" || role === "admin") {
+        if (role === "admin") {
+          redirectTo = "/admin/users";
+        } else if (role === "teacher") {
           redirectTo = "/teacher";
         }
       }

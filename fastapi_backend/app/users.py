@@ -46,6 +46,18 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     ):
         logger.info("Verification requested", extra={"user_id": str(user.id)})
 
+    async def create(
+        self,
+        user_create: UserCreate,
+        safe: bool = False,
+        request: Optional[Request] = None,
+    ) -> User:
+        """Public registration always creates student accounts."""
+        user_dict = user_create.create_update_dict()
+        user_dict["role"] = "student"
+        user_create = UserCreate(**user_dict)
+        return await super().create(user_create, safe, request)
+
     async def validate_password(
         self,
         password: str,

@@ -7,6 +7,7 @@ from .utils import simple_generate_unique_route_id
 from app.routes.items import router as items_router
 from app.routes.orid import router as orid_router
 from app.routes.teacher import router as teacher_router
+from app.routes.admin import router as admin_router
 from app.config import settings
 
 app = FastAPI(
@@ -57,3 +58,4 @@ add_pagination(app)
 # Include ORID routes
 app.include_router(orid_router, prefix="/orid")
 app.include_router(teacher_router, prefix="/teacher")
+app.include_router(admin_router, prefix="/admin")

@@ -44,8 +44,20 @@ export async function proxy(request: NextRequest) {
     const user = await res.json();
     const role = String(user?.role ?? "student").toLowerCase();
 
-    if (request.nextUrl.pathname.startsWith("/teacher") && role !== "teacher" && role !== "admin") {
-      return NextResponse.redirect(new URL("/dashboard", request.url));
+    if (pathname.startsWith("/admin")) {
+      if (role !== "admin") {
+        return NextResponse.redirect(new URL("/dashboard", request.url));
+      }
+      return NextResponse.next();
+    }
+
+    if (pathname.startsWith("/teacher")) {
+      if (role === "admin") {
+        return NextResponse.redirect(new URL("/admin/users", request.url));
+      }
+      if (role !== "teacher") {
+        return NextResponse.redirect(new URL("/dashboard", request.url));
+      }
     }
 
     return NextResponse.next();
@@ -61,5 +73,6 @@ export const config = {
     "/password-recovery/:path*",
     "/dashboard/:path*",
     "/teacher/:path*",
+    "/admin/:path*",
   ],
 };
