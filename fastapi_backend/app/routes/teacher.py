@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -53,6 +54,15 @@ def _student_ui_name(student: User) -> str:
     return d or student.email
 
 
+def _dt_for_message_filter(dt: datetime | None) -> datetime | None:
+    """OridChatMessage 為 naive UTC；OridWeekSubmission 為 aware — 查詢前統一為 naive UTC。"""
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 def _book_unit_from_week(week: int) -> int:
     return (week + 1) // 2
 
@@ -88,6 +98,116 @@ async def _latest_orid_session_for_student_week(
         .limit(1)
     )
     return r2.scalars().first()
+
+
+async def _week_activity_start(
+    db: AsyncSession,
+    session: OridSession,
+    week: int,
+) -> datetime | None:
+    """第 week 週對話開始時間（同 book_unit session 內；week 1 為 session 建立時）。"""
+    if week <= 1:
+        return session.created_at
+
+    prev_week = week - 1
+    prev_sub_res = await db.execute(
+        select(OridWeekSubmission).where(
+            OridWeekSubmission.session_id == session.id,
+            OridWeekSubmission.week == prev_week,
+        )
+    )
+    prev_sub = prev_sub_res.scalars().first()
+    if prev_sub and prev_sub.updated_at:
+        return prev_sub.updated_at
+
+    curr_sub_res = await db.execute(
+        select(OridWeekSubmission).where(
+            OridWeekSubmission.session_id == session.id,
+            OridWeekSubmission.week == week,
+        )
+    )
+    curr_sub = curr_sub_res.scalars().first()
+    if curr_sub and curr_sub.created_at:
+        last_before_res = await db.execute(
+            select(func.max(OridChatMessage.created_at)).where(
+                OridChatMessage.session_id == session.id,
+                OridChatMessage.created_at < curr_sub.created_at,
+            )
+        )
+        last_before = last_before_res.scalar()
+        if last_before:
+            return last_before
+
+    return None
+
+
+async def _week_chat_bounds(
+    db: AsyncSession,
+    session: OridSession,
+    week: int,
+) -> tuple[datetime | None, datetime | None]:
+    """回傳 (lower, upper) 供篩選 OridChatMessage；lower 為 None 表示本週無可辨識對話。"""
+    if week % 2 == 1:
+        lower = _dt_for_message_filter(session.created_at)
+        upper = None
+        if week < 6:
+            upper = _dt_for_message_filter(
+                await _week_activity_start(db, session, week + 1)
+            )
+        return lower, upper
+
+    lower = _dt_for_message_filter(await _week_activity_start(db, session, week))
+    return lower, None
+
+
+def _message_time_filters(
+    *,
+    lower: datetime | None,
+    upper: datetime | None,
+) -> tuple:
+    if lower is None:
+        return (OridChatMessage.id.is_(None),)
+    clauses = [OridChatMessage.created_at >= lower]
+    if upper is not None:
+        clauses.append(OridChatMessage.created_at < upper)
+    return tuple(clauses)
+
+
+async def _session_message_stats(
+    db: AsyncSession,
+    session: OridSession,
+    week: int,
+) -> tuple[int, datetime | None]:
+    """依週次時間窗計算對話輪數與最後活動時間。"""
+    lower, upper = await _week_chat_bounds(db, session, week)
+    if lower is None:
+        return 0, None
+
+    st_sum = func.coalesce(
+        func.sum(case((OridChatMessage.sender == _ORID_SENDER_STUDENT, 1), else_=0)),
+        0,
+    )
+    ai_sum = func.coalesce(
+        func.sum(case((OridChatMessage.sender == _ORID_SENDER_AI, 1), else_=0)),
+        0,
+    )
+    time_filters = _message_time_filters(lower=lower, upper=upper)
+    mc_res = await db.execute(
+        select(
+            st_sum.label("st_cnt"),
+            ai_sum.label("ai_cnt"),
+            func.max(OridChatMessage.created_at).label("last_at"),
+        )
+        .where(OridChatMessage.session_id == session.id, *time_filters)
+    )
+    mc_row = mc_res.mappings().first()
+    if not mc_row:
+        return 0, None
+    interaction_count = _dialogue_rounds(
+        int(mc_row["st_cnt"] or 0),
+        int(mc_row["ai_cnt"] or 0),
+    )
+    return interaction_count, mc_row["last_at"]
 
 
 async def _get_allowed_class_ids(db: AsyncSession, user: User) -> set[UUID]:
@@ -267,30 +387,21 @@ async def teacher_class_overview(
         session_by_student[uid] = {"id": sid, "current_stage": row["current_stage"] or "O"}
         session_ids.append(sid)
 
-    # ── 3. 對話輪數 per session（一輪 = 學生一則 + AI 一則，取 min(學則, AI則)）──
+    # ── 3. 對話輪數 per session（依週次時間窗；一輪 = 學生一則 + AI 一則）──
     msg_counts: dict[UUID, int] = {}
     last_activity: dict[UUID, object] = {}
+    sessions_by_id: dict[UUID, OridSession] = {}
     if session_ids:
-        st_sum = func.coalesce(
-            func.sum(case((OridChatMessage.sender == _ORID_SENDER_STUDENT, 1), else_=0)),
-            0,
-        )
-        ai_sum = func.coalesce(
-            func.sum(case((OridChatMessage.sender == _ORID_SENDER_AI, 1), else_=0)),
-            0,
-        )
-        mc_res = await db.execute(
-            select(
-                OridChatMessage.session_id,
-                func.least(st_sum, ai_sum).label("rounds"),
-                func.max(OridChatMessage.created_at).label("last_at"),
-            )
-            .where(OridChatMessage.session_id.in_(session_ids))
-            .group_by(OridChatMessage.session_id)
-        )
-        for mc_row in mc_res.mappings().all():
-            msg_counts[mc_row["session_id"]] = int(mc_row["rounds"] or 0)
-            last_activity[mc_row["session_id"]] = mc_row["last_at"]
+        sess_res = await db.execute(select(OridSession).where(OridSession.id.in_(session_ids)))
+        for sess in sess_res.scalars().all():
+            sessions_by_id[sess.id] = sess
+        for sid in session_ids:
+            sess = sessions_by_id.get(sid)
+            if not sess:
+                continue
+            rounds, last_at = await _session_message_stats(db, sess, week)
+            msg_counts[sid] = rounds
+            last_activity[sid] = last_at
 
     # ── 4. Writing completion + draft presence per stage (per student) ────────
     writing_stages: dict[UUID, int] = {}
@@ -436,28 +547,7 @@ async def teacher_student_summary(
     feedback_ok_stages = 0
 
     if session:
-        st_sum = func.coalesce(
-            func.sum(case((OridChatMessage.sender == _ORID_SENDER_STUDENT, 1), else_=0)),
-            0,
-        )
-        ai_sum = func.coalesce(
-            func.sum(case((OridChatMessage.sender == _ORID_SENDER_AI, 1), else_=0)),
-            0,
-        )
-        mc_res = await db.execute(
-            select(
-                st_sum.label("st_cnt"),
-                ai_sum.label("ai_cnt"),
-                func.max(OridChatMessage.created_at).label("last_at"),
-            ).where(OridChatMessage.session_id == session.id)
-        )
-        mc_row = mc_res.mappings().first()
-        if mc_row:
-            interaction_count = _dialogue_rounds(
-                int(mc_row["st_cnt"] or 0),
-                int(mc_row["ai_cnt"] or 0),
-            )
-            last_activity_at = mc_row["last_at"]
+        interaction_count, last_activity_at = await _session_message_stats(db, session, week)
         writing_res = await db.execute(
             select(OridWeekSubmission).where(
                 OridWeekSubmission.user_id == student_id,
@@ -543,9 +633,14 @@ async def teacher_student_chat_messages(
     if not session:
         return []
 
+    lower, upper = await _week_chat_bounds(db, session, week)
+    if lower is None:
+        return []
+
+    time_filters = _message_time_filters(lower=lower, upper=upper)
     res = await db.execute(
         select(OridChatMessage)
-        .where(OridChatMessage.session_id == session.id)
+        .where(OridChatMessage.session_id == session.id, *time_filters)
         .order_by(OridChatMessage.created_at.asc())
         .limit(limit)
     )

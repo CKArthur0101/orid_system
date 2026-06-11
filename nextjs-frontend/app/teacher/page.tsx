@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import {
   Users,
   Activity,
@@ -10,7 +10,6 @@ import {
   MessageSquare,
   FileText,
   Clock,
-  Download,
   ThumbsUp,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -193,14 +192,11 @@ export default function TeacherDashboardPage() {
   const [ptSaving, setPtSaving] = useState(false);
   const [writingRubric, setWritingRubric] = useState<WritingRubric>(null);
   const [rubricOpen, setRubricOpen] = useState(false);
+  const [mainTab, setMainTab] = useState<"overview" | "tracking">("overview");
   const [trackingRightTab, setTrackingRightTab] = useState<"data" | "records">("data");
   const [chatMessages, setChatMessages] = useState<OridChatLogRow[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
-  const [recordsCardHeight, setRecordsCardHeight] = useState<number | null>(null);
-  const leftTrackingColumnRef = useRef<HTMLDivElement | null>(null);
-  const rightTrackingTabsRef = useRef<HTMLDivElement | null>(null);
-  const recordsHeaderRef = useRef<HTMLDivElement | null>(null);
 
   // On mount: fetch classes then immediately fetch overview with the first class
   useEffect(() => {
@@ -363,18 +359,6 @@ export default function TeacherDashboardPage() {
     return () => ac.abort();
   }, [classId, selectedStudentId, week, trackingRightTab]);
 
-  const handleExport = useCallback(async () => {
-    const res = await fetch(`/api/teacher/classes/${classId}/export?week=${week}`);
-    if (!res.ok) return;
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `class_week${week}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [classId, week]);
-
   const handleSavePostTest = useCallback(async () => {
     if (!SHOW_TEACHER_POST_TEST_UI) return;
     if (!selectedStudentId || !classId) return;
@@ -431,7 +415,7 @@ export default function TeacherDashboardPage() {
         <SelectTrigger className="w-[280px] bg-white">
           <SelectValue placeholder="選擇學生" />
         </SelectTrigger>
-        <SelectContent>
+        <SelectContent className="max-h-[12.5rem]">
           {(overview?.students ?? []).map((s) => (
             <SelectItem key={s.student_id} value={s.student_id}>
               {studentLabel(s)}
@@ -442,49 +426,9 @@ export default function TeacherDashboardPage() {
     </div>
   );
 
-  useEffect(() => {
-    if (!studentDetail) {
-      setRecordsCardHeight(null);
-      return;
-    }
-
-    const syncRecordsCardHeight = () => {
-      if (typeof window === "undefined" || window.innerWidth < 1024) {
-        setRecordsCardHeight(null);
-        return;
-      }
-      const leftEl = leftTrackingColumnRef.current;
-      const tabsEl = rightTrackingTabsRef.current;
-      if (!leftEl || !tabsEl) {
-        setRecordsCardHeight(null);
-        return;
-      }
-      const gapPx = 16; // 對應 gap-4
-      const headerPx =
-        trackingRightTab === "records" && recordsHeaderRef.current
-          ? Math.round(recordsHeaderRef.current.getBoundingClientRect().height)
-          : 0;
-      const next = Math.max(
-        220,
-        Math.round(
-          leftEl.getBoundingClientRect().height - tabsEl.getBoundingClientRect().height - gapPx - headerPx,
-        ),
-      );
-      setRecordsCardHeight(next);
-    };
-
-    syncRecordsCardHeight();
-    window.addEventListener("resize", syncRecordsCardHeight);
-    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(syncRecordsCardHeight) : null;
-    if (ro) {
-      if (leftTrackingColumnRef.current) ro.observe(leftTrackingColumnRef.current);
-      if (rightTrackingTabsRef.current) ro.observe(rightTrackingTabsRef.current);
-    }
-    return () => {
-      window.removeEventListener("resize", syncRecordsCardHeight);
-      ro?.disconnect();
-    };
-  }, [studentDetail, selectedStudentId, week, trackingRightTab]);
+  /** 固定可捲動高度：不依賴量測左欄，避免從班級概覽切換時 flex 高度失效 */
+  const recordsScrollClass =
+    "min-h-[220px] max-h-[min(70vh,560px)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]";
 
   return (
     <div className="mx-auto max-w-[1400px] p-6">
@@ -520,21 +464,17 @@ export default function TeacherDashboardPage() {
               ))}
             </SelectContent>
           </Select>
-          <button
-            onClick={handleExport}
-            disabled={!classId}
-            className="flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-2 text-base font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-          >
-            <Download className="h-4 w-4" />
-            匯出 CSV
-          </button>
         </div>
       </div>
 
       {loading ? (
         <div className="flex h-64 items-center justify-center text-muted-foreground">載入中...</div>
       ) : (
-        <Tabs defaultValue="overview" className="space-y-6">
+        <Tabs
+          value={mainTab}
+          onValueChange={(v) => setMainTab(v as "overview" | "tracking")}
+          className="space-y-6"
+        >
           <TabsList className="grid w-full max-w-md grid-cols-2 bg-blue-50">
             <TabsTrigger value="overview" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white">
               班級概覽
@@ -654,10 +594,7 @@ export default function TeacherDashboardPage() {
                               className="border-t hover:bg-blue-50/40 cursor-pointer transition"
                               onClick={() => {
                                 setSelectedStudentId(row.student_id);
-                                const tabBtn = document.querySelector<HTMLButtonElement>(
-                                  '[data-state][value="tracking"]'
-                                );
-                                tabBtn?.click();
+                                setMainTab("tracking");
                               }}
                             >
                               <td className="px-4 py-2.5 font-medium">
@@ -711,7 +648,7 @@ export default function TeacherDashboardPage() {
             ) : studentDetail ? (
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:items-start">
                 {/* Left: ORID completion + feedback analytics */}
-                <div ref={leftTrackingColumnRef} className="space-y-4">
+                <div className="space-y-4">
                   {trackingStudentSelect}
                   <Card>
                     <CardHeader className="pb-3">
@@ -811,11 +748,8 @@ export default function TeacherDashboardPage() {
                 </div>
 
                 {/* Right: 數據／紀錄切換 + 統計或對話 thread */}
-                <div className="flex min-h-0 flex-col gap-4 lg:pt-[1px]">
-                  <div
-                    ref={rightTrackingTabsRef}
-                    className="flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 text-sm font-medium text-slate-600 shadow-sm"
-                  >
+                <div className="flex flex-col gap-4">
+                  <div className="flex shrink-0 rounded-lg border border-slate-200 bg-slate-100 p-0.5 text-sm font-medium text-slate-600 shadow-sm">
                     <button
                       type="button"
                       onClick={() => setTrackingRightTab("data")}
@@ -986,41 +920,32 @@ export default function TeacherDashboardPage() {
                     </>
                   ) : (
                     <Card className="overflow-hidden">
-                      <CardHeader ref={recordsHeaderRef} className="pb-2 pt-4">
+                      <CardHeader className="pb-2 pt-4">
                         <CardTitle className="text-base">對話紀錄</CardTitle>
                         <p className="text-xs font-normal text-muted-foreground">
-                          {studentLabel(studentDetail)} · 第 {studentDetail.week} 週寫作教練（與學生端同一對話序）
+                          {studentLabel(studentDetail)} · 第 {studentDetail.week} 週寫作教練 · 僅顯示本週對話
                         </p>
                       </CardHeader>
                       <CardContent className="p-0">
                         {chatLoading ? (
                           <div
-                            className="flex items-center justify-center text-sm text-muted-foreground"
-                            style={recordsCardHeight ? { height: `${recordsCardHeight}px` } : undefined}
+                            className={`flex items-center justify-center text-sm text-muted-foreground ${recordsScrollClass}`}
                           >
                             載入對話中…
                           </div>
                         ) : chatError ? (
-                          <div
-                            className="overflow-y-auto bg-amber-50 p-4 text-sm text-amber-800"
-                            style={recordsCardHeight ? { height: `${recordsCardHeight}px` } : undefined}
-                          >
+                          <div className={`bg-amber-50 p-4 text-sm text-amber-800 ${recordsScrollClass}`}>
                             {chatError}
                           </div>
                         ) : chatMessages.length === 0 ? (
                           <div
-                            className="flex items-center justify-center px-4 text-center text-sm text-muted-foreground"
-                            style={recordsCardHeight ? { height: `${recordsCardHeight}px` } : undefined}
+                            className={`flex items-center justify-center px-4 text-center text-sm text-muted-foreground ${recordsScrollClass}`}
                           >
                             此週尚無對話紀錄，或學生尚未建立該週 session。
                           </div>
                         ) : (
                           <div
-                            className="space-y-3 overflow-y-scroll border-t border-slate-100 bg-slate-50/80 px-3 py-3"
-                            style={{
-                              ...(recordsCardHeight ? { height: `${recordsCardHeight}px` } : {}),
-                              scrollbarGutter: "stable",
-                            }}
+                            className={`space-y-3 border-t border-slate-100 bg-slate-50/80 px-3 py-3 ${recordsScrollClass}`}
                           >
                             {chatMessages.map((m) => {
                               const isStudent = m.sender === "student";
