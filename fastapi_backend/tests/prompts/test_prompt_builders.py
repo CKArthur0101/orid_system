@@ -32,6 +32,35 @@ def _book_pack() -> dict:
             "O": "先把故事事件說清楚。",
             "D": "寫出下次你會怎麼做。",
         },
+        "writing_rubric": {
+            "schema": "writing_rubric_v1",
+            "by_stage": {
+                "O": [
+                    {
+                        "id": "O1",
+                        "name": "事實描述",
+                        "levels": [
+                            {"label": "1 起步", "desc": "只有感想，沒有寫出故事人物或事件。"},
+                            {"label": "2 接近", "desc": "有提到人物或事件，但內容零散。"},
+                            {"label": "3 達標", "desc": "能正確寫出人物與至少一件重要事件。"},
+                            {"label": "4 精進", "desc": "能寫出兩件以上有前後關聯的事件。"},
+                        ],
+                    }
+                ],
+                "R": [
+                    {
+                        "id": "R1",
+                        "name": "感受與原因",
+                        "levels": [
+                            {"label": "1 起步", "desc": "沒有感受詞，也沒有原因。"},
+                            {"label": "2 接近", "desc": "有感受，但原因不清楚。"},
+                            {"label": "3 達標", "desc": "能寫出感受並連回故事原因。"},
+                            {"label": "4 精進", "desc": "能把感受、原因與故事畫面說清楚。"},
+                        ],
+                    }
+                ],
+            },
+        },
     }
 
 
@@ -71,10 +100,9 @@ def test_strip_orid_stage_tag_removes_section_prefix():
 
 def test_personalized_control_praise_skips_fake_quote_for_one_word():
     p = personalized_control_praise_line("[O 本段寫作] 好", "客觀")
-    assert p and "多寫一小句" in p
-    assert "方向是對的" not in p
+    assert p == ""
     q = personalized_control_praise_line("[O 本段寫作] 不知道", "客觀")
-    assert q and ("卡住" in q or "還在想" in q)
+    assert q == ""
 
 
 def test_control_feedback_short_o_with_anchor_uses_book_in_example():
@@ -89,7 +117,8 @@ def test_control_feedback_short_o_with_anchor_uses_book_in_example():
         student_draft="[O 本段寫作] 好",
     )
     assert "阿松爺爺把柿子藏到屋後倉庫" in reply
-    assert "第一步" in reply and "第二步" in reply
+    assert "誰做了什麼" in reply
+    assert "故事中，＿＿＿做了＿＿＿" in reply
 
 
 def test_genai_feedback_builder_changes_contract_by_stage():
@@ -106,13 +135,16 @@ def test_genai_feedback_builder_changes_contract_by_stage():
 
     assert "角色清單（學生寫的角色名必須對照這裡）" in o_system
     assert "書名已知；D 段不做角色名查核。" in d_system
-    assert "example：給與學生原文貼近" in o_system
+    assert "example：只給句型開頭、填空式提示或半句支架" in o_system
     assert "國小五、六年級" in o_system
     assert "40 分鐘" in o_system
-    assert "【本輪目的地" in o_system
-    assert "ORID_FEEDBACK_SPEC" in o_system
+    assert "一次只指出一個最重要的修改方向" in o_system
+    assert "1 個問句" in o_system
+    assert "2～4 個" not in o_system
     assert "學生「O」段原文如下" in o_user
     assert "不要" in o_user and ("書裡" in o_user or "故事裡" in o_user)
+    assert "1 起步：只有感想，沒有寫出故事人物或事件。" in o_system
+    assert "3 達標：能正確寫出人物與至少一件重要事件。" in o_system
     assert "學生「D」段原文如下" in d_user
     assert "對照上方「故事摘要」" not in d_user
 
@@ -146,14 +178,14 @@ def test_genai_feedback_builder_changes_contract_by_stage():
     )
     assert "本輪特別：O 段草稿極短或學生表達卡住" in stuck_user
     assert "本輪特別：O 段草稿極短或學生表達卡住" in stuck_user2
-    assert "用語變化（四段通用" in stuck_o
+    assert "不要把完整答案寫好給學生複製" in stuck_o
 
     r_system, _ = build_genai_feedback_prompts(
         stage="R",
         text="我覺得很開心",
         book_pack=_book_pack(),
     )
-    assert "【本輪目的地" in r_system
+    assert "1 個問句" in r_system
     assert "因為" in r_system
 
 
@@ -215,14 +247,14 @@ def test_coach_and_checker_builders_keep_expected_sections():
         opening_hint="先固定一種主要語言。",
         prev_ai_opener=None,
     )
-    assert "【本輪目的地" in narration_system
+    assert "每段最多 2 句" in narration_system
     assert "你已經做到：" in narration_system
     assert "你可以再加強：" in narration_system
     assert "試試看這樣寫：" in narration_system
     assert "像老師坐在學生旁邊" in narration_system
-    assert "40 分鐘" in narration_system
     assert "第二段**一定要保留這個重點**" in narration_system
-    assert "若 JSON 裡有 example，請融入這一段" in narration_system
+    assert "如果 JSON 裡有 example" in narration_system
+    assert "填空" in narration_system
     assert "故事覆蓋" in narration_system or "書裡情節" in narration_system or "去看／掃故事摘要" in narration_system
     assert "Markdown" in narration_system or "純文字" in narration_system
     assert "先肯定再引導" in narration_system
@@ -230,6 +262,7 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "循序漸進" in narration_system
     assert "【I 段】" in narration_system
     assert "禁止出現「我們一步一步來」" in narration_system or "一步一步來」等套語" in narration_system
+    assert "2～4 個短任務" not in narration_system
     assert "【輸入粗分類】mixed_script" in narration_user
     assert "我觉得故事很有趣" in narration_user
     assert "結構化回饋 JSON" in narration_user
@@ -375,7 +408,7 @@ def test_control_feedback_o_meta_stuck_prefers_book_anchor_over_echo_suggestion(
         student_draft="我不知道誰做了什麼",
     )
     assert "阿松爺爺把柿子藏到屋後倉庫" in reply
-    assert "我們先看「" in reply
+    assert "故事裡有「" in reply
     assert "我們先補一句「是誰做了什麼」" not in reply
     assert "故事裡到底是誰做了什麼" in reply
 
@@ -391,7 +424,8 @@ def test_control_feedback_reply_does_not_prefix_step_by_step():
         student_draft="阿松爺爺不分享柿子",
     )
     assert "我們一步一步來" not in reply
-    assert "把先發生什麼、後來怎樣補出來" in reply
+    assert "誰做了什麼" in reply
+    assert "故事中，＿＿＿做了＿＿＿" in reply
 
 
 def test_prompt_versions_cover_active_surfaces():

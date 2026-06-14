@@ -66,6 +66,10 @@ from app.prompts.policy.control_feedback import (
     format_control_feedback_reply,
     format_control_free_text_reply,
 )
+from app.prompts.policy.scaffold_guard import (
+    scaffold_feedback_example,
+    scaffold_feedback_suggestions,
+)
 from app.prompts.policy.turn_destination import (
     CONTROL_O_META_MISSING,
     CONTROL_O_META_SUGGESTION,
@@ -209,7 +213,7 @@ ORID_FEEDBACK_RETRY_MAX_COMPLETION_TOKENS = int(
 )
 # 第二段 LLM（JSON→三段敘述）：預設給比 400 稍多空間，較能帶進書中具體情節（仍受 OPENAI_MAX_COMPLETION_TOKENS 上限）。
 ORID_FEEDBACK_NARRATION_MAX_COMPLETION_TOKENS = int(
-    os.getenv("ORID_FEEDBACK_NARRATION_MAX_COMPLETION_TOKENS", "640")
+    os.getenv("ORID_FEEDBACK_NARRATION_MAX_COMPLETION_TOKENS", "420")
 )
 ORID_OFFTOPIC_STRICT = _env_bool("ORID_OFFTOPIC_STRICT", False)
 ORID_FEEDBACK_INTERNAL_PLANNER = _env_bool("ORID_FEEDBACK_INTERNAL_PLANNER", False)
@@ -1922,6 +1926,9 @@ def _feedback_from_obj(
     if improved and len(improved) > 120:
         improved = None
 
+    suggestions = scaffold_feedback_suggestions(stage, suggestions[:1])
+    example = scaffold_feedback_example(stage, example)
+
     return ok, missing[:1], suggestions[:1], example, improved, praise, _rubric_meta_from_obj(obj)
 
 
@@ -2568,6 +2575,9 @@ async def writing_coach_chat(
         if _has_feedback_book_grounding_issue(fb_missing):
             fb_praise = _book_grounding_praise(stage_ctx)
             fb_ex = _book_grounding_example(stage_ctx, book_pack)
+
+        fb_sug = scaffold_feedback_suggestions(stage_ctx, fb_sug)
+        fb_ex = scaffold_feedback_example(stage_ctx, fb_ex)
 
         # Completion rule: rubric level 3+ (達標/精進) → force ok=True
         # so the existing pass-tracking counts this turn as a pass.

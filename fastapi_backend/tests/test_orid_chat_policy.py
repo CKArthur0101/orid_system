@@ -1,6 +1,7 @@
 from app.prompts.policy import grounding
 from app.prompts.policy.feedback_focus import detect_feedback_strength, normalize_feedback_focus
 from app.prompts.policy.control_feedback import format_control_feedback_reply
+from app.prompts.policy.scaffold_guard import scaffold_feedback_example
 from app.routes import orid
 import pytest
 from types import SimpleNamespace
@@ -234,6 +235,18 @@ def test_feedback_narration_validation_requires_three_sections():
     assert orid._looks_valid_feedback_narration(bad_text) is False
 
 
+def test_scaffold_guard_rejects_full_answer():
+    example = "我覺得阿松爺爺後來很溫暖，因為他願意把柿子分享給大家。"
+
+    assert scaffold_feedback_example("R", example) == "我覺得＿＿＿，因為＿＿＿。"
+
+
+def test_scaffold_guard_allows_blank_scaffold():
+    example = "我覺得＿＿＿，因為＿＿＿。"
+
+    assert scaffold_feedback_example("R", example) == example
+
+
 @pytest.mark.asyncio
 async def test_enforce_feedback_book_grounding_prioritizes_wrong_book_content():
     book_pack = {
@@ -298,10 +311,9 @@ def test_control_feedback_reply_preserves_example_in_try_section():
         student_draft="阿松爺爺不分享柿子",
     )
     assert "試試看這樣寫：" in reply
-    assert "我們一步一步來" in reply
-    assert "把先發生什麼、後來怎樣補出來" in reply
+    assert "誰做了什麼" in reply
     assert "例如：" in reply
-    assert "阿松爺爺把柿子藏起來" in reply
+    assert "＿＿＿" in reply
 
 
 def test_normalize_feedback_focus_strength_tone_changes_with_draft_quality():

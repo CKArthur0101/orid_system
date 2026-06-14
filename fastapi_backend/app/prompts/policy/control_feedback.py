@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.prompts.policy.feedback_focus import normalize_feedback_focus
+from app.prompts.policy.scaffold_guard import scaffold_feedback_example, scaffold_for_stage
 from app.prompts.policy.turn_destination import (
     personalized_control_praise_line,
     strip_orid_stage_tag,
@@ -85,13 +86,13 @@ def format_control_feedback_reply(
     nudge = ""
     if anchor:
         if s_up == "O":
-            nudge = f"我們先看「{anchor}」這件事，先寫一開始發生什麼，再寫後來怎麼了。"
+            nudge = f"故事裡有「{anchor}」這件事，你可以想想：誰做了什麼？"
         elif s_up == "R":
-            nudge = f"我們先想想「{anchor}」這一幕讓你有什麼感覺，再用「我覺得……，因為……」接著寫。"
+            nudge = f"看到「{anchor}」這一幕，你心裡是什麼感覺？"
         elif s_up == "I":
-            nudge = f"我們先用「{anchor}」這件事想一想，你從這裡學到什麼，再補一句理由就可以。"
+            nudge = f"「{anchor}」這件事讓你想到什麼提醒？"
         else:
-            nudge = f"我們先想成「{anchor}」那種情況，你下次第一步可以做什麼小行動？"
+            nudge = f"如果生活裡遇到像「{anchor}」那種情況，你第一步會怎麼做？"
 
     pr = (praise or "").strip()
     if "對齊教材" in m0:
@@ -120,16 +121,16 @@ def format_control_feedback_reply(
     if o_meta_anchor:
         line2 = (
             "你現在比較像在想「故事裡到底是誰做了什麼」，還沒把書裡的事寫出來；"
-            "下面我先用本週故事裡的一句情節，帶你寫出第一句客觀描述。"
+            "我們先用一個問句幫你回想，再自己補第一句。"
         )
 
     short_o_plain = s_up == "O" and len(core_st) < 14 and bool(anchor) and not o_meta_anchor
     line3_custom: str | None = None
 
     if o_meta_anchor and nudge:
-        base_line3 = nudge
+        base_line3 = f"{nudge} 你可以用句型試試：{scaffold_for_stage(s_up)}"
     elif s0 and "用。結尾" in s0:
-        base_line3 = "先把同一件事寫成完整一句，句尾加上句號；先寫誰做了什麼，再補後來怎樣。"
+        base_line3 = f"先想清楚這一件事：誰做了什麼？你可以用句型：{scaffold_for_stage(s_up)}"
     elif "對齊教材" in m0:
         grounding_stem_map = {
             "O": "我們先對回書中真的人物和事情，再按順序把前面和後面寫清楚，不要只寫最後一小段。",
@@ -139,13 +140,8 @@ def format_control_feedback_reply(
         }
         base_line3 = grounding_stem_map.get(s_up, "我們先對回書裡真的人物和事情，再照順序把內容寫清楚。")
     elif short_o_plain:
-        shown = anchor if len(anchor) <= 56 else anchor[:53] + "…"
-        snippet = shown if len(shown) <= 44 else shown[:41] + "…"
-        base_line3 = f"第一步：用一句話寫出「{snippet}」在書裡發生的事（可以換自己的說法，但不要改變教材裡的事實）。"
-        line3_custom = (
-            f"{base_line3}\n"
-            "第二步：同一段再接「後來……」寫出故事裡下一件真的事；兩句都要能從教材找到依據，不要自己編新角色或新情節。"
-        )
+        shown = anchor if len(anchor) <= 44 else anchor[:41] + "…"
+        base_line3 = f"故事裡有「{shown}」這一幕，你可以先問自己：誰做了什麼？句型：{scaffold_for_stage(s_up)}"
     elif s0 and not any(
         x in s0 for x in ("補充更多細節", "內容完整度", "深化內容", "增加完整度")
     ):
@@ -160,7 +156,7 @@ def format_control_feedback_reply(
     if line3_custom is not None:
         line3 = line3_custom
     else:
-        ex = (example or "").strip() or _default_example_line(stage, anchor)
+        ex = scaffold_feedback_example(stage, example) or scaffold_for_stage(stage)
         if ex.startswith("例如："):
             line3 = f"{base_line3}\n{ex}"
         else:

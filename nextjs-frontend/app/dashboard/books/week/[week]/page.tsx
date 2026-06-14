@@ -82,10 +82,17 @@ const STAGE_TITLES: Record<StageKey, string> = {
 };
 
 const STAGE_WRITING_HINT: Record<StageKey, string> = {
-  O: "想想看：故事裡「真的發生」了什麼？把人物、發生的事情或你印象深刻的畫面寫下來就好，用自己話就很棒！",
-  R: "這裡要寫的是你的心情喔！試著用自己的話描述「我感到……，因為……」。每種心情都值得被記下來～",
-  I: "故事看完後，你心裡有什麼想法？它對你代表什麼？也可以想想：你發現自己很在乎什麼？慢慢寫，沒有標準答案。",
-  D: "想一下：如果在生活裡碰到類似的狀況，你「想試著做的一件小事」是什麼？寫得具體一點點就很好了！加油～",
+  O: "寫故事裡誰做了什麼。",
+  R: "寫你的感受和原因。",
+  I: "寫你從故事學到什麼。",
+  D: "寫以後可以怎麼做。",
+};
+
+const STAGE_SCAFFOLD_LINES: Record<StageKey, string[]> = {
+  O: ["故事中，＿＿＿做了＿＿＿。", "一開始＿＿＿，後來＿＿＿。", "我印象最深的是＿＿＿。"],
+  R: ["我覺得＿＿＿，因為＿＿＿。", "看到＿＿＿這一幕，我感到＿＿＿。", "如果我是＿＿＿，我可能會覺得＿＿＿。"],
+  I: ["這個故事讓我學到＿＿＿。", "這件事提醒我要＿＿＿，因為＿＿＿。", "我發現自己很在乎＿＿＿。"],
+  D: ["以後如果我遇到＿＿＿，我會＿＿＿。", "下次當我想＿＿＿的時候，我會先＿＿＿。", "我可以做的一件小事是：＿＿＿。"],
 };
 
 function toChatMsg(m: any): ChatMsg | null {
@@ -821,6 +828,14 @@ export default function WeekBookPage() {
         return;
       }
 
+      try {
+        if (typeof window !== "undefined") {
+          localStorage.setItem(localDraftStorageKey(sessionId, weekNum), JSON.stringify(writingData));
+        }
+      } catch {
+        /* ignore local backup failure; server submit may still succeed */
+      }
+
       const content = JSON.stringify(writingData);
       const r = await fetch(`/api/orid/writings`, {
         method: "POST",
@@ -848,7 +863,7 @@ export default function WeekBookPage() {
         /* ignore */
       }
 
-      setSaveMsg("已提交 ✅（伺服器僅保留此週一份正式內容）");
+      setSaveMsg("已儲存並提交 ✅（伺服器僅保留此週一份正式內容）");
     } catch (e: any) {
       setWritingError(e?.message ?? "儲存失敗");
     } finally {
@@ -922,31 +937,31 @@ export default function WeekBookPage() {
   const STAGE_EMOJI: Record<StageKey, string> = { O: "👀", R: "💭", I: "💡", D: "🎯" };
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col gap-3 overflow-hidden sm:gap-4">
-      {/* Hero banner */}
-      <div className="shrink-0 rounded-2xl bg-gradient-to-r from-sky-500 to-blue-600 px-4 py-3 text-white shadow-lg sm:px-6 sm:py-3.5">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-xl font-bold sm:text-2xl">📖 AI–ORID 反思寫作</h1>
-            <p className="mt-0.5 text-sm text-sky-100 sm:text-base">
+    <div className="flex h-full min-h-0 flex-1 flex-col gap-2 overflow-hidden sm:gap-2.5">
+      {/* Hero banner — compact for tablet viewport */}
+      <div className="shrink-0 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-3 py-1.5 text-white shadow-md sm:px-4 sm:py-2">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-base font-bold leading-tight sm:text-lg">📖 AI–ORID 反思寫作</h1>
+            <p className="truncate text-[11px] leading-tight text-sky-100 sm:text-xs">
               第 {weekNum} 週｜先寫作（左）→ 回饋夥伴（右）
               {bookPack?.book_title ? `｜${bookPack.book_title}` : ""}
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
             {loading ? (
-              <span className="text-xs text-sky-200 sm:text-sm">初始化中…</span>
+              <span className="text-[10px] text-sky-200 sm:text-xs">初始化中…</span>
             ) : error ? (
-              <span className="rounded-lg bg-red-500/20 px-2 py-0.5 text-xs text-white sm:text-sm">{error}</span>
+              <span className="rounded-md bg-red-500/20 px-1.5 py-0.5 text-[10px] text-white sm:text-xs">{error}</span>
             ) : (
-              <span className="rounded-full bg-white/20 px-2 py-0.5 text-[10px] backdrop-blur-sm sm:text-xs">{condition}</span>
+              <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-[10px] backdrop-blur-sm sm:text-xs">{condition}</span>
             )}
             {oridCanForceNew ? (
               <button
                 type="button"
                 onClick={restartWeek}
                 disabled={loading}
-                className="rounded-lg bg-white/20 px-2.5 py-1 text-xs font-medium backdrop-blur-sm transition hover:bg-white/30 disabled:opacity-50 sm:px-3 sm:py-1.5 sm:text-sm"
+                className="rounded-md bg-white/20 px-2 py-0.5 text-[10px] font-medium backdrop-blur-sm transition hover:bg-white/30 disabled:opacity-50 sm:px-2.5 sm:py-1 sm:text-xs"
                 title="開新 session、清空聊天與寫作（僅實驗管理員）"
               >
                 重新開始本週
@@ -956,7 +971,7 @@ export default function WeekBookPage() {
         </div>
 
         {/* 四格皆可寫；高亮目前關注的寫作區（點格子或輸入時可切換） */}
-        <div className="mt-2 flex flex-wrap gap-1.5 sm:gap-2">
+        <div className="mt-1 flex flex-wrap gap-1">
           {STAGES.map((s) => {
             const active = focusStage === s.key;
             return (
@@ -965,11 +980,11 @@ export default function WeekBookPage() {
                 type="button"
                 onClick={() => setFocusStage(s.key)}
                 className={[
-                  "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium transition-all sm:px-3 sm:py-1 sm:text-sm",
-                  active ? "bg-white text-sky-700 shadow-md" : "bg-white/15 text-sky-100 hover:bg-white/25",
+                  "inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[10px] font-medium transition-all sm:px-2.5 sm:text-xs",
+                  active ? "bg-white text-sky-700 shadow-sm" : "bg-white/15 text-sky-100 hover:bg-white/25",
                 ].join(" ")}
               >
-                <span>{STAGE_EMOJI[s.key]}</span>
+                <span className="text-[11px] sm:text-xs">{STAGE_EMOJI[s.key]}</span>
                 {s.label}
               </button>
             );
@@ -980,10 +995,10 @@ export default function WeekBookPage() {
       {/* 單屏：左 2×2 四格、右聊天；不超過視窗高度，過長只在各欄內捲動 */}
       <div className={mainGridClass}>
         <div className="kid-shell order-1 flex h-full min-h-0 flex-col overflow-hidden md:h-full">
-          <div className="kid-section-header shrink-0 justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-lg">✍️</span>
-              <span className="text-sm font-bold">反思寫作</span>
+          <div className="kid-section-header shrink-0 justify-between !py-1.5">
+            <div className="flex items-center gap-1.5">
+              <span className="text-base">✍️</span>
+              <span className="text-xs font-bold sm:text-sm">反思寫作</span>
             </div>
             {weekNum === 2 ? (
               <span className="max-w-[14rem] text-right text-[10px] leading-snug text-sky-100 sm:max-w-none sm:text-xs">
@@ -1003,22 +1018,22 @@ export default function WeekBookPage() {
                     <div
                       key={stage}
                       className={[
-                        "flex min-h-0 flex-col rounded-xl border p-2 sm:p-2 md:h-full md:min-h-0",
+                        "flex min-h-0 flex-col rounded-xl border p-1.5 sm:p-1.5 md:h-full md:min-h-0",
                         isFocused
                           ? "border-sky-300 bg-sky-50/40 shadow-sm ring-1 ring-sky-200"
                           : "border-slate-200 bg-white hover:border-sky-200",
                       ].join(" ")}
                     >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="relative flex min-w-0 flex-1 items-center gap-2">
+                      <div className="flex shrink-0 flex-wrap items-center justify-between gap-1.5">
+                        <div className="relative flex min-w-0 flex-1 items-center gap-1.5">
                           <button
                             type="button"
-                            className={`peer inline-flex h-7 w-7 shrink-0 cursor-help items-center justify-center rounded-lg bg-gradient-to-br ${STAGE_COLORS[stage]} text-sm text-white shadow-sm outline-none ring-offset-2 transition hover:brightness-105 focus-visible:ring-2 focus-visible:ring-sky-400`}
+                            className={`peer inline-flex h-6 w-6 shrink-0 cursor-help items-center justify-center rounded-md bg-gradient-to-br ${STAGE_COLORS[stage]} text-xs text-white shadow-sm outline-none ring-offset-2 transition hover:brightness-105 focus-visible:ring-2 focus-visible:ring-sky-400 sm:h-7 sm:w-7 sm:text-sm`}
                             aria-label={`${STAGE_TITLES[stage]}：查看寫作小提示`}
                           >
                             {STAGE_EMOJI[stage]}
                           </button>
-                          <span className="text-[13px] font-bold leading-tight text-slate-700 sm:text-sm">
+                          <span className="text-xs font-bold leading-tight text-slate-700 sm:text-[13px]">
                             {STAGE_TITLES[stage]}
                           </span>
                           <div
@@ -1031,7 +1046,7 @@ export default function WeekBookPage() {
                         {showStageFeedbackButtons ? (
                           <button
                             type="button"
-                            className="kid-btn-primary shrink-0 !px-2 !py-0.5 !text-[11px] sm:!text-xs"
+                            className="kid-btn-primary shrink-0 !px-2 !py-0.5 !text-[10px] sm:!text-[11px]"
                             disabled={!sessionId || fbLoading}
                             onClick={() => runFeedback(stage)}
                           >
@@ -1042,25 +1057,35 @@ export default function WeekBookPage() {
                         )}
                       </div>
 
-                      <textarea
-                        className="mt-1 w-full min-h-0 flex-1 resize-none overflow-y-auto rounded-lg border border-slate-200 bg-white p-1.5 text-sm leading-snug outline-none placeholder:text-slate-400/85 placeholder:text-left focus:border-sky-400 focus:ring-1 focus:ring-sky-400/25 read-only:bg-slate-50 read-only:text-slate-700"
-                        placeholder={STAGE_WRITING_HINT[stage]}
-                        value={oridDisplay.stages[stage].d1}
-                        readOnly={oridReadOnly}
-                        onFocus={() => setFocusStage(stage)}
-                        onChange={
-                          oridReadOnly
-                            ? undefined
-                            : (e) =>
-                                setWritingData((prev) => ({
-                                  ...prev,
-                                  stages: {
-                                    ...prev.stages,
-                                    [stage]: { ...prev.stages[stage], d1: e.target.value },
-                                  },
-                                }))
-                        }
-                      />
+                      <div className="mt-1 flex min-h-0 flex-1 gap-1.5">
+                        <textarea
+                          className="min-h-0 min-w-0 flex-1 resize-none overflow-y-auto rounded-lg border border-slate-200 bg-white p-2 text-sm leading-snug outline-none placeholder:text-slate-400/85 placeholder:text-left focus:border-sky-400 focus:ring-1 focus:ring-sky-400/25 read-only:bg-slate-50 read-only:text-slate-700"
+                          placeholder={STAGE_WRITING_HINT[stage]}
+                          value={oridDisplay.stages[stage].d1}
+                          readOnly={oridReadOnly}
+                          onFocus={() => setFocusStage(stage)}
+                          onChange={
+                            oridReadOnly
+                              ? undefined
+                              : (e) =>
+                                  setWritingData((prev) => ({
+                                    ...prev,
+                                    stages: {
+                                      ...prev.stages,
+                                      [stage]: { ...prev.stages[stage], d1: e.target.value },
+                                    },
+                                  }))
+                          }
+                        />
+                        <div className="flex w-[34%] min-w-[5.75rem] max-w-[9.5rem] shrink-0 flex-col overflow-y-auto rounded-lg bg-sky-50/70 px-1.5 py-1.5 text-xs leading-snug text-slate-600 sm:w-[32%] sm:min-w-[6.5rem] sm:max-w-[10.5rem] sm:px-2 sm:text-sm sm:leading-snug">
+                          <div className="mb-1 shrink-0 text-xs font-semibold text-slate-700 sm:text-sm">可以這樣開頭：</div>
+                          {STAGE_SCAFFOLD_LINES[stage].map((line) => (
+                            <div key={line} className="break-words">
+                              {line}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   );
                 })}
@@ -1068,19 +1093,11 @@ export default function WeekBookPage() {
             </div>
 
             <div className="shrink-0 border-t border-slate-100 px-3 pb-2 pt-1.5 sm:px-3 sm:pb-3">
-              <div className="flex flex-col gap-2 sm:flex-row sm:gap-3">
-                <button
-                  type="button"
-                  className="kid-btn-secondary w-full flex-1 sm:w-auto"
-                  disabled={!sessionId || !readingId || writingSubmitting}
-                  onClick={() => saveWriting("draft")}
-                >
-                  💾 儲存草稿
-                </button>
+              <div className="flex flex-col gap-2">
                 {weekNum === 2 && w2Phase === "orid_review" ? (
                   <button
                     type="button"
-                    className="kid-btn-primary w-full flex-1 sm:w-auto"
+                    className="kid-btn-primary w-full py-2 text-sm sm:text-base"
                     disabled={!sessionId || !readingId || writingSubmitting}
                     onClick={() => void submitWeek2PhaseToSynthesis()}
                   >
@@ -1089,11 +1106,11 @@ export default function WeekBookPage() {
                 ) : (
                   <button
                     type="button"
-                    className="kid-btn-primary w-full flex-1 sm:w-auto"
+                    className="kid-btn-primary w-full py-2 text-sm sm:text-base"
                     disabled={!sessionId || !readingId || writingSubmitting}
                     onClick={() => saveWriting("submit")}
                   >
-                    ✅ 提交
+                    {writingSubmitting ? "儲存中…" : "💾 儲存並提交我的寫作"}
                   </button>
                 )}
               </div>
