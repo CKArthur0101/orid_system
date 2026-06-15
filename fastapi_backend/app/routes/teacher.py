@@ -263,6 +263,51 @@ def _stages_with_draft(content: str | None) -> list[str]:
     return result
 
 
+def _csv_bool(value: object) -> str:
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return ""
+
+
+def _extract_submission_research_fields(content: str | None) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for stage in ("O", "R", "I", "D"):
+        fields[f"{stage}_text"] = ""
+        fields[f"{stage}_feedback_ok"] = ""
+        fields[f"{stage}_rubric_focus"] = ""
+        fields[f"{stage}_rubric_level_estimate"] = ""
+
+    if not content:
+        return fields
+    try:
+        obj = json.loads(content)
+    except Exception:
+        return fields
+    stages = obj.get("stages") if isinstance(obj, dict) else None
+    if not isinstance(stages, dict):
+        return fields
+
+    for stage in ("O", "R", "I", "D"):
+        stage_obj = stages.get(stage)
+        if not isinstance(stage_obj, dict):
+            continue
+        fields[f"{stage}_text"] = str(stage_obj.get("d1") or "").strip()
+        feedback = stage_obj.get("feedback")
+        if not isinstance(feedback, dict):
+            continue
+        d1_feedback = feedback.get("d1")
+        if not isinstance(d1_feedback, dict):
+            continue
+        fields[f"{stage}_feedback_ok"] = _csv_bool(d1_feedback.get("ok"))
+        meta = d1_feedback.get("meta")
+        if isinstance(meta, dict):
+            fields[f"{stage}_rubric_focus"] = str(meta.get("rubric_focus") or "").strip()
+            fields[f"{stage}_rubric_level_estimate"] = str(meta.get("rubric_level_estimate") or "").strip()
+    return fields
+
+
 _STAGE_ORDER = {"NOT_STARTED": 0, "O": 1, "R": 2, "I": 3, "D": 4}
 _STAGE_BY_ORDER = {0: "NOT_STARTED", 1: "O", 2: "R", 3: "I", 4: "D"}
 
@@ -803,16 +848,43 @@ async def export_class_csv(
     for pt in pt_scores_raw:
         pt_by_student.setdefault(pt.student_id, {})[pt.stage] = pt.score
 
+    student_ids = [row.student_id for row in overview.students]
+    submission_fields_by_student: dict[UUID, dict[str, str]] = {}
+    if student_ids:
+        sub_res = await db.execute(
+            select(OridWeekSubmission)
+            .where(
+                OridWeekSubmission.user_id.in_(student_ids),
+                OridWeekSubmission.week == week,
+            )
+            .order_by(OridWeekSubmission.updated_at.desc())
+        )
+        for submission in sub_res.scalars().all():
+            if submission.user_id not in submission_fields_by_student:
+                submission_fields_by_student[submission.user_id] = _extract_submission_research_fields(submission.content)
+
     output = io.StringIO()
     writer = csv.writer(output)
+    research_headers: list[str] = []
+    for stage in ("O", "R", "I", "D"):
+        research_headers.extend(
+            [
+                f"{stage}_text",
+                f"{stage}_feedback_ok",
+                f"{stage}_rubric_focus",
+                f"{stage}_rubric_level_estimate",
+            ]
+        )
     writer.writerow([
         "姓名", "學生信箱", "目前階段", "對話輪數",
         "寫作完成格數", "回饋點擊次數", "回饋通過次數", "回饋通過格數",
         "後測_O", "後測_R", "後測_I", "後測_D", "後測_ALL",
+        *research_headers,
     ])
     for row in overview.students:
         uid = row.student_id
         pts = pt_by_student.get(uid, {})
+        research_fields = submission_fields_by_student.get(uid, _extract_submission_research_fields(None))
         writer.writerow([
             row.student_display_name,
             row.student_email,
@@ -827,6 +899,7 @@ async def export_class_csv(
             pts.get("I", ""),
             pts.get("D", ""),
             pts.get("ALL", ""),
+            *(research_fields.get(h, "") for h in research_headers),
         ])
 
     output.seek(0)

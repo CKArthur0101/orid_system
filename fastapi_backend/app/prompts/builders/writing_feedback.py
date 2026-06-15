@@ -36,13 +36,15 @@ def _format_writing_rubric_for_prompt(book_pack: Optional[dict[str, Any]], stage
         return ""
 
     lines: list[str] = [
-        "【評量標準（ok=true ← 層級3達標或4精進；ok=false ← 層級1或2）】",
+        "【ORID 主要評量標準（ok=true ← 層級3達標或4精進；ok=false ← 層級1或2）】",
+        "ok 只依 ORID 本段標準判斷；SEL 只能輔助提問，不能改變 ok。",
     ]
     for it in items[:4]:
         if not isinstance(it, dict):
             continue
         rid = str(it.get("id") or "").strip()
         name = str(it.get("name") or "").strip()
+        focus = str(it.get("focus") or "").strip()
         levels = it.get("levels")
         if not name:
             continue
@@ -55,9 +57,48 @@ def _format_writing_rubric_for_prompt(book_pack: Optional[dict[str, Any]], stage
                     lv_parts.append(f"{label}：{desc}" if desc else label)
         rid_tag = f"[{rid}]" if rid else ""
         lv_str = "\n  ".join(lv_parts) if lv_parts else ""
-        lines.append(f"- {rid_tag}{name}" + (f"：{lv_str}" if lv_str else ""))
+        head = f"- {rid_tag}{name}" + (f"（評量重點：{focus}）" if focus else "")
+        lines.append(head + (f"：{lv_str}" if lv_str else ""))
 
     lines.append("rubric_focus=向度id，rubric_level_estimate=最接近層級標籤")
+    return "\n".join(lines)
+
+
+def _format_sel_guidance_for_prompt(book_pack: Optional[dict[str, Any]], stage: str) -> str:
+    if not isinstance(book_pack, dict):
+        return ""
+    raw = book_pack.get("sel_rubric")
+    if not isinstance(raw, dict):
+        return ""
+    by_stage = raw.get("by_stage")
+    if not isinstance(by_stage, dict):
+        return ""
+
+    stage = (stage or "O").strip().upper()
+    items = by_stage.get(stage) or []
+    if stage == "O" or not isinstance(items, list) or not items:
+        return (
+            "【SEL 輔助引導（本段）】\n"
+            "O 段不使用 SEL 輔助；只看故事人物、事件與前後變化。"
+        )
+
+    lines: list[str] = [
+        "【SEL 輔助引導（只給 AI 內部使用，不取代 ORID 判斷）】",
+        "SEL 只能幫你選一個友善問題；ok 只依 ORID 本段 rubric 判斷。",
+        "不要在給學生的文字中直接使用「SEL」或「情緒覺察」「同理與觀點理解」「價值反思」「負責任行動」等術語。",
+        "請把 SEL 轉成國小五、六年級看得懂的具體問題；每次最多用一個方向。",
+    ]
+    for it in items[:3]:
+        if not isinstance(it, dict):
+            continue
+        name = str(it.get("name") or "").strip()
+        focus = str(it.get("focus") or "").strip()
+        prompts = [str(x).strip() for x in (it.get("student_prompts") or []) if str(x).strip()]
+        if not name and not prompts:
+            continue
+        lines.append(f"- 內部參考：{name}" + (f"（{focus}）" if focus else ""))
+        for p in prompts[:2]:
+            lines.append(f"  可轉成問題：{p}")
     return "\n".join(lines)
 
 
@@ -176,6 +217,7 @@ def build_genai_feedback_prompts(
     characters_block = _characters_for_prompt(book_pack)
     stage_block = STAGE_BLOCKS.get(stage, STAGE_BLOCKS["O"])
     rubric_block = _format_writing_rubric_for_prompt(book_pack, stage)
+    sel_guidance_block = _format_sel_guidance_for_prompt(book_pack, stage)
     bucket_hint = bucket_tone_hint_zh(input_bucket)
 
     book_fact_section = "" if stage == "D" else f"""
@@ -202,6 +244,7 @@ def build_genai_feedback_prompts(
 {"故事摘錄（可以直接引用句子來引導學生）：" + chr(10) + excerpts_block if stage != "D" else ""}
 教師本段說明：{guide or "（未提供）"}
 {rubric_block if rubric_block else "（本週未提供 writing_rubric；仍依本段專屬規則回饋。）"}
+{sel_guidance_block}
 
 【語氣與長度感】
 學生常在一節課約 **40 分鐘**內寫完 ORID 四格，所以回饋要短、清楚、可立刻動筆。

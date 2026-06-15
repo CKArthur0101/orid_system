@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 from typing import Optional, Any, Tuple, List, Dict
+from dataclasses import dataclass
 import os
 import re
 import json
@@ -70,6 +71,7 @@ from app.prompts.policy.scaffold_guard import (
     scaffold_feedback_example,
     scaffold_feedback_suggestions,
 )
+from app.content.rubrics import WEEK1_ORID_RUBRIC, WEEK1_SEL_RUBRIC
 from app.prompts.policy.turn_destination import (
     CONTROL_O_META_MISSING,
     CONTROL_O_META_SUGGESTION,
@@ -80,6 +82,7 @@ from app.prompts.policy.turn_destination import (
 )
 from app.prompts.builders.checker import build_book_grounding_checker_prompts
 from app.prompts.policy.grounding import (
+    extract_unsupported_action_phrase,
     looks_story_related_to_book,
     looks_obviously_offtopic,
     looks_likely_factual_mismatch,
@@ -560,60 +563,8 @@ BOOK_PACK_BY_WEEK: dict[int, dict[str, Any]] = {
             "I": "意義：提出一個提醒/道理，並用故事中的一個轉折當理由。",
             "D": "行動：寫一個可執行的小步驟（下次我會…在…先…再…）。",
         },
-        "writing_rubric": {
-            "schema": "writing_rubric_v1",
-            "version": 2,
-            "by_stage": {
-                "O": [
-                    {
-                        "id": "O1",
-                        "name": "事實描述",
-                        "levels": [
-                            {"label": "1 起步", "desc": "只有感想或空洞述說，未寫出書中具體人物與事件，或事件明顯與書不符。"},
-                            {"label": "2 接近", "desc": "提到書中人物或事件，但缺少重要細節，或只寫了結局而跳過中間衝突，或順序不清楚。"},
-                            {"label": "3 達標", "desc": "正確寫出書中真實的人物＋至少一件完整事件，大致順序清楚，無明顯事實錯誤。"},
-                            {"label": "4 精進", "desc": "清楚描述至少兩件有前後關聯的事件，人物正確，順序清楚，細節到位（如：哎喲奶奶、柿子蒂→陀螺）。"},
-                        ],
-                    }
-                ],
-                "R": [
-                    {
-                        "id": "R1",
-                        "name": "感受與原因",
-                        "levels": [
-                            {"label": "1 起步", "desc": "沒有感受詞，或只有「很好、很感人」等空洞詞，沒有說明原因。"},
-                            {"label": "2 接近", "desc": "有感受詞，但沒有說明原因，或原因和故事無關。"},
-                            {"label": "3 達標", "desc": "有明確感受詞＋因為＋連回故事裡的一個畫面或情節。"},
-                            {"label": "4 精進", "desc": "感受具體豐富，原因清楚連回故事，說明有深度（如：代入角色思考、對比兩個角色的不同做法）。"},
-                        ],
-                    }
-                ],
-                "I": [
-                    {
-                        "id": "I1",
-                        "name": "道理與連結",
-                        "levels": [
-                            {"label": "1 起步", "desc": "只有感受，或只有空洞的道理（如「要善良」），沒有說明為什麼。"},
-                            {"label": "2 接近", "desc": "有道理，但缺乏「為什麼」的說明，或道理與書中故事無連結。"},
-                            {"label": "3 達標", "desc": "說出一個具體道理＋說明為什麼，可以連回書中某個情節（不一定要引文）。"},
-                            {"label": "4 精進", "desc": "道理清楚且有深度，明確連回書中一個具體情節作為支持，說明讓人覺得「說得很有道理」。"},
-                        ],
-                    }
-                ],
-                "D": [
-                    {
-                        "id": "D1",
-                        "name": "具體行動",
-                        "levels": [
-                            {"label": "1 起步", "desc": "只有空洞願望（如「我要更好」「我要改變」），沒有說明要做什麼。"},
-                            {"label": "2 接近", "desc": "有行動方向，但不夠具體，缺少情境或具體做法。"},
-                            {"label": "3 達標", "desc": "提出一個在現實生活中做得到的具體行動，包含情境或對象（如「下次同學來要東西，我會先說好，但留一份給自己」）。"},
-                            {"label": "4 精進", "desc": "行動具體清楚（有情境、對象、做法），並說明和書的啟發的關聯，讓人看了覺得「這真的做得到、也有意義」。"},
-                        ],
-                    }
-                ],
-            },
-        },
+        "writing_rubric": WEEK1_ORID_RUBRIC,
+        "sel_rubric": WEEK1_SEL_RUBRIC,
     }
 }
 
@@ -760,21 +711,35 @@ def resolve_book_pack(pack: Optional[dict[str, Any]]) -> Optional[dict[str, Any]
             break
     if not default:
         return pack
+    merged = dict(pack)
+    if len(merged.get("key_events") or []) < 3:
+        merged["key_events"] = list(default.get("key_events") or [])
+    if len(merged.get("story_excerpts") or []) < 3:
+        merged["story_excerpts"] = list(default.get("story_excerpts") or [])
+    if not merged.get("characters"):
+        merged["characters"] = list(default.get("characters") or [])
+    if not merged.get("setting"):
+        merged["setting"] = list(default.get("setting") or [])
+    if not merged.get("core_theme"):
+        merged["core_theme"] = list(default.get("core_theme") or [])
     try:
-        sv = int(pack.get("version") or pack.get("book_pack_version") or 1)
+        sv = int(merged.get("version") or merged.get("book_pack_version") or 1)
     except (TypeError, ValueError):
         sv = 1
     try:
         dv = int(default.get("version") or 1)
     except (TypeError, ValueError):
         dv = 1
-    if sv >= dv:
-        return pack
-    merged = dict(pack)
+    needs_rubric_overlay = bool(default.get("sel_rubric") and not merged.get("sel_rubric"))
+    if sv >= dv and not needs_rubric_overlay:
+        return merged
+    merged = dict(merged)
     merged["story_excerpts"] = list(default.get("story_excerpts") or [])
     merged["orid_prompt_bank"] = dict(default.get("orid_prompt_bank") or {})
     if default.get("writing_rubric"):
         merged["writing_rubric"] = default["writing_rubric"]
+    if default.get("sel_rubric"):
+        merged["sel_rubric"] = default["sel_rubric"]
     if default.get("writing_guide"):
         merged["writing_guide"] = default["writing_guide"]
     if default.get("rag_source") and not merged.get("rag_source"):
@@ -811,6 +776,9 @@ def load_book_pack_from_reading(reading: Optional[Reading]) -> Optional[dict[str
     if week:
         out.setdefault("week", week)
         out.setdefault("embedding_bundle_id", f"week_{week}")
+        default_week = BOOK_PACK_BY_WEEK.get(week)
+        if isinstance(default_week, dict):
+            out = resolve_book_pack({**default_week, **out, "reading_title": reading_title, "week": week})
     return out
 
 
@@ -1420,15 +1388,22 @@ class WritingFeedbackResponse(BaseModel):
     meta: dict[str, Any] = {}
 
 
-async def _llm_book_grounding_supported(
+@dataclass
+class BookGroundingCheck:
+    grounded: Optional[bool]
+    unsupported_span: str = ""
+    reason: str = ""
+
+
+async def _llm_book_grounding_check(
     *,
     student_text: str,
     stage: str,
     book_pack: Optional[dict[str, Any]],
-) -> Optional[bool]:
+) -> Optional[BookGroundingCheck]:
     """
     Semantic checker: ask LLM if student's claim is supported by BOOK_CONTEXT.
-    Returns True/False when parse succeeds; otherwise None for fallback heuristics.
+    Returns None when API unavailable or parse fails (caller may use heuristics).
     """
     if client is None:
         return None
@@ -1450,18 +1425,150 @@ async def _llm_book_grounding_supported(
             temperature=0,
         )
         obj = parse_book_grounding_checker_json(raw)
-        grounded = obj.get("grounded")
-        if isinstance(grounded, bool):
-            return grounded
-        if isinstance(grounded, str):
-            g = grounded.strip().lower()
+        grounded_raw = obj.get("grounded")
+        grounded: Optional[bool] = None
+        if isinstance(grounded_raw, bool):
+            grounded = grounded_raw
+        elif isinstance(grounded_raw, str):
+            g = grounded_raw.strip().lower()
             if g in {"true", "1", "yes"}:
-                return True
-            if g in {"false", "0", "no"}:
-                return False
+                grounded = True
+            elif g in {"false", "0", "no"}:
+                grounded = False
+        if grounded is None:
+            return None
+        span = str(obj.get("unsupported_span") or "").strip()
+        reason = str(obj.get("reason") or "").strip()
+        return BookGroundingCheck(grounded=grounded, unsupported_span=span, reason=reason)
     except Exception:
         logger.warning("book grounding checker failed")
     return None
+
+
+async def _llm_book_grounding_supported(
+    *,
+    student_text: str,
+    stage: str,
+    book_pack: Optional[dict[str, Any]],
+) -> Optional[bool]:
+    check = await _llm_book_grounding_check(
+        student_text=student_text,
+        stage=stage,
+        book_pack=book_pack,
+    )
+    return check.grounded if check is not None else None
+
+
+def _genai_grounding_user_hint(
+    check: BookGroundingCheck,
+    book_pack: Optional[dict[str, Any]],
+) -> str:
+    span = (check.unsupported_span or "").strip() or "（書外情節）"
+    ref = _book_grounding_reference_line(book_pack)
+    ref_line = f"書裡可對照的一句：「{ref}」。" if ref else ""
+    reason = (check.reason or "").strip()
+    reason_line = f"核對說明：{reason}。" if reason else ""
+    return (
+        "【教材核對結果（極重要）】學生草稿中有書裡沒有的具體情節。\n"
+        f"疑似書外片段：「{span}」。{reason_line}{ref_line}\n"
+        "請 ok=false。missing 用**口語**溫和指出哪個詞或哪件事不在書裡，並自然帶一句書裡真的情況；"
+        "**禁止**只寫「對齊教材」或「請把內容對齊教材」。"
+        "suggestions 用**一個**問句引導學生改寫；example 只給句型支架，improved 填 null。\n\n"
+    )
+
+
+async def _llm_natural_grounding_correction(
+    *,
+    student_text: str,
+    stage: str,
+    book_pack: Optional[dict[str, Any]],
+    check: BookGroundingCheck,
+) -> Optional[Tuple[str, str]]:
+    """Generate student-facing missing + suggestion when checker found ungrounded content."""
+    if client is None:
+        return None
+    t = (student_text or "").strip()
+    if not t or not isinstance(book_pack, dict):
+        return None
+    span = (check.unsupported_span or "").strip()
+    book_context = build_book_context_block(book_pack, max_events=6, max_chars=1400)
+    stage_u = (stage or "O").strip().upper()
+    sys = f"""
+你是國小五、六年級的寫作回饋助手。
+學生寫的內容有部分無法由教材支持；請產生**自然、口語**的糾正，不要像系統模板。
+
+輸出純 JSON：
+{{
+  "missing": string,
+  "suggestions": string
+}}
+
+規則：
+- missing：只抓**一個**重點；溫和說哪個詞／哪件事不像書裡發生的；可帶一句書裡真的情節對照。
+- suggestions：一個短問句或下一步，引導學生改用書裡真的事件再寫。
+- 禁止出現「對齊教材」「對照摘要」「掃摘要」。
+- 禁止把學生的錯誤情節當成真實發生去追問（例如不要問「為什麼爺爺吃奶奶」）。
+- 繁體中文，每欄 1～2 短句，適合國小生。
+
+目前階段：{stage_u}
+BOOK_CONTEXT：
+{book_context}
+""".strip()
+    user = (
+        f"學生句子：\n{t}\n\n"
+        f"疑似書外片段：{span or '（未標出）'}\n"
+        f"核對說明：{(check.reason or '').strip() or '（無）'}"
+    )
+    try:
+        raw = await _chat_completion(
+            [
+                {"role": "system", "content": sys},
+                {"role": "user", "content": user},
+            ],
+            max_completion_tokens=min(280, OPENAI_MAX_COMPLETION_TOKENS),
+            temperature=0.2,
+        )
+        obj = parse_book_grounding_checker_json(raw)
+        missing = str(obj.get("missing") or "").strip()
+        suggestions = str(obj.get("suggestions") or "").strip()
+        if missing and suggestions:
+            return missing, suggestions
+    except Exception:
+        logger.warning("natural grounding correction LLM failed")
+    return None
+
+
+def _grounding_fallback_lines(
+    *,
+    student_text: str,
+    book_pack: Optional[dict[str, Any]],
+    stage: str,
+    check: Optional[BookGroundingCheck] = None,
+) -> Tuple[str, str]:
+    """Offline / LLM-failure fallback — softer than the old template, for control path."""
+    span = (check.unsupported_span if check else "") or extract_unsupported_action_phrase(
+        student_text, book_pack
+    )
+    parts: list[str] = []
+    if span:
+        parts.append(f"你寫的「{span}」好像不是書裡發生的事")
+    char_note = _book_grounding_character_note(student_text, book_pack)
+    if char_note:
+        parts.append(char_note)
+    ref = _book_grounding_reference_line(book_pack)
+    if ref:
+        parts.append(f"書裡比較像是「{ref}」")
+    if not parts:
+        parts.append("你剛寫的情節好像不是書裡發生的事")
+    missing = "，".join(parts) + "。"
+    stage_upper = (stage or "O").strip().upper()
+    suggestion_map = {
+        "O": "你可以先想想：書裡是誰、做了什麼？再照那個方向改寫一句。",
+        "R": "你可以先想想：書裡哪一幕讓你有這種感覺？再寫你的感受和原因。",
+        "I": "你可以先想想：書裡哪件事讓你想到這個道理？再補上故事理由。",
+        "D": "你可以先想想：這本書想提醒你什麼？再寫你下次會怎麼做。",
+    }
+    return missing, suggestion_map.get(stage_upper, "先改用書裡真的人物和事件，再把意思寫清楚。")
 
 
 def _is_grounding_specific_message(text: str) -> bool:
@@ -1471,7 +1578,13 @@ def _is_grounding_specific_message(text: str) -> bool:
     cues = (
         "對齊教材",
         "不在書裡",
+        "書裡沒有",
+        "不是書裡",
+        "好像不是書裡",
+        "沒有這件事",
+        "不像書裡",
         "書裡說的是",
+        "書裡比較像是",
         "書中人物是",
         "書裡的人物是",
         "書中叫做",
@@ -1526,45 +1639,6 @@ def _book_grounding_character_note(student_text: str, book_pack: Optional[dict[s
     return "，".join(notes[:1])
 
 
-def _build_grounding_feedback_override(
-    student_text: str,
-    book_pack: Optional[dict[str, Any]],
-    *,
-    stage: str,
-) -> Tuple[str, str]:
-    t = (student_text or "").strip()
-    flagged_terms: list[str] = []
-    for term in ("打籃球", "籃球", "傳球", "投籃", "足球", "棒球", "排球", "KTV", "唱歌", "NBA", "WNBA"):
-        if term in t and term not in flagged_terms:
-            flagged_terms.append(term)
-
-    problem_bits: list[str] = []
-    if flagged_terms:
-        joined = "、".join(f"「{x}」" for x in flagged_terms[:2])
-        problem_bits.append(f"你寫的 {joined} 看起來不在這本書裡")
-
-    char_note = _book_grounding_character_note(t, book_pack)
-    if char_note:
-        problem_bits.append(char_note)
-
-    ref = _book_grounding_reference_line(book_pack)
-    if not problem_bits:
-        missing = "請把內容對齊教材：你剛寫的情節不像書裡發生的。"
-    else:
-        missing = "請把內容對齊教材，" + "，".join(problem_bits) + "。"
-    if ref:
-        missing += f" 書裡說的是「{ref}」。"
-
-    stage_upper = (stage or "O").strip().upper()
-    suggestion_map = {
-        "O": "先改用書裡真的人物和事件來寫，再把前面先發生什麼、後來怎麼了寫清楚。",
-        "R": "先改用書裡真的人物和事件，再寫你看到那一幕時的感受和原因。",
-        "I": "先改用書裡真的人物和事件，再寫你從那件事明白了什麼。",
-        "D": "先想想這本書帶給你的提醒，再把你下次會做的行動寫清楚。",
-    }
-    return missing, suggestion_map.get(stage_upper, "先改用書裡真的人物和事件來寫，再把意思寫清楚。")
-
-
 def _book_grounding_example(stage: str, book_pack: Optional[dict[str, Any]]) -> str:
     s = (stage or "O").strip().upper()
     main_char = ""
@@ -1596,18 +1670,18 @@ async def _enforce_feedback_book_grounding(
     *,
     use_llm_checker: bool = False,
     input_bucket: Optional[str] = None,
+    grounding_check: Optional[BookGroundingCheck] = None,
 ) -> Tuple[bool, list[str], list[str]]:
     """
-    Ensure feedback path flags likely hallucinations vs book_pack.
-    When enabled and available, run semantic LLM checker first; fallback to
-    deterministic rules to keep behavior stable without LLM.
+    Ensure feedback path flags content not supported by book_pack.
+
+    GenAI path (use_llm_checker=True): LLM checker first; natural correction on failure.
+    Control / offline: heuristic rules + softer fallback lines.
     """
     t = (student_text or "").strip()
     if not t or not book_pack:
         return ok, missing, suggestions
 
-    # D stage is the student's personal action plan — it does NOT need to describe
-    # book events, so grounding checks are irrelevant and cause false positives.
     stage_upper = (stage or "O").strip().upper()
     if stage_upper == "D":
         return ok, missing, suggestions
@@ -1615,53 +1689,57 @@ async def _enforce_feedback_book_grounding(
     if input_bucket and skip_book_grounding_enforcement(input_bucket):
         return ok, missing, suggestions
 
-    bad = False
-    # Deterministic rules decide blocking first. This keeps normal paraphrases
-    # from being over-blocked by an LLM grounding false positive.
-    bad = looks_likely_factual_mismatch(t, book_pack) or looks_likely_ungrounded_in_book(
-        t, book_pack, stage=stage
-    )
-    if (not bad) and use_llm_checker:
-        # LLM checker is advisory for very suspicious story-like claims only.
-        suspicious = any(
-            k in t
-            for k in (
-                "死",
-                "過世",
-                "打",
-                "揍",
-                "踢",
-                "殺",
-                "火箭",
-                "外星",
-                "機器人",
-                "總統",
-                "Curry",
-                "curry",
-            )
+    check = grounding_check
+    if use_llm_checker and check is None:
+        check = await _llm_book_grounding_check(
+            student_text=t,
+            stage=stage,
+            book_pack=book_pack,
         )
-        if suspicious:
-            grounded = await _llm_book_grounding_supported(
+
+    if use_llm_checker and check is not None:
+        if check.grounded is True:
+            return ok, missing, suggestions
+        if check.grounded is False:
+            miss = list(missing)
+            sug = list(suggestions)
+            if _has_feedback_book_grounding_issue(miss):
+                return False, miss[:1], sug[:1]
+            natural = await _llm_natural_grounding_correction(
                 student_text=t,
                 stage=stage,
                 book_pack=book_pack,
+                check=check,
             )
-            if grounded is False:
-                bad = True
+            if natural:
+                miss, sug = [natural[0]], [natural[1]]
+            else:
+                m_line, s_line = _grounding_fallback_lines(
+                    student_text=t,
+                    book_pack=book_pack,
+                    stage=stage,
+                    check=check,
+                )
+                miss, sug = [m_line], [s_line]
+            return False, miss[:1], sug[:1]
+
+    bad = looks_likely_factual_mismatch(t, book_pack) or looks_likely_ungrounded_in_book(
+        t, book_pack, stage=stage
+    )
     if not bad:
         return ok, missing, suggestions
+
     miss = list(missing)
     sug = list(suggestions)
-    override_missing, override_suggestion = _build_grounding_feedback_override(
-        t,
-        book_pack,
+    if _has_feedback_book_grounding_issue(miss):
+        return False, miss[:1], sug[:1]
+    m_line, s_line = _grounding_fallback_lines(
+        student_text=t,
+        book_pack=book_pack,
         stage=stage,
+        check=check,
     )
-    if (not miss) or (not _is_grounding_specific_message(miss[0])):
-        miss = [override_missing]
-    if (not sug) or ("書裡" not in (sug[0] if sug else "")):
-        sug = [override_suggestion]
-    return False, miss[:1], sug[:1]
+    return False, [m_line], [s_line]
 
 
 def _has_feedback_book_grounding_issue(missing: list[str]) -> bool:
@@ -1880,6 +1958,29 @@ def _rubric_meta_from_obj(obj: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _apply_orid_rubric_ok_rule(
+    ok: bool,
+    rubric_meta: dict[str, Any],
+    missing: list[str],
+) -> bool:
+    """
+    V1.2 rule: ORID rubric is the only pass/fail source.
+    Level 3/4 means pass unless book grounding already found a factual problem;
+    level 1/2 means not pass. SEL guidance never changes this rule.
+    """
+    if _has_feedback_book_grounding_issue(missing):
+        return False
+    rl_est = (rubric_meta.get("rubric_level_estimate") or "").strip()
+    if not rl_est:
+        return bool(ok)
+    level = rl_est[:1]
+    if level in ("1", "2"):
+        return False
+    if level in ("3", "4") and not _has_feedback_book_grounding_issue(missing):
+        return True
+    return bool(ok)
+
+
 def _feedback_from_obj(
     *,
     stage: str,
@@ -2016,16 +2117,19 @@ async def _genai_feedback(
     text: str,
     book_pack: Optional[dict[str, Any]],
     input_bucket: str = "normal",
+    grounding_check: Optional[BookGroundingCheck] = None,
 ) -> Tuple[bool, list[str], list[str], Optional[str], Optional[str], Optional[str], dict[str, Any]]:
     sys, user_msg = build_genai_feedback_prompts(
         stage=stage, text=text, book_pack=book_pack, input_bucket=input_bucket
     )
-    if (not skip_book_grounding_enforcement(input_bucket)) and looks_likely_ungrounded_in_book(
+    if grounding_check is not None and grounding_check.grounded is False:
+        user_msg = _genai_grounding_user_hint(grounding_check, book_pack) + user_msg
+    elif (not skip_book_grounding_enforcement(input_bucket)) and client is None and looks_likely_ungrounded_in_book(
         text, book_pack, stage=stage
     ):
         user_msg = (
             "【系統提示：教材核對】學生草稿中的具體人、事、物看起來無法由故事摘要／摘錄支持。"
-            "請將 ok 設為 false；missing 須溫和說明須對齊教材、勿使用書中未出現的人或情節；"
+            "請將 ok 設為 false；missing 須溫和說明哪件事不在書裡；"
             "suggestions 要引導學生改用摘要已列事件；example 只給問句或句型起頭，improved 填 null，不要代寫整段。\n\n"
             + user_msg
         )
@@ -2468,7 +2572,7 @@ async def writing_coach_chat(
         )
 
     if body:
-        unsafe, unsafe_reason = await check_safety(body)
+        unsafe, unsafe_reason = await check_safety(body, writing_coach=True)
         if unsafe:
             raise HTTPException(
                 status_code=400,
@@ -2531,7 +2635,20 @@ async def writing_coach_chat(
     if source == "feedback_button":
         anchor_line = book_anchor_one_line(book_pack)
         fb_rubric: dict[str, Any] = {}
-        if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
+        genai_path = not is_control_condition(condition, default=DEFAULT_ORID_CONDITION)
+        grounding_check: Optional[BookGroundingCheck] = None
+        if (
+            genai_path
+            and client is not None
+            and stage_ctx.strip().upper() in ("O", "R", "I")
+            and not skip_book_grounding_enforcement(input_bucket)
+        ):
+            grounding_check = await _llm_book_grounding_check(
+                student_text=body,
+                stage=stage_ctx,
+                book_pack=book_pack,
+            )
+        if not genai_path:
             fb_ok, fb_missing, fb_sug, fb_ex, fb_praise = _control_feedback(stage_ctx, body)
             fb_imp = None
             if (
@@ -2546,6 +2663,7 @@ async def writing_coach_chat(
                 text=body,
                 book_pack=book_pack,
                 input_bucket=input_bucket,
+                grounding_check=grounding_check,
             )
 
         fb_ok, fb_missing, fb_sug = await _enforce_feedback_book_grounding(
@@ -2555,8 +2673,9 @@ async def writing_coach_chat(
             bool(fb_ok),
             fb_missing,
             fb_sug,
-            use_llm_checker=(not is_control_condition(condition, default=DEFAULT_ORID_CONDITION)),
+            use_llm_checker=genai_path,
             input_bucket=input_bucket,
+            grounding_check=grounding_check,
         )
         fb_missing, fb_sug = normalize_feedback_focus(
             stage=stage_ctx,
@@ -2572,31 +2691,17 @@ async def writing_coach_chat(
             missing=fb_missing,
             suggestions=fb_sug,
         )
-        if _has_feedback_book_grounding_issue(fb_missing):
+        grounding_issue = _has_feedback_book_grounding_issue(fb_missing)
+        if grounding_issue:
             fb_praise = _book_grounding_praise(stage_ctx)
             fb_ex = _book_grounding_example(stage_ctx, book_pack)
 
         fb_sug = scaffold_feedback_suggestions(stage_ctx, fb_sug)
         fb_ex = scaffold_feedback_example(stage_ctx, fb_ex)
 
-        # Completion rule: rubric level 3+ (達標/精進) → force ok=True
-        # so the existing pass-tracking counts this turn as a pass.
-        rl_est = (fb_rubric.get("rubric_level_estimate") or "").strip()
-        if rl_est and rl_est[:1] in ("3", "4") and not _has_feedback_book_grounding_issue(fb_missing):
-            fb_ok = True
+        fb_ok = _apply_orid_rubric_ok_rule(bool(fb_ok), fb_rubric, fb_missing)
 
-        if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
-            ai_reply = format_control_feedback_reply(
-                ok=bool(fb_ok),
-                missing=fb_missing,
-                suggestions=fb_sug,
-                stage=stage_ctx,
-                book_anchor=anchor_line,
-                example=fb_ex,
-                praise=fb_praise,
-                student_draft=body,
-            )
-        elif client is None:
+        if is_control_condition(condition, default=DEFAULT_ORID_CONDITION) or client is None:
             ai_reply = format_control_feedback_reply(
                 ok=bool(fb_ok),
                 missing=fb_missing,
@@ -2869,7 +2974,20 @@ async def writing_feedback(
 
     praise: Optional[str] = None
     rubric_snap: dict[str, Any] = {}
-    if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
+    genai_path = not is_control_condition(condition, default=DEFAULT_ORID_CONDITION)
+    grounding_check: Optional[BookGroundingCheck] = None
+    if (
+        genai_path
+        and client is not None
+        and (data.stage or "O").strip().upper() in ("O", "R", "I")
+        and not skip_book_grounding_enforcement(wf_input_bucket)
+    ):
+        grounding_check = await _llm_book_grounding_check(
+            student_text=text,
+            stage=data.stage,
+            book_pack=book_pack,
+        )
+    if not genai_path:
         ok, missing, suggestions, _, praise = _control_feedback(data.stage, text)
         example = None
         improved = None
@@ -2879,6 +2997,7 @@ async def writing_feedback(
             text=text,
             book_pack=book_pack,
             input_bucket=wf_input_bucket,
+            grounding_check=grounding_check,
         )
 
     ok, missing, suggestions = await _enforce_feedback_book_grounding(
@@ -2888,8 +3007,9 @@ async def writing_feedback(
         bool(ok),
         missing,
         suggestions,
-        use_llm_checker=(not is_control_condition(condition, default=DEFAULT_ORID_CONDITION)),
+        use_llm_checker=genai_path,
         input_bucket=wf_input_bucket,
+        grounding_check=grounding_check,
     )
     missing, suggestions = normalize_feedback_focus(
         stage=data.stage,
@@ -2907,6 +3027,8 @@ async def writing_feedback(
     )
     if _has_feedback_book_grounding_issue(missing):
         praise = _book_grounding_praise(data.stage)
+
+    ok = _apply_orid_rubric_ok_rule(bool(ok), rubric_snap, missing)
 
     await _try_dual_write_feedback(
         db,

@@ -38,10 +38,14 @@ def _local_reason(text: str) -> str:
     return "請注意用字遣詞"
 
 
-async def check_safety(text: str) -> Tuple[bool, str]:
+async def check_safety(text: str, *, writing_coach: bool = False) -> Tuple[bool, str]:
     """
     雙層把關學生輸入：
     回傳 (is_unsafe, unsafe_reason)
+
+    writing_coach=True 時僅跑本地髒話／人身攻擊過濾，不呼叫雲端 Moderation。
+    國小反思寫作常出現學生誤記情節（如把「砍樹」記成「打人」），
+    應交由書本 grounding 與回饋引導，而非直接 400 擋下。
     """
     if not text or not text.strip():
         return False, ""
@@ -58,7 +62,10 @@ async def check_safety(text: str) -> Tuple[bool, str]:
         if re.search(pattern, content_norm):
             return True, "包含人身攻擊"
 
-    # 2. 雲端 Moderation：補語意層
+    # 2. 雲端 Moderation：補語意層（寫作回饋路徑略過，改由 grounding 溫和引導）
+    if writing_coach:
+        return False, ""
+
     if client is not None:
         try:
             resp = await client.moderations.create(input=content)

@@ -49,7 +49,10 @@ _ACTION_EVENT_KEYWORDS = [
     "殺",
     "欺負",
     "霸凌",
+    "吃",
+    "咬",
 ]
+_ACTION_EVENT_VERB_RE = r"(?:打|揍|毆|踢|砍|殺|欺負|霸凌|吃|咬)"
 _LATIN_HALLUC_ALLOWLIST = frozenset(
     {
         "orid",
@@ -264,7 +267,7 @@ def _has_unsupported_event_keyword(text_norm: str, reference_blob: str) -> bool:
 def _has_unsupported_action_event_claim(text_norm: str, reference_blob: str) -> bool:
     if not text_norm or not reference_blob:
         return False
-    spans = re.findall(r"[一-龥]{0,4}(?:打|揍|毆|踢|砍|殺|欺負|霸凌)[一-龥]{0,4}", text_norm)
+    spans = re.findall(rf"[一-龥]{{0,4}}{_ACTION_EVENT_VERB_RE}[一-龥]{{0,4}}", text_norm)
     for sp in spans:
         s = normalize_match_text(sp)
         if len(s) < 3:
@@ -272,7 +275,7 @@ def _has_unsupported_action_event_claim(text_norm: str, reference_blob: str) -> 
         if s in reference_blob:
             continue
         if any(k in s for k in _ACTION_EVENT_KEYWORDS):
-            m = re.search(r"(打|揍|毆|踢|砍|殺|欺負|霸凌)", s)
+            m = re.search(_ACTION_EVENT_VERB_RE, s)
             if not m:
                 continue
             i = m.start()
@@ -281,6 +284,31 @@ def _has_unsupported_action_event_claim(text_norm: str, reference_blob: str) -> 
             if left and right and left not in reference_blob and right not in reference_blob:
                 return True
     return False
+
+
+def extract_unsupported_action_phrase(
+    student_text: str, book_pack: Optional[dict[str, Any]]
+) -> str:
+    """Return a short fabricated action phrase (e.g. 爺爺打奶奶) for student-facing feedback."""
+    reference_blob = extract_story_reference_blob(book_pack)
+    if not reference_blob:
+        return ""
+    text_norm = normalize_match_text(student_text)
+    spans = re.findall(rf"[一-龥]{{0,4}}{_ACTION_EVENT_VERB_RE}[一-龥]{{0,4}}", text_norm)
+    for sp in spans:
+        s = normalize_match_text(sp)
+        if len(s) < 3 or s in reference_blob:
+            continue
+        m = re.search(_ACTION_EVENT_VERB_RE, s)
+        if not m:
+            continue
+        i = m.start()
+        left = s[max(0, i - 2) : i + 1]
+        right = s[i : min(len(s), i + 3)]
+        if left and right and left not in reference_blob and right not in reference_blob:
+            phrase = re.sub(r"^(因為|所以|為了)", "", sp).strip() or sp.strip()
+            return phrase
+    return ""
 
 
 def _cjk_token_grounded_in_reference(token: str, reference_blob: str) -> bool:

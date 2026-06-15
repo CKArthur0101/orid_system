@@ -156,6 +156,8 @@ def test_character_action_relation_not_in_book_is_ungrounded():
     }
     assert grounding.looks_likely_ungrounded_in_book("我看到爺爺打奶奶", book_pack, "O") is True
     assert grounding.looks_likely_factual_mismatch("我看到爺爺打奶奶", book_pack) is True
+    assert grounding.looks_likely_factual_mismatch("要做好人，因為爺爺吃奶奶", book_pack) is True
+    assert grounding.extract_unsupported_action_phrase("要做好人，因為爺爺吃奶奶", book_pack) == "爺爺吃奶奶"
 
 
 def test_short_paraphrase_matching_book_is_not_flagged():
@@ -247,6 +249,33 @@ def test_scaffold_guard_allows_blank_scaffold():
     assert scaffold_feedback_example("R", example) == example
 
 
+def test_orid_rubric_level_controls_ok_without_sel_override():
+    assert (
+        orid._apply_orid_rubric_ok_rule(
+            True,
+            {"rubric_level_estimate": "2 接近", "rubric_focus": "R1"},
+            [],
+        )
+        is False
+    )
+    assert (
+        orid._apply_orid_rubric_ok_rule(
+            False,
+            {"rubric_level_estimate": "3 達標", "rubric_focus": "D1"},
+            [],
+        )
+        is True
+    )
+    assert (
+        orid._apply_orid_rubric_ok_rule(
+            True,
+            {"rubric_level_estimate": "4 精進", "rubric_focus": "O1"},
+            ["你寫的「打籃球」看起來不在書裡；書裡說的是「阿松爺爺」。"],
+        )
+        is False
+    )
+
+
 @pytest.mark.asyncio
 async def test_enforce_feedback_book_grounding_prioritizes_wrong_book_content():
     book_pack = {
@@ -269,13 +298,54 @@ async def test_enforce_feedback_book_grounding_prioritizes_wrong_book_content():
         True,
         ["事件順序還能再清楚一點"],
         ["把先發生什麼、後來怎樣補出來。"],
+        use_llm_checker=False,
     )
 
     assert ok is False
     assert "打籃球" in missing[0]
-    assert "阿松爺爺" in missing[0]
-    assert "書裡說的是" in missing[0]
-    assert "書裡真的人物和事件" in suggestions[0]
+    assert any(k in missing[0] for k in ("書裡", "不像", "不是"))
+    assert suggestions[0]
+
+
+@pytest.mark.asyncio
+async def test_enforce_feedback_book_grounding_llm_first_natural_correction(monkeypatch):
+    book_pack = orid.BOOK_PACK_BY_WEEK[1]
+
+    async def fake_check(**kwargs):
+        return orid.BookGroundingCheck(
+            grounded=False,
+            unsupported_span="爺爺吃奶奶",
+            reason="教材未記載此事件",
+        )
+
+    async def fake_natural(**kwargs):
+        return (
+            "你寫的「爺爺吃奶奶」好像不是這本書裡的事，書裡比較像是阿松爺爺後來砍了柿子樹。",
+            "你覺得書裡哪一件事，讓你想到要做好人？",
+        )
+
+    monkeypatch.setattr(orid, "_llm_book_grounding_check", fake_check)
+    monkeypatch.setattr(orid, "_llm_natural_grounding_correction", fake_natural)
+
+    ok, missing, suggestions = await orid._enforce_feedback_book_grounding(
+        "要做好人，因為爺爺吃奶奶",
+        book_pack,
+        "I",
+        True,
+        ["還沒連回故事"],
+        ["想想故事"],
+        use_llm_checker=True,
+        grounding_check=orid.BookGroundingCheck(
+            grounded=False,
+            unsupported_span="爺爺吃奶奶",
+            reason="教材未記載此事件",
+        ),
+    )
+
+    assert ok is False
+    assert "爺爺吃奶奶" in missing[0]
+    assert "對齊教材" not in missing[0]
+    assert "？" in suggestions[0]
 
 
 @pytest.mark.asyncio

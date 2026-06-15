@@ -6,6 +6,7 @@ from app.prompts.builders.coach_chat import (
 )
 from app.prompts.builders.writing_assist import build_writing_d1_prompts, build_writing_d2_prompts
 from app.prompts.builders.writing_feedback import build_genai_feedback_prompts
+from app.content.rubrics import WEEK1_ORID_RUBRIC, WEEK1_SEL_RUBRIC
 from app.prompts.policy.control_feedback import format_control_feedback_reply
 from app.prompts.policy.feedback_focus import apply_o_key_event_gaps, normalize_feedback_focus
 from app.prompts.policy.turn_destination import (
@@ -187,6 +188,50 @@ def test_genai_feedback_builder_changes_contract_by_stage():
     )
     assert "1 個問句" in r_system
     assert "因為" in r_system
+
+
+def test_week1_formal_orid_and_sel_rubrics_are_available():
+    assert WEEK1_ORID_RUBRIC["schema"] == "writing_rubric_v1"
+    assert WEEK1_ORID_RUBRIC["by_stage"]["O"][0]["name"] == "客觀事實"
+    assert WEEK1_ORID_RUBRIC["by_stage"]["O"][0]["levels"][2]["desc"] == (
+        "能正確寫出故事人物與至少一件重要事件，內容大致清楚。"
+    )
+    assert WEEK1_ORID_RUBRIC["by_stage"]["D"][0]["levels"][3]["desc"] == (
+        "能說明具體情境、對象、做法，並能連回故事帶給自己的啟發。"
+    )
+
+    assert WEEK1_SEL_RUBRIC["schema"] == "sel_rubric_v1"
+    assert WEEK1_SEL_RUBRIC["by_stage"]["O"] == []
+    assert [item["id"] for item in WEEK1_SEL_RUBRIC["by_stage"]["R"]] == ["SEL_EA", "SEL_PT"]
+
+
+def test_genai_feedback_prompt_uses_orid_as_primary_and_sel_as_auxiliary():
+    pack = {
+        **_book_pack(),
+        "writing_rubric": WEEK1_ORID_RUBRIC,
+        "sel_rubric": WEEK1_SEL_RUBRIC,
+    }
+
+    r_system, _ = build_genai_feedback_prompts(
+        stage="R",
+        text="我覺得很難過。",
+        book_pack=pack,
+    )
+    assert "【ORID 主要評量標準" in r_system
+    assert "ok 只依 ORID" in r_system
+    assert "SEL 輔助引導" in r_system
+    assert "故事中哪一個地方讓你有這種感覺" in r_system
+    assert "你覺得阿松爺爺當時可能在想什麼" in r_system
+    assert "不要在給學生的文字中直接使用「SEL」" in r_system
+
+    o_system, _ = build_genai_feedback_prompts(
+        stage="O",
+        text="我覺得這個故事很溫暖。",
+        book_pack=pack,
+    )
+    assert "不使用 SEL 輔助" in o_system
+    assert "內部參考：情緒覺察" not in o_system
+    assert "故事中哪一個地方讓你有這種感覺" not in o_system
 
 
 def test_normalize_feedback_focus_o_meta_stuck_prefers_spec_over_short_canned():

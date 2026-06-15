@@ -11,8 +11,11 @@ ORID_CHECKER_STAGE_RULES = """
 
 BOOK_GROUNDING_RULES = """
 判斷原則（很重要）：
+- 學生只能引用 BOOK_CONTEXT 裡真實出現的人物、事件、關係與動作；其餘一律 grounded=false。
 - O 段：最嚴格。若寫了書裡沒有的具體事件（誰做了什麼），grounded=false。
-- R/I/D 段：若學生是感受、想法、行動，且沒有捏造新事件，可 grounded=true；
-  但只要把「書裡沒有發生」的事件當成事實，就 grounded=false。
-- 太短或資訊不足時，優先 grounded=true，reason 寫「資訊不足但未見明顯衝突」。
+- R/I 段：感受與想法可以來自學生，但若把「書裡沒有發生」的情節當成事實（含「因為……」的錯誤理由），grounded=false。
+- D 段：若學生只寫自己的行動計畫、沒有捏造新事件，可 grounded=true。
+- 學生用簡稱（爺爺、奶奶）若明顯指書中角色，不算書外；但若搭配書裡沒有的動作（例：打奶奶、吃奶奶），仍 grounded=false。
+- 太短或只有感想、沒有具體書外事件時，優先 grounded=true，reason 寫「資訊不足但未見明顯衝突」。
+- unsupported_span 請填學生原句中最有問題的短短一段（例：爺爺吃奶奶），不要整句抄很長。
 """.strip()

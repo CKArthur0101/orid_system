@@ -343,6 +343,11 @@ def _o_missing_looks_grounding_priority(missing: list[str]) -> bool:
         k in m
         for k in (
             "不在書裡",
+            "書裡沒有",
+            "不是書裡",
+            "好像不是書裡",
+            "不像書裡",
+            "沒有這件事",
             "書裡說的是",
             "書裡叫做",
             "看起來不在書裡",

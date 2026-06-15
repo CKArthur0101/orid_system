@@ -60,7 +60,21 @@ function isUuid(v?: string | null): v is string {
 
 function formatApiError(status: number, body: string, fallback: string) {
   if (status === 401) return "登入狀態失效，請重新登入後再試一次。";
-  return body || `${fallback}（${status}）`;
+  const trimmed = (body || "").trim();
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed) as { detail?: unknown };
+      const detail = parsed?.detail;
+      if (typeof detail === "string" && detail.trim()) return detail.trim();
+      if (Array.isArray(detail) && detail.length > 0) {
+        const first = detail[0] as { msg?: string };
+        if (typeof first?.msg === "string" && first.msg.trim()) return first.msg.trim();
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  return trimmed || `${fallback}（${status}）`;
 }
 
 function localDraftStorageKey(sessionId: string, week: number) {
@@ -88,11 +102,30 @@ const STAGE_WRITING_HINT: Record<StageKey, string> = {
   D: "寫以後可以怎麼做。",
 };
 
+/** 句型支架填空：用連續底線，避免全形＿在畫面上像 _ _ _ 斷開 */
+const SCAFFOLD_BLANK = "______";
+
 const STAGE_SCAFFOLD_LINES: Record<StageKey, string[]> = {
-  O: ["故事中，＿＿＿做了＿＿＿。", "一開始＿＿＿，後來＿＿＿。", "我印象最深的是＿＿＿。"],
-  R: ["我覺得＿＿＿，因為＿＿＿。", "看到＿＿＿這一幕，我感到＿＿＿。", "如果我是＿＿＿，我可能會覺得＿＿＿。"],
-  I: ["這個故事讓我學到＿＿＿。", "這件事提醒我要＿＿＿，因為＿＿＿。", "我發現自己很在乎＿＿＿。"],
-  D: ["以後如果我遇到＿＿＿，我會＿＿＿。", "下次當我想＿＿＿的時候，我會先＿＿＿。", "我可以做的一件小事是：＿＿＿。"],
+  O: [
+    `故事中，${SCAFFOLD_BLANK}做了${SCAFFOLD_BLANK}。`,
+    `一開始${SCAFFOLD_BLANK}，後來${SCAFFOLD_BLANK}。`,
+    `我印象最深的是${SCAFFOLD_BLANK}。`,
+  ],
+  R: [
+    `我覺得${SCAFFOLD_BLANK}，因為${SCAFFOLD_BLANK}。`,
+    `看到${SCAFFOLD_BLANK}這一幕，我感到${SCAFFOLD_BLANK}。`,
+    `如果我是${SCAFFOLD_BLANK}，我可能會覺得${SCAFFOLD_BLANK}。`,
+  ],
+  I: [
+    `這個故事讓我學到${SCAFFOLD_BLANK}。`,
+    `這件事提醒我要${SCAFFOLD_BLANK}，因為${SCAFFOLD_BLANK}。`,
+    `我發現自己很在乎${SCAFFOLD_BLANK}。`,
+  ],
+  D: [
+    `以後如果我遇到${SCAFFOLD_BLANK}，我會${SCAFFOLD_BLANK}。`,
+    `下次當我想${SCAFFOLD_BLANK}的時候，我會先${SCAFFOLD_BLANK}。`,
+    `我可以做的一件小事是：${SCAFFOLD_BLANK}。`,
+  ],
 };
 
 function toChatMsg(m: any): ChatMsg | null {
@@ -1079,11 +1112,14 @@ export default function WeekBookPage() {
                         />
                         <div className="flex w-[34%] min-w-[5.75rem] max-w-[9.5rem] shrink-0 flex-col overflow-y-auto rounded-lg bg-sky-50/70 px-1.5 py-1.5 text-xs leading-snug text-slate-600 sm:w-[32%] sm:min-w-[6.5rem] sm:max-w-[10.5rem] sm:px-2 sm:text-sm sm:leading-snug">
                           <div className="mb-1 shrink-0 text-xs font-semibold text-slate-700 sm:text-sm">可以這樣開頭：</div>
-                          {STAGE_SCAFFOLD_LINES[stage].map((line) => (
-                            <div key={line} className="break-words">
-                              {line}
-                            </div>
-                          ))}
+                          <div className="flex flex-col gap-1">
+                            {STAGE_SCAFFOLD_LINES[stage].map((line, idx) => (
+                              <div key={line} className="flex gap-1 break-words">
+                                <span className="shrink-0 font-medium text-slate-700">{idx + 1}.</span>
+                                <span>{line}</span>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       </div>
                     </div>

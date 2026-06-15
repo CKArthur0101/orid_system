@@ -1,12 +1,14 @@
 """Integration tests for POST /orid/writing-coach/chat (control path, no LLM)."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
 
 from app.models import OridChatMessage, OridSession, Reading
 from app.routes import orid
+from app.services import safety
 
 
 def _minimal_book_pack() -> str:
@@ -222,6 +224,86 @@ async def test_writing_coach_rejects_unsafe_text(
     )
     assert r.status_code == 400
     assert "不適合送出" in r.text
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_writing_coach_allows_misremembered_story_violence_for_grounding(
+    test_client, db_session, authenticated_user, monkeypatch
+):
+    """學生誤記情節（如「爺爺打奶奶」）應進回饋流程，由 grounding 引導而非 safety 400。"""
+    monkeypatch.setattr(
+        safety,
+        "client",
+        _FakeOpenAIClient(True, {"violence": True}),
+    )
+
+    user = authenticated_user["user"]
+    reading = Reading(title="第1週 測試", content=_minimal_book_pack())
+    db_session.add(reading)
+    await db_session.commit()
+    await db_session.refresh(reading)
+
+    session = OridSession(
+        user_id=user.id,
+        reading_id=reading.id,
+        condition="control",
+        current_stage="I",
+        stage_turn=0,
+    )
+    db_session.add(session)
+    await db_session.commit()
+    await db_session.refresh(session)
+
+    r = await test_client.post(
+        "/orid/writing-coach/chat",
+        json={
+            "session_id": str(session.id),
+            "student_text": "要做好人，因為爺爺打奶奶",
+            "stage": "I",
+            "draft": "d1",
+            "source": "feedback_button",
+            "week": 1,
+            "save_feedback": False,
+        },
+        headers=authenticated_user["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert "不適合送出" not in r.text
+    data = r.json()
+    ai_reply = str(data.get("ai_reply") or "")
+    assert any(k in ai_reply for k in ("書裡", "不像", "不是", "沒有"))
+    assert "爺爺打奶奶這件事為什麼" not in ai_reply
+
+
+class _FakeCategories:
+    def __init__(self, **flags: bool):
+        self._flags = flags
+
+    def model_dump(self):
+        return self._flags
+
+
+class _FakeModerationResult:
+    def __init__(self, flagged: bool, categories: dict[str, bool]):
+        self.flagged = flagged
+        self.categories = _FakeCategories(**categories)
+
+
+class _FakeModerations:
+    def __init__(self, flagged: bool, categories: dict[str, bool]):
+        self._flagged = flagged
+        self._categories = categories
+
+    async def create(self, input: str):
+        return SimpleNamespace(
+            results=[_FakeModerationResult(self._flagged, self._categories)]
+        )
+
+
+class _FakeOpenAIClient:
+    def __init__(self, flagged: bool, categories: dict[str, bool]):
+        self.moderations = _FakeModerations(flagged, categories)
+
 
 @pytest.mark.asyncio(loop_scope="function")
 async def test_writing_coach_control_flags_content_not_in_book_pack(
