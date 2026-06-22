@@ -3,7 +3,16 @@
 import { useParams } from "next/navigation";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import { FeedbackGuideCard } from "@/components/orid/FeedbackGuideCard";
+import { OridMissionProgress } from "@/components/orid/OridMissionProgress";
+import {
+  DRAFT_SAVE_ENCOURAGEMENT,
+  STAGE_MISSION_META,
+  SUBMIT_ALL_DONE_ENCOURAGEMENT,
+  SUBMIT_PARTIAL_ENCOURAGEMENT,
+} from "@/lib/orid-mission-copy";
 import { ORID_UNLOCKED_WEEKS } from "@/lib/orid-week-access";
+import { parseFeedbackNarration } from "@/lib/parse-feedback-narration";
 
 type ChatMsg = { role: "student" | "ai"; text: string };
 
@@ -89,10 +98,10 @@ const STAGES: { key: StageKey; label: string }[] = [
 ];
 
 const STAGE_TITLES: Record<StageKey, string> = {
-  O: "O 客觀事實",
-  R: "R 感受與原因",
-  I: "I 意義／價值推論",
-  D: "D 行動決策",
+  O: STAGE_MISSION_META.O.oridTitle,
+  R: STAGE_MISSION_META.R.oridTitle,
+  I: STAGE_MISSION_META.I.oridTitle,
+  D: STAGE_MISSION_META.D.oridTitle,
 };
 
 const STAGE_WRITING_HINT: Record<StageKey, string> = {
@@ -100,6 +109,15 @@ const STAGE_WRITING_HINT: Record<StageKey, string> = {
   R: "寫你的感受和原因。",
   I: "寫你從故事學到什麼。",
   D: "寫以後可以怎麼做。",
+};
+
+type StageMissionStatus = "not_started" | "drafting" | "feedback" | "passed";
+
+const STAGE_STATUS_TEXT: Record<StageMissionStatus, string> = {
+  not_started: "尚未開始",
+  drafting: "進行中",
+  feedback: "已回饋",
+  passed: "已通過",
 };
 
 /** 句型支架填空：用連續底線，避免全形＿在畫面上像 _ _ _ 斷開 */
@@ -257,13 +275,38 @@ function parseWritingRecordContent(content: unknown, week: number): OridWritingV
   return createEmptyWriting(week);
 }
 
+function deriveStageMissionStatus(stage: OridWritingStage): StageMissionStatus {
+  const text = String(stage?.d1 ?? "").trim();
+  const feedback = stage?.feedback?.d1;
+  if (!text) return "not_started";
+  if (!feedback) return "drafting";
+  return feedback.ok ? "passed" : "feedback";
+}
+
+const LEGACY_COACH_WELCOME_SNIPPET = "先從左邊任一格";
+
+function isLegacyCoachWelcome(text: string): boolean {
+  return text.includes(LEGACY_COACH_WELCOME_SNIPPET);
+}
+
 function buildCoachWelcomeMsg(bookPack: BookPackV1 | null): ChatMsg {
   const title = String(bookPack?.book_title ?? "").trim();
   const book = title ? `《${title}》` : "這本書";
   return {
     role: "ai",
-    text: `先從左邊任一格開始寫都可以喔！這裡是 ${book} 的 ORID 反思。寫一寫若卡住，按該格的「取得回饋」，我就會在這裡幫你看。`,
+    text: [
+      "哈囉！我是你的寫作小幫手 🤖",
+      `左邊四格，你想先寫哪一格都可以喔！我們一起來想想讀${book}的心得。`,
+      "寫不出來的時候，按那一格的「取得回饋」，我就會在這裡陪你喔！",
+    ].join("\n"),
   };
+}
+
+function refreshLegacyCoachWelcome(prev: ChatMsg[], bookPack: BookPackV1 | null): ChatMsg[] | null {
+  if (prev.length === 1 && prev[0].role === "ai" && isLegacyCoachWelcome(prev[0].text)) {
+    return [buildCoachWelcomeMsg(bookPack)];
+  }
+  return null;
 }
 
 /** 第 2 週整合寫作：進聊天室時顯示，嵌入上週四格摘要與寫作架構（週一資料載入後會再刷新一次）。 */
@@ -348,6 +391,8 @@ export default function WeekBookPage() {
   const [writingSubmitting, setWritingSubmitting] = useState(false);
   const [writingError, setWritingError] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const [encourageMsg, setEncourageMsg] = useState<string | null>(null);
+  const encourageTimerRef = useRef<number | null>(null);
   const [oridCanForceNew, setOridCanForceNew] = useState(false);
   const [week1Data, setWeek1Data] = useState<OridWritingV1 | null>(null);
   const [focusStage, setFocusStage] = useState<StageKey>("O");
@@ -368,6 +413,27 @@ export default function WeekBookPage() {
   useLayoutEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, showAiTyping]);
+
+  useEffect(() => {
+    return () => {
+      if (encourageTimerRef.current !== null) {
+        window.clearTimeout(encourageTimerRef.current);
+        encourageTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  function showEncourage(msg: string) {
+    if (encourageTimerRef.current !== null) {
+      window.clearTimeout(encourageTimerRef.current);
+      encourageTimerRef.current = null;
+    }
+    setEncourageMsg(msg);
+    encourageTimerRef.current = window.setTimeout(() => {
+      setEncourageMsg(null);
+      encourageTimerRef.current = null;
+    }, 3500);
+  }
 
   async function ensureNewOrLatestSession(forceNew: boolean, desiredCondition?: ConditionKey | null) {
     const qs = new URLSearchParams({
@@ -428,6 +494,7 @@ export default function WeekBookPage() {
       setWeek1Data(null);
       setFbError(null);
       setSaveMsg(null);
+      setEncourageMsg(null);
       setFocusStage("O");
       setMessages([]);
       setSeededInitial(false);
@@ -494,6 +561,22 @@ export default function WeekBookPage() {
   const showStageFeedbackButtons = weekNum === 1;
   const showSynthesisColumn = weekNum === 2 && w2Phase === "synthesis";
   const oridReadOnly = weekNum === 2;
+  const missionProgress = useMemo(
+    () =>
+      STAGES.map(({ key }) => ({
+        stage: key,
+        status: deriveStageMissionStatus(writingData.stages[key]),
+      })),
+    [writingData],
+  );
+  const writtenCount = useMemo(
+    () => missionProgress.filter((item) => item.status !== "not_started").length,
+    [missionProgress],
+  );
+  const allStagesWritten = useMemo(
+    () => STAGES.every(({ key }) => String(writingData.stages[key].d1 ?? "").trim().length > 0),
+    [writingData],
+  );
 
   const mainGridClass = showSynthesisColumn
     ? "grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1.2fr)] gap-3 overflow-hidden lg:grid-cols-3 lg:grid-rows-[minmax(0,1fr)] lg:gap-3"
@@ -681,11 +764,14 @@ export default function WeekBookPage() {
         if (hasScaffold) return prev;
         const scaffold = buildSynthesisWelcomeScaffold(week1Data, bookPack);
         if (prev.length === 0) return [scaffold];
-        if (prev.length === 1 && prev[0].role === "ai" && prev[0].text.includes("先從左邊任一格")) {
+        if (prev.length === 1 && prev[0].role === "ai" && isLegacyCoachWelcome(prev[0].text)) {
           return [scaffold];
         }
         return [...prev, scaffold];
       }
+
+      const refreshed = refreshLegacyCoachWelcome(prev, bookPack);
+      if (refreshed) return refreshed;
 
       if (!seededInitial) return prev;
       if (prev.length > 0) return prev;
@@ -778,6 +864,7 @@ export default function WeekBookPage() {
         };
         return next;
       });
+      showEncourage(STAGE_MISSION_META[outStage].submitEncouragement);
 
       const savedId = String(data?.meta?.saved_to_writing_id ?? "");
       if (isUuid(savedId)) setWritingId(savedId);
@@ -848,13 +935,14 @@ export default function WeekBookPage() {
       setWritingSubmitting(true);
       setWritingError(null);
       setSaveMsg(null);
+      setEncourageMsg(null);
 
       if (label === "draft") {
         try {
           if (typeof window !== "undefined") {
             localStorage.setItem(localDraftStorageKey(sessionId, weekNum), JSON.stringify(writingData));
           }
-          setSaveMsg("草稿已儲存在此瀏覽器（尚未上傳至伺服器）✅");
+          setSaveMsg(DRAFT_SAVE_ENCOURAGEMENT);
         } catch {
           setWritingError("無法寫入本機儲存");
         }
@@ -896,7 +984,7 @@ export default function WeekBookPage() {
         /* ignore */
       }
 
-      setSaveMsg("已儲存並提交 ✅（伺服器僅保留此週一份正式內容）");
+      setSaveMsg(allStagesWritten ? SUBMIT_ALL_DONE_ENCOURAGEMENT : SUBMIT_PARTIAL_ENCOURAGEMENT);
     } catch (e: any) {
       setWritingError(e?.message ?? "儲存失敗");
     } finally {
@@ -910,6 +998,7 @@ export default function WeekBookPage() {
       setWritingSubmitting(true);
       setWritingError(null);
       setSaveMsg(null);
+      setEncourageMsg(null);
 
       const next: OridWritingV1 = {
         ...writingData,
@@ -948,7 +1037,7 @@ export default function WeekBookPage() {
       setSaveMsg("已進入整合寫作階段 ✅");
       setMessages((prev) => {
         const scaffold = buildSynthesisWelcomeScaffold(week1Data, bookPack);
-        if (prev.length === 1 && prev[0].role === "ai" && prev[0].text.includes("先從左邊任一格")) {
+        if (prev.length === 1 && prev[0].role === "ai" && isLegacyCoachWelcome(prev[0].text)) {
           return [scaffold];
         }
         return [...prev, scaffold];
@@ -977,7 +1066,7 @@ export default function WeekBookPage() {
           <div className="min-w-0 flex-1">
             <h1 className="text-base font-bold leading-tight sm:text-lg">📖 AI–ORID 反思寫作</h1>
             <p className="truncate text-[11px] leading-tight text-sky-100 sm:text-xs">
-              第 {weekNum} 週｜先寫作（左）→ 回饋夥伴（右）
+              {weekNum === 1 ? "第 1 週｜完成四個反思小任務" : `第 ${weekNum} 週｜先寫作（左）→ 回饋夥伴（右）`}
               {bookPack?.book_title ? `｜${bookPack.book_title}` : ""}
             </p>
           </div>
@@ -1039,6 +1128,11 @@ export default function WeekBookPage() {
               </span>
             ) : null}
           </div>
+          {weekNum === 1 ? (
+            <div className="shrink-0 px-2 pb-1 sm:px-3">
+              <OridMissionProgress progress={missionProgress} writtenCount={writtenCount} onFocusStage={setFocusStage} />
+            </div>
+          ) : null}
 
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -1046,6 +1140,8 @@ export default function WeekBookPage() {
                 {STAGES.map((s) => {
                   const stage = s.key;
                   const isFocused = focusStage === stage;
+                  const stageStatus = deriveStageMissionStatus(writingData.stages[stage]);
+                  const missionMeta = STAGE_MISSION_META[stage];
 
                   return (
                     <div
@@ -1057,18 +1153,28 @@ export default function WeekBookPage() {
                           : "border-slate-200 bg-white hover:border-sky-200",
                       ].join(" ")}
                     >
-                      <div className="flex shrink-0 flex-wrap items-center justify-between gap-1.5">
-                        <div className="relative flex min-w-0 flex-1 items-center gap-1.5">
-                          <button
-                            type="button"
-                            className={`peer inline-flex h-6 w-6 shrink-0 cursor-help items-center justify-center rounded-md bg-gradient-to-br ${STAGE_COLORS[stage]} text-xs text-white shadow-sm outline-none ring-offset-2 transition hover:brightness-105 focus-visible:ring-2 focus-visible:ring-sky-400 sm:h-7 sm:w-7 sm:text-sm`}
-                            aria-label={`${STAGE_TITLES[stage]}：查看寫作小提示`}
-                          >
-                            {STAGE_EMOJI[stage]}
-                          </button>
-                          <span className="text-xs font-bold leading-tight text-slate-700 sm:text-[13px]">
-                            {STAGE_TITLES[stage]}
-                          </span>
+                      <div className="flex shrink-0 flex-wrap items-start justify-between gap-1.5">
+                        <div className="relative min-w-0 flex-1">
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <button
+                              type="button"
+                              className={`peer inline-flex h-6 w-6 shrink-0 cursor-help items-center justify-center rounded-md bg-gradient-to-br ${STAGE_COLORS[stage]} text-xs text-white shadow-sm outline-none ring-offset-2 transition hover:brightness-105 focus-visible:ring-2 focus-visible:ring-sky-400 sm:h-7 sm:w-7 sm:text-sm`}
+                              aria-label={`${STAGE_TITLES[stage]}：查看寫作小提示`}
+                            >
+                              {STAGE_EMOJI[stage]}
+                            </button>
+                            <div className="min-w-0">
+                              <div className="truncate text-xs font-bold leading-tight text-slate-700 sm:text-[13px]">
+                                {weekNum === 1 ? missionMeta.missionTitle : STAGE_TITLES[stage]}
+                              </div>
+                              {weekNum === 1 ? (
+                                <div className="text-[10px] text-slate-500 sm:text-[11px]">{missionMeta.oridTitle}</div>
+                              ) : null}
+                            </div>
+                          </div>
+                          {weekNum === 1 ? (
+                            <div className="mt-1 text-[10px] leading-snug text-slate-600 sm:text-[11px]">💡 {missionMeta.helperHint}</div>
+                          ) : null}
                           <div
                             role="tooltip"
                             className="pointer-events-none invisible absolute left-0 top-[calc(100%+0.35rem)] z-30 w-[min(18rem,calc(100vw-4rem))] rounded-xl border border-sky-100 bg-white p-3 text-left text-[11px] leading-relaxed text-slate-600 opacity-0 shadow-lg ring-1 ring-slate-200/80 transition-opacity duration-150 peer-hover:visible peer-hover:opacity-100 peer-focus:visible peer-focus:opacity-100 peer-focus-visible:visible peer-focus-visible:opacity-100 sm:text-xs"
@@ -1077,14 +1183,19 @@ export default function WeekBookPage() {
                           </div>
                         </div>
                         {showStageFeedbackButtons ? (
-                          <button
-                            type="button"
-                            className="kid-btn-primary shrink-0 !px-2 !py-0.5 !text-[10px] sm:!text-[11px]"
-                            disabled={!sessionId || fbLoading}
-                            onClick={() => runFeedback(stage)}
-                          >
-                            {fbLoading ? "…" : "取得回饋"}
-                          </button>
+                          <div className="flex shrink-0 items-center gap-1">
+                            <span className="rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-600 sm:text-[11px]">
+                              {STAGE_STATUS_TEXT[stageStatus]}
+                            </span>
+                            <button
+                              type="button"
+                              className="kid-btn-primary shrink-0 !px-2 !py-0.5 !text-[10px] sm:!text-[11px]"
+                              disabled={!sessionId || fbLoading}
+                              onClick={() => runFeedback(stage)}
+                            >
+                              {fbLoading ? "…" : "取得回饋"}
+                            </button>
+                          </div>
                         ) : (
                           <span className="text-[10px] text-slate-400 sm:text-xs"> </span>
                         )}
@@ -1140,17 +1251,30 @@ export default function WeekBookPage() {
                     ⏭️ 進入整合寫作
                   </button>
                 ) : (
-                  <button
-                    type="button"
-                    className="kid-btn-primary w-full py-2 text-sm sm:text-base"
-                    disabled={!sessionId || !readingId || writingSubmitting}
-                    onClick={() => saveWriting("submit")}
-                  >
-                    {writingSubmitting ? "儲存中…" : "💾 儲存並提交我的寫作"}
-                  </button>
+                  <div className="flex flex-col gap-1.5 sm:flex-row">
+                    {weekNum === 1 ? (
+                      <button
+                        type="button"
+                        className="kid-btn-secondary w-full py-2 text-sm sm:text-base"
+                        disabled={!sessionId || writingSubmitting}
+                        onClick={() => saveWriting("draft")}
+                      >
+                        {writingSubmitting ? "儲存中…" : "📝 儲存草稿"}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="kid-btn-primary w-full py-2 text-sm sm:text-base"
+                      disabled={!sessionId || !readingId || writingSubmitting}
+                      onClick={() => saveWriting("submit")}
+                    >
+                      {writingSubmitting ? "儲存中…" : "💾 儲存並提交我的寫作"}
+                    </button>
+                  </div>
                 )}
               </div>
               {fbError && <div className="mt-1.5 text-xs text-red-600 whitespace-pre-wrap sm:text-sm">{fbError}</div>}
+              {encourageMsg && <div className="mt-1.5 text-xs font-medium text-sky-700 sm:text-sm">{encourageMsg}</div>}
               {saveMsg && <div className="mt-1.5 text-xs font-medium text-emerald-600 sm:text-sm">{saveMsg}</div>}
               {writingError && <div className="mt-1.5 text-xs text-red-600 whitespace-pre-wrap sm:text-sm">{writingError}</div>}
             </div>
@@ -1211,6 +1335,7 @@ export default function WeekBookPage() {
                 <div className="flex flex-col gap-2">
                   {messages.map((m, idx) => {
                     const isStudent = m.role === "student";
+                    const parsedFeedback = !isStudent ? parseFeedbackNarration(m.text) : null;
                     return (
                       <div
                         key={idx}
@@ -1221,13 +1346,17 @@ export default function WeekBookPage() {
                             🤖
                           </div>
                         )}
-                        <div
-                          className={["max-w-[min(92%,28rem)]", isStudent ? "kid-bubble-student" : "kid-bubble-ai"].join(
-                            " ",
-                          )}
-                        >
-                          <div className="whitespace-pre-wrap leading-relaxed">{m.text}</div>
-                        </div>
+                        {parsedFeedback ? (
+                          <FeedbackGuideCard parsed={parsedFeedback} />
+                        ) : (
+                          <div
+                            className={["max-w-[min(92%,28rem)]", isStudent ? "kid-bubble-student" : "kid-bubble-ai"].join(
+                              " ",
+                            )}
+                          >
+                            <div className="whitespace-pre-wrap leading-relaxed">{m.text}</div>
+                          </div>
+                        )}
                         {isStudent && (
                           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm shadow-sm">
                             🧒

@@ -301,6 +301,8 @@ def normalize_feedback_focus(
         s0 = _pick_phrase(sug_opts, f"sug|{seed}")
 
     if (stage or "").strip().upper() == "O" and student_o_meta_stuck((student_text or "").strip()):
+        if missing_looks_book_grounding_priority(m0):
+            return [_child_friendly_text(m0)], [_child_friendly_text(s0)]
         bookish = any(
             k in m0
             for k in (
@@ -337,23 +339,34 @@ _O_GENERIC_PHRASES = (
 )
 
 
+_GROUNDING_MISSING_CUES = (
+    "不在書裡",
+    "書裡沒有",
+    "不是書裡",
+    "好像不是書裡",
+    "不像書裡",
+    "沒有這件事",
+    "書裡說的是",
+    "書裡叫做",
+    "看起來不在書裡",
+    "對齊教材",
+    "書裡出現的是",
+    "書裡比較像是",
+    "不是「",
+    "這個詞好像不在",
+)
+
+
+def missing_looks_book_grounding_priority(missing: list[str] | str) -> bool:
+    if isinstance(missing, list):
+        m = (missing[0] if missing else "").strip()
+    else:
+        m = (missing or "").strip()
+    return any(k in m for k in _GROUNDING_MISSING_CUES)
+
+
 def _o_missing_looks_grounding_priority(missing: list[str]) -> bool:
-    m = (missing[0] if missing else "").strip()
-    return any(
-        k in m
-        for k in (
-            "不在書裡",
-            "書裡沒有",
-            "不是書裡",
-            "好像不是書裡",
-            "不像書裡",
-            "沒有這件事",
-            "書裡說的是",
-            "書裡叫做",
-            "看起來不在書裡",
-            "對齊教材",
-        )
-    )
+    return missing_looks_book_grounding_priority(missing)
 
 
 def _o_feedback_looks_generic_coaching(missing: list[str], suggestions: list[str]) -> bool:

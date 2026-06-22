@@ -311,6 +311,78 @@ def extract_unsupported_action_phrase(
     return ""
 
 
+def extract_wrong_concrete_noun(
+    student_text: str, book_pack: Optional[dict[str, Any]]
+) -> str:
+    """Return a short wrong noun (e.g. 地瓜) when student cites a concrete detail not in the book."""
+    reference_blob = extract_story_reference_blob(book_pack)
+    if not reference_blob:
+        return ""
+    text_norm = normalize_match_text(student_text)
+    for pattern in (r"吃([一-龥]{2,4})", r"拿([一-龥]{2,4})", r"用([一-龥]{2,4})"):
+        m = re.search(pattern, text_norm)
+        if not m:
+            continue
+        noun = m.group(1)
+        if noun and noun not in reference_blob and noun not in _COMMON_STORY_ANCHORS:
+            return noun
+    return ""
+
+
+def book_contrast_noun_for(
+    wrong_noun: str, book_pack: Optional[dict[str, Any]]
+) -> str:
+    """Pick a book-supported noun to contrast with a wrong student noun (e.g. 柿子 vs 地瓜)."""
+    reference_blob = extract_story_reference_blob(book_pack)
+    wrong = normalize_match_text(wrong_noun or "")
+    if not wrong or not reference_blob:
+        return ""
+
+    char_terms: set[str] = set()
+    skip_aliases = {"爺爺", "奶奶", "孩子", "小朋友", "大家", "一起", "阿松"}
+    if isinstance(book_pack, dict):
+        for item in book_pack.get("characters") or []:
+            if isinstance(item, dict):
+                name = normalize_match_text(str(item.get("name") or ""))
+                if name:
+                    char_terms.add(name)
+
+    def _usable(term: str, *, allow_story_anchors: bool = False) -> bool:
+        anchor_block = set() if allow_story_anchors else _COMMON_STORY_ANCHORS
+        return (
+            2 <= len(term) <= 3
+            and term != wrong
+            and term in reference_blob
+            and term not in anchor_block
+            and term not in char_terms
+            and term not in skip_aliases
+            and wrong not in term
+            and not any(cn == term or (len(cn) >= 3 and cn in term) for cn in char_terms)
+        )
+
+    title_theme_candidates: list[str] = []
+    if isinstance(book_pack, dict):
+        title = normalize_match_text(str(book_pack.get("book_title") or ""))
+        title_focus = title.split("的")[-1] if "的" in title else title
+        if len(title_focus) < 2:
+            title_focus = title
+        for cand in re.findall(r"[一-龥]{2}", title_focus):
+            if _usable(cand, allow_story_anchors=True):
+                title_theme_candidates.append(cand)
+
+    if title_theme_candidates:
+        uniq = list(dict.fromkeys(title_theme_candidates))
+        uniq.sort(key=lambda t: (reference_blob.count(t), -len(t)), reverse=True)
+        return uniq[0]
+
+    book_terms = extract_book_terms(book_pack)
+    contras = [t for t in book_terms if _usable(t)]
+    if not contras:
+        return ""
+    contras.sort(key=lambda t: (reference_blob.count(t), -len(t)), reverse=True)
+    return contras[0]
+
+
 def _cjk_token_grounded_in_reference(token: str, reference_blob: str) -> bool:
     t = (token or "").strip()
     if not t or not reference_blob:

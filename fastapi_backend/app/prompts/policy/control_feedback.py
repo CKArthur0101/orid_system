@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.prompts.policy.feedback_focus import normalize_feedback_focus
+from app.prompts.policy.feedback_focus import normalize_feedback_focus, missing_looks_book_grounding_priority
 from app.prompts.policy.scaffold_guard import scaffold_feedback_example, scaffold_for_stage
 from app.prompts.policy.turn_destination import (
     personalized_control_praise_line,
@@ -117,7 +117,13 @@ def format_control_feedback_reply(
 
     st = (student_draft or "").strip()
     core_st = strip_orid_stage_tag(st).replace(" ", "")
-    o_meta_anchor = s_up == "O" and bool(anchor) and student_o_meta_stuck(st)
+    grounding_priority = missing_looks_book_grounding_priority(m0)
+    o_meta_anchor = (
+        s_up == "O"
+        and bool(anchor)
+        and student_o_meta_stuck(st)
+        and not grounding_priority
+    )
     if o_meta_anchor:
         line2 = (
             "你現在比較像在想「故事裡到底是誰做了什麼」，還沒把書裡的事寫出來；"
@@ -131,7 +137,7 @@ def format_control_feedback_reply(
         base_line3 = f"{nudge} 你可以用句型試試：{scaffold_for_stage(s_up)}"
     elif s0 and "用。結尾" in s0:
         base_line3 = f"先想清楚這一件事：誰做了什麼？你可以用句型：{scaffold_for_stage(s_up)}"
-    elif "對齊教材" in m0:
+    elif grounding_priority or "對齊教材" in m0:
         grounding_stem_map = {
             "O": "我們先對回書中真的人物和事情，再按順序把前面和後面寫清楚，不要只寫最後一小段。",
             "R": "我們先對回書裡真的情節，再把你的感受和原因接在同一句裡。",

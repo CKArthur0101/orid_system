@@ -436,3 +436,56 @@ async def test_writing_coach_synthesis_feedback_default_includes_three_part_repl
     sys_p = captured.get("system", "")
     assert "你已經做到：" in sys_p
     assert "【學生自填閱讀心得／摘記節選（唯讀）】" not in sys_p
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_writing_coach_flags_wrong_food_sweet_potato(
+    test_client, db_session, authenticated_user
+):
+    """O 段誤寫地瓜時，回饋須明確點名錯詞並對照書裡的柿子。"""
+    user = authenticated_user["user"]
+    pack = orid.BOOK_PACK_BY_WEEK[1]
+    reading = Reading(
+        title="第1週 測試",
+        content=json.dumps(pack, ensure_ascii=False),
+    )
+    db_session.add(reading)
+    await db_session.commit()
+    await db_session.refresh(reading)
+
+    session = OridSession(
+        user_id=user.id,
+        reading_id=reading.id,
+        condition="control",
+        current_stage="O",
+        stage_turn=0,
+    )
+    db_session.add(session)
+    await db_session.commit()
+    await db_session.refresh(session)
+
+    draft = "看到阿松爺爺吃地瓜"
+    r = await test_client.post(
+        "/orid/writing-coach/chat",
+        json={
+            "session_id": str(session.id),
+            "student_text": draft,
+            "stage": "O",
+            "draft": "d1",
+            "source": "feedback_button",
+            "week": 1,
+            "save_feedback": False,
+        },
+        headers=authenticated_user["headers"],
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    ai_reply = str(data.get("ai_reply") or "")
+    assert data["feedback_ok"] is False
+    assert "地瓜" in ai_reply
+    assert "柿子" in ai_reply
+    assert "不是" in ai_reply or "好像不是書裡" in ai_reply
+    assert "你可以再加強" in ai_reply
+    parts = ai_reply.split("你可以再加強", 1)
+    rethink_part = parts[1].split("試試看", 1)[0] if len(parts) > 1 else ""
+    assert "地瓜" in rethink_part

@@ -26,6 +26,10 @@ def student_o_meta_stuck(text: str) -> bool:
     core = strip_orid_stage_tag(text).replace(" ", "").replace("\n", "")
     if not core:
         return True
+    # 已有具體事件嘗試（誰＋動作），即使很短也不算「卡住」（含寫錯情節的情況）。
+    if any(k in core for k in ("看到", "聽到", "聽見", "吃", "拿", "把", "給", "藏", "砍", "打", "去")):
+        if any(k in core for k in ("爺", "奶", "阿松", "柿", "朋友", "同學", "小朋友", "孩子")):
+            return False
     if len(core) < 10:
         return True
     meta = (

@@ -20,6 +20,8 @@ def test_classify_empty():
 def test_classify_too_short():
     assert classify_student_input("短") == BUCKET_TOO_SHORT
     assert classify_student_input("你好") == BUCKET_TOO_SHORT
+    # 8+ 字全中文句子不算 too_short（仍可觸發書本查核）
+    assert classify_student_input("看到阿松爺爺吃地瓜") == BUCKET_NORMAL
 
 
 def test_classify_likely_gibberish():
@@ -66,3 +68,16 @@ def test_skip_book_grounding_enforcement():
     assert skip_book_grounding_enforcement("empty") is True
     assert skip_book_grounding_enforcement("normal") is False
     assert skip_book_grounding_enforcement("latin_heavy") is False
+    book_pack = {
+        "book_title": "阿松爺爺的柿子樹",
+        "key_events": ["阿松爺爺把柿子藏起來"],
+        "characters": [{"name": "阿松爺爺"}],
+    }
+    assert (
+        skip_book_grounding_enforcement(
+            "too_short",
+            student_text="看到阿松爺爺吃地瓜",
+            book_pack=book_pack,
+        )
+        is False
+    )

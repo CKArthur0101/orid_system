@@ -1,6 +1,28 @@
-from typing import Set
+import os
+from typing import Self, Set
+from urllib.parse import quote
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _database_url_from_postgres_env() -> str | None:
+    user = os.getenv("POSTGRES_USER")
+    password = os.getenv("POSTGRES_PASSWORD")
+    dbname = os.getenv("POSTGRES_DB")
+    if not (user and password and dbname):
+        return None
+    default_host = "db" if os.path.exists("/.dockerenv") else "localhost"
+    host = (os.getenv("POSTGRES_HOST") or "").strip() or default_host
+    port = (os.getenv("POSTGRES_PORT") or "").strip() or "5432"
+    return (
+        "postgresql+asyncpg://"
+        + quote(user, safe="")
+        + ":"
+        + quote(password, safe="")
+        + f"@{host}:{port}/"
+        + quote(dbname, safe="")
+    )
 
 
 class Settings(BaseSettings):
@@ -8,7 +30,12 @@ class Settings(BaseSettings):
     OPENAPI_URL: str = "/openapi.json"
 
     # Database
-    DATABASE_URL: str
+    DATABASE_URL: str | None = None
+    POSTGRES_USER: str | None = None
+    POSTGRES_PASSWORD: str | None = None
+    POSTGRES_DB: str | None = None
+    POSTGRES_HOST: str | None = None
+    POSTGRES_PORT: str | None = None
     TEST_DATABASE_URL: str | None = None
     EXPIRE_ON_COMMIT: bool = False
     DB_DISABLE_POOLING: bool = False
@@ -51,6 +78,18 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
+
+    @model_validator(mode="after")
+    def resolve_database_url(self) -> Self:
+        if self.DATABASE_URL:
+            return self
+        built = _database_url_from_postgres_env()
+        if built:
+            object.__setattr__(self, "DATABASE_URL", built)
+            return self
+        raise ValueError(
+            "DATABASE_URL is not set. Set it, or set POSTGRES_USER, POSTGRES_PASSWORD, and POSTGRES_DB."
+        )
 
 
 settings = Settings()

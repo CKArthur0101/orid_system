@@ -160,6 +160,57 @@ def test_character_action_relation_not_in_book_is_ungrounded():
     assert grounding.extract_unsupported_action_phrase("要做好人，因為爺爺吃奶奶", book_pack) == "爺爺吃奶奶"
 
 
+def test_wrong_food_noun_detected_for_sweet_potato():
+    """O 段誤寫地瓜（書裡是柿子）應被 heuristic 抓到，並能對照書中名詞。"""
+    from app.routes.orid import BOOK_PACK_BY_WEEK
+
+    book_pack = BOOK_PACK_BY_WEEK[1]
+    t = "看到阿松爺爺吃地瓜"
+    assert grounding.looks_likely_factual_mismatch(t, book_pack) is True
+    assert grounding.looks_likely_ungrounded_in_book(t, book_pack, "O") is True
+    assert grounding.extract_wrong_concrete_noun(t, book_pack) == "地瓜"
+    assert grounding.book_contrast_noun_for("地瓜", book_pack) == "柿子"
+
+
+@pytest.mark.asyncio
+async def test_enforce_grounding_heuristic_overrides_llm_false_negative():
+    """LLM 若誤判 grounded=true，heuristic 仍須注入明確糾錯。"""
+    from app.routes.orid import BOOK_PACK_BY_WEEK
+
+    book_pack = BOOK_PACK_BY_WEEK[1]
+    llm_ok = orid.BookGroundingCheck(grounded=True, unsupported_span="", reason="資訊不足")
+
+    ok, missing, suggestions = await orid._enforce_feedback_book_grounding(
+        "看到阿松爺爺吃地瓜",
+        book_pack,
+        "O",
+        True,
+        ["事件順序還能再清楚一點"],
+        ["把先發生什麼、後來怎樣補出來。"],
+        use_llm_checker=True,
+        grounding_check=llm_ok,
+    )
+
+    assert ok is False
+    blob = missing[0]
+    assert "地瓜" in blob
+    assert any(k in blob for k in ("柿子", "不是", "好像不是書裡"))
+    assert suggestions[0]
+
+
+@pytest.mark.asyncio
+async def test_grounding_fallback_lines_names_wrong_food():
+    book_pack = orid.BOOK_PACK_BY_WEEK[1]
+    missing, suggestions = orid._grounding_fallback_lines(
+        student_text="看到阿松爺爺吃地瓜",
+        book_pack=book_pack,
+        stage="O",
+    )
+    assert "地瓜" in missing
+    assert "柿子" in missing
+    assert suggestions
+
+
 def test_short_paraphrase_matching_book_is_not_flagged():
     """Greedy CJK tokens must not force false 'not in book' on valid short O lines."""
     book_pack = {
@@ -368,6 +419,27 @@ async def test_enforce_feedback_book_grounding_skipped_for_likely_gibberish_buck
     assert ok is False
     assert missing == ["請用完整句子描述書裡的一件事。"]
     assert suggestions == ["你可以先寫主角名字，再寫他做了什麼。"]
+
+
+def test_control_feedback_reply_preserves_grounding_missing_for_sweet_potato():
+    missing = [
+        "你寫的「阿松爺爺吃地瓜」好像不是書裡發生的事，"
+        "書裡出現的是「柿子」，不是「地瓜」。"
+    ]
+    reply = format_control_feedback_reply(
+        ok=False,
+        missing=missing,
+        suggestions=["你可以先想想：書裡是誰、做了什麼？再照那個方向改寫一句。"],
+        stage="O",
+        book_anchor="阿松爺爺家的柿子很甜，但他一直想把柿子獨占起來，不想分給別人。",
+        example="例如：故事的主角是「阿松爺爺」，一開始……，後來……。",
+        praise="你有試著寫出人物和事件，這是 O 段需要的方向；只是情節要再對回書裡。",
+        student_draft="看到阿松爺爺吃地瓜",
+    )
+    assert "地瓜" in reply
+    assert "柿子" in reply
+    assert "還沒把書裡的事寫出來" not in reply
+    assert "到底是誰做了什麼" not in reply
 
 
 def test_control_feedback_reply_preserves_example_in_try_section():

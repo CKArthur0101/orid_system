@@ -83,6 +83,8 @@ from app.prompts.policy.turn_destination import (
 from app.prompts.builders.checker import build_book_grounding_checker_prompts
 from app.prompts.policy.grounding import (
     extract_unsupported_action_phrase,
+    extract_wrong_concrete_noun,
+    book_contrast_noun_for,
     looks_story_related_to_book,
     looks_obviously_offtopic,
     looks_likely_factual_mismatch,
@@ -782,12 +784,16 @@ def load_book_pack_from_reading(reading: Optional[Reading]) -> Optional[dict[str
     return out
 
 
+LEGACY_WRITING_COACH_WELCOME_SNIPPET = "先從左邊任一格"
+
+
 def build_writing_coach_welcome_text(book_pack: Optional[dict[str, Any]]) -> str:
     title = str((book_pack or {}).get("book_title") or "").strip()
     book = f"《{title}》" if title else "這本書"
     return (
-        f"先從左邊任一格開始寫都可以喔！這裡是 {book} 的 ORID 反思。"
-        "寫一寫若卡住，按該格的「取得回饋」，我就會在這裡幫你看。"
+        "哈囉！我是你的寫作小幫手 🤖\n"
+        f"左邊四格，你想先寫哪一格都可以喔！我們一起來想想讀{book}的心得。\n"
+        "寫不出來的時候，按那一格的「取得回饋」，我就會在這裡陪你喔！"
     )
 
 
@@ -797,15 +803,25 @@ async def seed_writing_coach_welcome_if_needed(
     session: OridSession,
     reading: Optional[Reading],
 ) -> None:
+    book_pack = load_book_pack_from_reading(reading)
+    text = build_writing_coach_welcome_text(book_pack)
     cnt = await db.scalar(
         select(func.count(OridChatMessage.id)).where(OridChatMessage.session_id == session.id)
     )
-    if (cnt or 0) > 0:
+    if (cnt or 0) == 0:
+        db.add(OridChatMessage(session_id=session.id, stage="O", sender="ai", text=text))
+        await db.commit()
         return
-    book_pack = load_book_pack_from_reading(reading)
-    text = build_writing_coach_welcome_text(book_pack)
-    db.add(OridChatMessage(session_id=session.id, stage="O", sender="ai", text=text))
-    await db.commit()
+    if (cnt or 0) == 1:
+        legacy = await db.scalar(
+            select(OridChatMessage)
+            .where(OridChatMessage.session_id == session.id)
+            .where(OridChatMessage.sender == "ai")
+            .limit(1)
+        )
+        if legacy and LEGACY_WRITING_COACH_WELCOME_SNIPPET in str(legacy.text or ""):
+            legacy.text = text
+            await db.commit()
 
 
 def book_anchor_one_line(book_pack: Optional[dict[str, Any]], max_len: int = 72) -> str:
@@ -1552,6 +1568,13 @@ def _grounding_fallback_lines(
     parts: list[str] = []
     if span:
         parts.append(f"你寫的「{span}」好像不是書裡發生的事")
+    wrong_noun = extract_wrong_concrete_noun(student_text, book_pack)
+    if wrong_noun:
+        contrast = book_contrast_noun_for(wrong_noun, book_pack)
+        if contrast:
+            parts.append(f"書裡出現的是「{contrast}」，不是「{wrong_noun}」")
+        elif wrong_noun not in (span or ""):
+            parts.append(f"「{wrong_noun}」這個詞好像不在這本書裡")
     char_note = _book_grounding_character_note(student_text, book_pack)
     if char_note:
         parts.append(char_note)
@@ -1589,6 +1612,9 @@ def _is_grounding_specific_message(text: str) -> bool:
         "書裡的人物是",
         "書中叫做",
         "書裡叫做",
+        "書裡出現的是",
+        "不是「",
+        "這個詞好像不在",
     )
     return any(c in t for c in cues)
 
@@ -1686,7 +1712,9 @@ async def _enforce_feedback_book_grounding(
     if stage_upper == "D":
         return ok, missing, suggestions
 
-    if input_bucket and skip_book_grounding_enforcement(input_bucket):
+    if input_bucket and skip_book_grounding_enforcement(
+        input_bucket, student_text=t, book_pack=book_pack
+    ):
         return ok, missing, suggestions
 
     check = grounding_check
@@ -1699,7 +1727,22 @@ async def _enforce_feedback_book_grounding(
 
     if use_llm_checker and check is not None:
         if check.grounded is True:
-            return ok, missing, suggestions
+            heuristic_bad = looks_likely_factual_mismatch(t, book_pack) or looks_likely_ungrounded_in_book(
+                t, book_pack, stage=stage
+            )
+            if not heuristic_bad:
+                return ok, missing, suggestions
+            wrong_noun = extract_wrong_concrete_noun(t, book_pack)
+            span = (check.unsupported_span or "").strip() or extract_unsupported_action_phrase(
+                t, book_pack
+            )
+            if wrong_noun and wrong_noun not in span:
+                span = span or wrong_noun
+            check = BookGroundingCheck(
+                grounded=False,
+                unsupported_span=span,
+                reason=(check.reason or "教材摘錄未支持此說法").strip(),
+            )
         if check.grounded is False:
             miss = list(missing)
             sug = list(suggestions)
@@ -1844,7 +1887,7 @@ def _control_feedback(stage: str, text: str) -> Tuple[bool, list[str], list[str]
             elif len(t) < 12:
                 prior.append(
                     (
-                        "內容還有點短，你可以試著多寫一點；也可以先看看下方「試試看這樣寫」的起頭，跟著接一句就好。",
+                        "內容還有點短，你可以試著多寫一點；也可以先看看下方黃色區塊的句型，跟著接一句就好。",
                         "你可以先寫出故事裡「誰做了什麼」一句，再補「後來……」接下去。",
                     )
                 )
@@ -2124,7 +2167,22 @@ async def _genai_feedback(
     )
     if grounding_check is not None and grounding_check.grounded is False:
         user_msg = _genai_grounding_user_hint(grounding_check, book_pack) + user_msg
-    elif (not skip_book_grounding_enforcement(input_bucket)) and client is None and looks_likely_ungrounded_in_book(
+    elif (not skip_book_grounding_enforcement(input_bucket, student_text=text, book_pack=book_pack)) and (stage or "").strip().upper() != "D":
+        heuristic_bad = looks_likely_factual_mismatch(text, book_pack) or looks_likely_ungrounded_in_book(
+            text, book_pack, stage=stage
+        )
+        if heuristic_bad:
+            span = extract_unsupported_action_phrase(text, book_pack)
+            wrong_noun = extract_wrong_concrete_noun(text, book_pack)
+            if wrong_noun and wrong_noun not in (span or ""):
+                span = span or wrong_noun
+            pseudo = BookGroundingCheck(
+                grounded=False,
+                unsupported_span=span,
+                reason="教材摘錄未支持此說法",
+            )
+            user_msg = _genai_grounding_user_hint(pseudo, book_pack) + user_msg
+    elif (not skip_book_grounding_enforcement(input_bucket, student_text=text, book_pack=book_pack)) and client is None and looks_likely_ungrounded_in_book(
         text, book_pack, stage=stage
     ):
         user_msg = (
@@ -2641,7 +2699,7 @@ async def writing_coach_chat(
             genai_path
             and client is not None
             and stage_ctx.strip().upper() in ("O", "R", "I")
-            and not skip_book_grounding_enforcement(input_bucket)
+            and not skip_book_grounding_enforcement(input_bucket, student_text=body, book_pack=book_pack)
         ):
             grounding_check = await _llm_book_grounding_check(
                 student_text=body,
@@ -2701,7 +2759,18 @@ async def writing_coach_chat(
 
         fb_ok = _apply_orid_rubric_ok_rule(bool(fb_ok), fb_rubric, fb_missing)
 
-        if is_control_condition(condition, default=DEFAULT_ORID_CONDITION) or client is None:
+        if grounding_issue:
+            ai_reply = format_control_feedback_reply(
+                ok=bool(fb_ok),
+                missing=fb_missing,
+                suggestions=fb_sug,
+                stage=stage_ctx,
+                book_anchor=anchor_line,
+                example=fb_ex,
+                praise=fb_praise,
+                student_draft=body,
+            )
+        elif is_control_condition(condition, default=DEFAULT_ORID_CONDITION) or client is None:
             ai_reply = format_control_feedback_reply(
                 ok=bool(fb_ok),
                 missing=fb_missing,
@@ -2980,7 +3049,7 @@ async def writing_feedback(
         genai_path
         and client is not None
         and (data.stage or "O").strip().upper() in ("O", "R", "I")
-        and not skip_book_grounding_enforcement(wf_input_bucket)
+        and not skip_book_grounding_enforcement(wf_input_bucket, student_text=text, book_pack=book_pack)
     ):
         grounding_check = await _llm_book_grounding_check(
             student_text=text,
@@ -3188,6 +3257,12 @@ async def list_messages(
     session = r.scalars().first()
     if not session or session.user_id != user.id:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    reading = None
+    if session.reading_id:
+        r_reading = await db.execute(select(Reading).filter(Reading.id == session.reading_id))
+        reading = r_reading.scalars().first()
+    await seed_writing_coach_welcome_if_needed(db, session=session, reading=reading)
 
     q = select(OridChatMessage).filter(OridChatMessage.session_id == session_id)
     q = q.order_by(OridChatMessage.created_at.asc() if order == "asc" else OridChatMessage.created_at.desc())

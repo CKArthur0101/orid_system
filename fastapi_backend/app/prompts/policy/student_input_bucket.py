@@ -38,12 +38,17 @@ def classify_student_input(text: str) -> str:
     if not t:
         return BUCKET_EMPTY
 
-    if len(t) < 10:
+    if len(t) < 6:
         return BUCKET_TOO_SHORT
 
     cjk = len(_CJK_RE.findall(t))
     lat = len(_LATIN_RE.findall(t))
     letters = cjk + lat
+    # 8+ 字的全中文句子（如「看到阿松爺爺吃地瓜」）視為正常草稿，不算 too_short。
+    if cjk >= 8 and lat == 0 and len(t) >= 8:
+        pass
+    elif len(t) < 10:
+        return BUCKET_TOO_SHORT
     if letters == 0:
         return BUCKET_LIKELY_GIBBERISH
 
@@ -93,16 +98,25 @@ def bucket_tone_hint_zh(bucket: str) -> str:
     return _BUCKET_TONE_HINTS.get(bucket, _BUCKET_TONE_HINTS[BUCKET_NORMAL])
 
 
-def skip_book_grounding_enforcement(bucket: str) -> bool:
+def skip_book_grounding_enforcement(
+    bucket: str,
+    *,
+    student_text: str = "",
+    book_pack: object | None = None,
+) -> bool:
     """
     When True, do not treat student text as a 'story draft' for book grounding.
 
-    Keyboard spam / empty / too-short inputs are often flagged as 'ungrounded' by
-    heuristics, which incorrectly triggers '對齊教材' overrides and canned praise
-    like「你有試著寫出人物和事件」.
-    """
-    return bucket in (
-        BUCKET_LIKELY_GIBBERISH,
-        BUCKET_EMPTY,
-        BUCKET_TOO_SHORT,
-    )
+    Keyboard spam / empty / very short inputs are often falsely flagged as 'ungrounded'.
+  """
+    if bucket in (BUCKET_LIKELY_GIBBERISH, BUCKET_EMPTY):
+        return True
+    if bucket == BUCKET_TOO_SHORT:
+        from app.prompts.policy.grounding import looks_story_related_to_book, normalize_match_text
+
+        core = normalize_match_text(student_text)
+        if len(core) >= 6 and looks_story_related_to_book(student_text, book_pack):
+            if any(k in core for k in ("看到", "聽到", "吃", "拿", "把", "給", "爺", "柿", "藏", "砍")):
+                return False
+        return True
+    return False
