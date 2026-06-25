@@ -1,4 +1,6 @@
 import type { MissionStageKey } from "@/lib/orid-mission-copy";
+import { PersimmonBullet } from "@/components/orid/PersimmonBullet";
+import { ORID_STAGE_THEME, STAGE_STATUS_BADGE } from "@/lib/orid-stage-theme";
 
 type StageMissionStatus = "not_started" | "drafting" | "feedback" | "passed";
 
@@ -11,45 +13,61 @@ const STATUS_LABEL: Record<StageMissionStatus, string> = {
   not_started: "尚未開始",
   drafting: "進行中",
   feedback: "已回饋",
-  passed: "已通過",
+  passed: "已完成",
 };
 
-const STATUS_CLASS: Record<StageMissionStatus, string> = {
-  not_started: "border-slate-200 bg-slate-50 text-slate-500",
-  drafting: "border-sky-200 bg-sky-50 text-sky-700",
-  feedback: "border-amber-200 bg-amber-50 text-amber-700",
-  passed: "border-emerald-200 bg-emerald-50 text-emerald-700",
+const STAGE_STEP_LABEL: Record<MissionStageKey, string> = {
+  O: "觀察",
+  R: "感受",
+  I: "意義",
+  D: "行動",
 };
 
 export function OridMissionProgress({
   progress,
   writtenCount,
   onFocusStage,
+  focusStage,
 }: {
   progress: StageProgress[];
   writtenCount: number;
   onFocusStage: (stage: MissionStageKey) => void;
+  focusStage?: MissionStageKey;
 }) {
   return (
-    <div className="mt-1 rounded-xl border border-sky-100 bg-sky-50/40 px-2 py-1.5 text-[11px] text-slate-700 sm:px-3 sm:py-2 sm:text-xs">
-      <div className="mb-1 font-medium">今天的反思任務：已寫 {writtenCount} / 4</div>
-      <div className="flex flex-wrap gap-1.5">
-        {progress.map((item) => (
-          <button
-            key={item.stage}
-            type="button"
-            onClick={() => onFocusStage(item.stage)}
-            className={[
-              "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 transition hover:brightness-95",
-              STATUS_CLASS[item.status],
-            ].join(" ")}
-            aria-label={`切換到 ${item.stage} 任務`}
-          >
-            <span className="font-semibold">{item.stage}</span>
-            <span>{STATUS_LABEL[item.status]}</span>
-          </button>
-        ))}
-      </div>
+    <div className="flex flex-wrap items-center gap-1 sm:gap-1.5">
+      {progress.map((item, idx) => {
+        const theme = ORID_STAGE_THEME[item.stage];
+        const active = focusStage === item.stage;
+        const done = item.status === "passed";
+        return (
+          <div key={item.stage} className="flex items-center gap-1">
+            {idx > 0 ? (
+              <span className="px-0.5 text-xs text-amber-300" aria-hidden>
+                →
+              </span>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => onFocusStage(item.stage)}
+              className={[
+                "inline-flex min-h-[34px] items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold transition-all sm:min-h-[40px] sm:gap-2 sm:px-2.5 sm:py-1 sm:text-xs",
+                done
+                  ? "border-emerald-400 bg-emerald-50 text-emerald-900"
+                  : active
+                    ? theme.statusActive
+                    : STAGE_STATUS_BADGE[item.status],
+              ].join(" ")}
+              aria-label={`切換到 ${item.stage} ${theme.shortLabel}`}
+            >
+              <PersimmonBullet size={24} />
+              <span>{STAGE_STEP_LABEL[item.stage]}</span>
+              <span className="font-normal opacity-80">{STATUS_LABEL[item.status]}</span>
+            </button>
+          </div>
+        );
+      })}
+      <span className="ml-auto text-[10px] font-medium text-amber-900/70 sm:text-xs">已寫 {writtenCount} / 4</span>
     </div>
   );
 }

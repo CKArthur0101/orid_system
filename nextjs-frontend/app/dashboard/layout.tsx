@@ -3,19 +3,20 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { BookOpen, Home, LogOut } from "lucide-react";
+import { BookOpen, ClipboardList, Home, LogOut, Map } from "lucide-react";
 import { logout } from "@/components/actions/logout-action";
+import { OridLogo } from "@/components/orid/OridMascotImage";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "首頁", icon: Home },
   { href: "/dashboard/books", label: "閱讀選單", icon: BookOpen },
+  { href: "/dashboard/progress", label: "我的作品", icon: ClipboardList },
+  { href: "/dashboard/progress", label: "學習歷程", icon: Map },
 ];
 
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+const SHELL_CLASS = "mx-auto w-full max-w-[min(100vw-1.5rem,1920px)]";
+
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const lockWeekWritingLayout = pathname?.startsWith("/dashboard/books/week/") ?? false;
   const [greeting, setGreeting] = useState<string | null>(null);
@@ -31,11 +32,7 @@ export default function DashboardLayout({
         const role = String(u.role ?? "student").toLowerCase();
         const loginId = String(u.email ?? "").trim();
         const name = String(u.display_name ?? "").trim() || loginId;
-        if (role === "student") {
-          setGreeting(`${name} 同學`);
-        } else {
-          setGreeting(name);
-        }
+        setGreeting(role === "student" ? `${name} 同學` : name);
       } catch {
         /* ignore */
       }
@@ -46,30 +43,29 @@ export default function DashboardLayout({
   }, []);
 
   return (
-    <div className={`flex flex-col bg-gradient-to-br from-sky-50 via-white to-amber-50/30 ${lockWeekWritingLayout ? "h-dvh max-h-dvh overflow-hidden" : "min-h-screen min-h-dvh"}`}>
-      {/* Top navigation */}
-      <header className="sticky top-0 z-30 shrink-0 border-b bg-white/80 backdrop-blur-md shadow-sm">
-        <div className="mx-auto flex h-14 w-full max-w-[min(100vw-1.5rem,1920px)] items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-6">
-            <Link href="/dashboard" className="flex items-center gap-2">
-              <span className="text-xl">📖</span>
-              <span className="text-sm font-bold text-sky-700 sm:text-base">AI–ORID 反思對話</span>
+    <div
+      className={`flex flex-col ${
+        lockWeekWritingLayout
+          ? "orid-forest-page h-dvh max-h-dvh overflow-hidden"
+          : "min-h-screen min-h-dvh bg-gradient-to-br from-[#faf5eb] via-[#fffcf7] to-amber-50/40"
+      }`}
+    >
+      <header className="sticky top-0 z-30 shrink-0 border-b border-amber-200/70 bg-[#fffcf7]/95 shadow-sm backdrop-blur-md">
+        <div className={`${SHELL_CLASS} flex h-14 items-center justify-between gap-4 px-4 sm:px-6`}>
+          <div className="flex min-w-0 items-center gap-4 sm:gap-6">
+            <Link href="/dashboard" className="flex shrink-0 items-center gap-2">
+              <OridLogo size={34} />
+              <span className="text-sm font-bold text-amber-950 sm:text-base">AI–ORID 反思寫作</span>
             </Link>
-
-            <nav className="hidden items-center gap-1 sm:flex">
+            <nav className="hidden items-center gap-1 lg:flex">
               {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
-                const active =
-                  href === "/dashboard"
-                    ? pathname === "/dashboard"
-                    : pathname.startsWith(href);
+                const active = href === "/dashboard" ? pathname === "/dashboard" : pathname.startsWith(href);
                 return (
                   <Link
-                    key={href}
+                    key={label}
                     href={href}
-                    className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition sm:text-base ${
-                      active
-                        ? "bg-sky-100 text-sky-700"
-                        : "text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                    className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition ${
+                      active ? "orid-nav-link-active" : "orid-nav-link"
                     }`}
                   >
                     <Icon className="h-4 w-4" />
@@ -79,16 +75,13 @@ export default function DashboardLayout({
               })}
             </nav>
           </div>
-
-          <div className="flex items-center gap-2 sm:gap-3">
-            {greeting && (
-              <span className="max-w-[9rem] truncate text-xs text-slate-600 sm:max-w-[14rem] sm:text-base">
-                {greeting}
-              </span>
-            )}
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+            {greeting ? (
+              <span className="max-w-[9rem] truncate text-xs text-amber-900 sm:max-w-[14rem] sm:text-sm">🌰 {greeting}</span>
+            ) : null}
             <button
               onClick={() => logout()}
-              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-slate-500 hover:bg-red-50 hover:text-red-600 transition sm:text-base"
+              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-amber-900/75 transition hover:bg-red-50 hover:text-red-600"
             >
               <LogOut className="h-4 w-4" />
               <span className="hidden sm:inline">登出</span>
@@ -97,9 +90,8 @@ export default function DashboardLayout({
         </div>
       </header>
 
-      {/* Content：flex-1 讓子頁面可撐滿剩餘視窗高度 */}
       <main
-        className={`mx-auto flex w-full max-w-[min(100vw-1.5rem,1920px)] flex-1 flex-col px-4 py-3 sm:px-6 sm:py-4 ${
+        className={`${SHELL_CLASS} flex flex-1 flex-col px-4 py-3 sm:px-6 sm:py-4 ${
           lockWeekWritingLayout ? "min-h-0 overflow-hidden" : "min-h-0"
         }`}
       >

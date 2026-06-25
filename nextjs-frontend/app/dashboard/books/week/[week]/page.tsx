@@ -3,8 +3,12 @@
 import { useParams } from "next/navigation";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import { BookHelperAvatar } from "@/components/orid/BookIllustration";
 import { FeedbackGuideCard } from "@/components/orid/FeedbackGuideCard";
-import { OridMissionProgress } from "@/components/orid/OridMissionProgress";
+import { OridWeekHero } from "@/components/orid/OridWeekHero";
+import { OridPartnerMascot } from "@/components/orid/OridMascotImage";
+import { PersimmonBullet } from "@/components/orid/PersimmonBullet";
+import { getBookWeekArt } from "@/lib/orid-book-art";
 import {
   DRAFT_SAVE_ENCOURAGEMENT,
   STAGE_MISSION_META,
@@ -12,6 +16,7 @@ import {
   SUBMIT_PARTIAL_ENCOURAGEMENT,
 } from "@/lib/orid-mission-copy";
 import { ORID_UNLOCKED_WEEKS } from "@/lib/orid-week-access";
+import { ORID_STAGE_THEME } from "@/lib/orid-stage-theme";
 import { parseFeedbackNarration } from "@/lib/parse-feedback-narration";
 
 type ChatMsg = { role: "student" | "ai"; text: string };
@@ -89,6 +94,13 @@ function formatApiError(status: number, body: string, fallback: string) {
 function localDraftStorageKey(sessionId: string, week: number) {
   return `orid-writing-draft:${sessionId}:${week}`;
 }
+
+const STAGE_CARD_META: Record<StageKey, { title: string; question: string }> = {
+  O: { title: "O 觀察 (Objective)", question: "我在故事中看到什麼？" },
+  R: { title: "R 反思 (Reflective)", question: "這段故事讓我有什麼感覺？" },
+  I: { title: "I 解釋 (Interpretive)", question: "這個故事想告訴我什麼？" },
+  D: { title: "D 行動 (Decisional)", question: "我可以怎麼做得更好？" },
+};
 
 const STAGES: { key: StageKey; label: string }[] = [
   { key: "O", label: "O (Objective)" },
@@ -561,14 +573,13 @@ export default function WeekBookPage() {
   const showStageFeedbackButtons = weekNum === 1;
   const showSynthesisColumn = weekNum === 2 && w2Phase === "synthesis";
   const oridReadOnly = weekNum === 2;
-  const missionProgress = useMemo(
-    () =>
-      STAGES.map(({ key }) => ({
-        stage: key,
-        status: deriveStageMissionStatus(writingData.stages[key]),
-      })),
-    [writingData],
-  );
+  const missionProgress = useMemo(() => {
+    const data = weekNum === 2 ? (week1Data ?? createEmptyWriting(1)) : writingData;
+    return STAGES.map(({ key }) => ({
+      stage: key,
+      status: deriveStageMissionStatus(data.stages[key]),
+    }));
+  }, [writingData, week1Data, weekNum]);
   const writtenCount = useMemo(
     () => missionProgress.filter((item) => item.status !== "not_started").length,
     [missionProgress],
@@ -579,8 +590,20 @@ export default function WeekBookPage() {
   );
 
   const mainGridClass = showSynthesisColumn
-    ? "grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1.2fr)] gap-3 overflow-hidden lg:grid-cols-3 lg:grid-rows-[minmax(0,1fr)] lg:gap-3"
-    : "grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-3 overflow-hidden md:grid-cols-2 md:grid-rows-[minmax(0,1fr)] md:gap-3";
+    ? "grid min-h-0 w-full flex-1 grid-cols-1 gap-2.5 overflow-hidden md:grid-cols-[1fr_1fr] md:gap-3 xl:grid-cols-[1fr_1fr_1fr]"
+    : "grid min-h-0 w-full flex-1 grid-cols-1 gap-2.5 overflow-hidden md:grid-cols-[1fr_1fr] md:gap-3";
+
+  const aiPartnerShellClass = showSynthesisColumn
+    ? "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[35vh] md:order-2 md:col-start-2 md:h-full md:row-start-1 xl:order-3 xl:col-start-3"
+    : "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[35vh] md:order-2 md:col-start-2 md:h-full md:row-start-1";
+
+  const activeStageDef = STAGES.find((s) => s.key === focusStage) ?? STAGES[0];
+  const activeStage = activeStageDef.key;
+  const activeTheme = ORID_STAGE_THEME[activeStage];
+  const activeStageStatus = deriveStageMissionStatus(oridDisplay.stages[activeStage]);
+  const activeMissionMeta = STAGE_MISSION_META[activeStage];
+  const activeAiExample = oridDisplay.stages[activeStage].feedback?.d1?.example?.trim();
+  const activeCardMeta = STAGE_CARD_META[activeStage];
 
   useEffect(() => {
     if (sessionId) return;
@@ -1049,213 +1072,149 @@ export default function WeekBookPage() {
     }
   }
 
-  const STAGE_COLORS: Record<StageKey, string> = {
-    O: "from-sky-400 to-sky-500",
-    R: "from-amber-400 to-orange-500",
-    I: "from-emerald-400 to-teal-500",
-    D: "from-violet-400 to-purple-500",
-  };
-
-  const STAGE_EMOJI: Record<StageKey, string> = { O: "👀", R: "💭", I: "💡", D: "🎯" };
-
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col gap-2 overflow-hidden sm:gap-2.5">
-      {/* Hero banner — compact for tablet viewport */}
-      <div className="shrink-0 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-3 py-1.5 text-white shadow-md sm:px-4 sm:py-2">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <div className="min-w-0 flex-1">
-            <h1 className="text-base font-bold leading-tight sm:text-lg">📖 AI–ORID 反思寫作</h1>
-            <p className="truncate text-[11px] leading-tight text-sky-100 sm:text-xs">
-              {weekNum === 1 ? "第 1 週｜完成四個反思小任務" : `第 ${weekNum} 週｜先寫作（左）→ 回饋夥伴（右）`}
-              {bookPack?.book_title ? `｜${bookPack.book_title}` : ""}
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-            {loading ? (
-              <span className="text-[10px] text-sky-200 sm:text-xs">初始化中…</span>
-            ) : error ? (
-              <span className="rounded-md bg-red-500/20 px-1.5 py-0.5 text-[10px] text-white sm:text-xs">{error}</span>
-            ) : (
-              <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-[10px] backdrop-blur-sm sm:text-xs">{condition}</span>
-            )}
-            {oridCanForceNew ? (
-              <button
-                type="button"
-                onClick={restartWeek}
-                disabled={loading}
-                className="rounded-md bg-white/20 px-2 py-0.5 text-[10px] font-medium backdrop-blur-sm transition hover:bg-white/30 disabled:opacity-50 sm:px-2.5 sm:py-1 sm:text-xs"
-                title="開新 session、清空聊天與寫作（僅實驗管理員）"
-              >
-                重新開始本週
-              </button>
-            ) : null}
-          </div>
-        </div>
+    <div className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden">
+      <div className={mainGridClass}>
+        <div className="order-1 flex min-h-0 w-full min-w-0 flex-col gap-2.5 overflow-hidden md:h-full md:min-h-0">
+          <OridWeekHero
+            className="w-full"
+            weekNum={weekNum}
+            bookTitle={bookPack?.book_title}
+            focusStage={focusStage}
+            progress={missionProgress}
+            writtenCount={writtenCount}
+            onFocusStage={setFocusStage}
+            loading={loading}
+            error={error}
+            showAdminControls={oridCanForceNew}
+            onRestart={restartWeek}
+            restartDisabled={loading}
+          />
 
-        {/* 四格皆可寫；高亮目前關注的寫作區（點格子或輸入時可切換） */}
-        <div className="mt-1 flex flex-wrap gap-1">
-          {STAGES.map((s) => {
-            const active = focusStage === s.key;
-            return (
-              <button
-                key={s.key}
-                type="button"
-                onClick={() => setFocusStage(s.key)}
+          <div className="kid-shell flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden max-md:min-h-[40vh]">
+            {weekNum === 2 ? (
+              <div className="shrink-0 border-b border-amber-100 px-3 py-1.5 text-right text-[10px] text-amber-900/70 sm:text-xs">
+                {w2Phase === "orid_review" ? "顯示第 1 週已儲存內容（唯讀）" : "第 1 週四段（唯讀）"}
+              </div>
+            ) : null}
+
+            <div className="flex min-h-0 w-full flex-1 flex-col p-2">
+              <div
                 className={[
-                  "inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[10px] font-medium transition-all sm:px-2.5 sm:text-xs",
-                  active ? "bg-white text-sky-700 shadow-sm" : "bg-white/15 text-sky-100 hover:bg-white/25",
+                  "relative flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-2xl border-2 border-t-4 bg-white shadow-sm transition-all",
+                  activeTheme.topBorder,
+                  activeTheme.cardFocus,
                 ].join(" ")}
               >
-                <span className="text-[11px] sm:text-xs">{STAGE_EMOJI[s.key]}</span>
-                {s.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* 單屏：左 2×2 四格、右聊天；不超過視窗高度，過長只在各欄內捲動 */}
-      <div className={mainGridClass}>
-        <div className="kid-shell order-1 flex h-full min-h-0 flex-col overflow-hidden md:h-full">
-          <div className="kid-section-header shrink-0 justify-between !py-1.5">
-            <div className="flex items-center gap-1.5">
-              <span className="text-base">✍️</span>
-              <span className="text-xs font-bold sm:text-sm">反思寫作</span>
-            </div>
-            {weekNum === 2 ? (
-              <span className="max-w-[14rem] text-right text-[10px] leading-snug text-sky-100 sm:max-w-none sm:text-xs">
-                {w2Phase === "orid_review" ? "顯示第 1 週已儲存內容（唯讀）" : "第 1 週四段（唯讀）"}
-              </span>
-            ) : null}
-          </div>
-          {weekNum === 1 ? (
-            <div className="shrink-0 px-2 pb-1 sm:px-3">
-              <OridMissionProgress progress={missionProgress} writtenCount={writtenCount} onFocusStage={setFocusStage} />
-            </div>
-          ) : null}
-
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-              <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 p-2 max-sm:[grid-template-rows:repeat(4,minmax(0,1fr))] sm:grid-cols-2 sm:grid-rows-2 sm:[grid-template-rows:repeat(2,minmax(0,1fr))] sm:[grid-template-columns:repeat(2,minmax(0,1fr))]">
-                {STAGES.map((s) => {
-                  const stage = s.key;
-                  const isFocused = focusStage === stage;
-                  const stageStatus = deriveStageMissionStatus(writingData.stages[stage]);
-                  const missionMeta = STAGE_MISSION_META[stage];
-
-                  return (
-                    <div
-                      key={stage}
+                <div className="flex shrink-0 items-start justify-between gap-2 px-2.5 pb-1 pt-2 sm:px-3">
+                  <div className="min-w-0">
+                    <div className={`text-xs font-bold sm:text-sm ${activeTheme.titleColor}`}>
+                      {weekNum === 1 ? activeCardMeta.title : STAGE_TITLES[activeStage]}
+                    </div>
+                    <div className="text-[11px] leading-snug text-amber-900/65 sm:text-xs">
+                      {weekNum === 1 ? activeCardMeta.question : STAGE_WRITING_HINT[activeStage]}
+                    </div>
+                    <span
                       className={[
-                        "flex min-h-0 flex-col rounded-xl border p-1.5 sm:p-1.5 md:h-full md:min-h-0",
-                        isFocused
-                          ? "border-sky-300 bg-sky-50/40 shadow-sm ring-1 ring-sky-200"
-                          : "border-slate-200 bg-white hover:border-sky-200",
+                        "mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium",
+                        activeStageStatus === "passed"
+                          ? "bg-emerald-50 text-emerald-800"
+                          : "bg-amber-50 text-amber-900/60",
                       ].join(" ")}
                     >
-                      <div className="flex shrink-0 flex-wrap items-start justify-between gap-1.5">
-                        <div className="relative min-w-0 flex-1">
-                          <div className="flex min-w-0 items-center gap-1.5">
-                            <button
-                              type="button"
-                              className={`peer inline-flex h-6 w-6 shrink-0 cursor-help items-center justify-center rounded-md bg-gradient-to-br ${STAGE_COLORS[stage]} text-xs text-white shadow-sm outline-none ring-offset-2 transition hover:brightness-105 focus-visible:ring-2 focus-visible:ring-sky-400 sm:h-7 sm:w-7 sm:text-sm`}
-                              aria-label={`${STAGE_TITLES[stage]}：查看寫作小提示`}
-                            >
-                              {STAGE_EMOJI[stage]}
-                            </button>
-                            <div className="min-w-0">
-                              <div className="truncate text-xs font-bold leading-tight text-slate-700 sm:text-[13px]">
-                                {weekNum === 1 ? missionMeta.missionTitle : STAGE_TITLES[stage]}
-                              </div>
-                              {weekNum === 1 ? (
-                                <div className="text-[10px] text-slate-500 sm:text-[11px]">{missionMeta.oridTitle}</div>
-                              ) : null}
-                            </div>
-                          </div>
-                          {weekNum === 1 ? (
-                            <div className="mt-1 text-[10px] leading-snug text-slate-600 sm:text-[11px]">💡 {missionMeta.helperHint}</div>
-                          ) : null}
-                          <div
-                            role="tooltip"
-                            className="pointer-events-none invisible absolute left-0 top-[calc(100%+0.35rem)] z-30 w-[min(18rem,calc(100vw-4rem))] rounded-xl border border-sky-100 bg-white p-3 text-left text-[11px] leading-relaxed text-slate-600 opacity-0 shadow-lg ring-1 ring-slate-200/80 transition-opacity duration-150 peer-hover:visible peer-hover:opacity-100 peer-focus:visible peer-focus:opacity-100 peer-focus-visible:visible peer-focus-visible:opacity-100 sm:text-xs"
-                          >
-                            {STAGE_WRITING_HINT[stage]}
-                          </div>
-                        </div>
-                        {showStageFeedbackButtons ? (
-                          <div className="flex shrink-0 items-center gap-1">
-                            <span className="rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-600 sm:text-[11px]">
-                              {STAGE_STATUS_TEXT[stageStatus]}
-                            </span>
-                            <button
-                              type="button"
-                              className="kid-btn-primary shrink-0 !px-2 !py-0.5 !text-[10px] sm:!text-[11px]"
-                              disabled={!sessionId || fbLoading}
-                              onClick={() => runFeedback(stage)}
-                            >
-                              {fbLoading ? "…" : "取得回饋"}
-                            </button>
+                      {activeStageStatus === "passed" ? "✓ 已完成" : STAGE_STATUS_TEXT[activeStageStatus]}
+                    </span>
+                  </div>
+                  {showStageFeedbackButtons ? (
+                    <button
+                      type="button"
+                      className={activeTheme.btnClass}
+                      disabled={!sessionId || fbLoading}
+                      onClick={() => runFeedback(activeStage)}
+                    >
+                      {fbLoading ? "…" : "取得回饋"}
+                    </button>
+                  ) : null}
+                </div>
+
+                <div className="relative flex min-h-0 flex-1 flex-col px-2 pt-0 sm:px-2.5">
+                  {weekNum === 1 ? (
+                    <div className="mb-1 shrink-0 text-[10px] text-amber-900/60 sm:text-[11px]">
+                      {activeMissionMeta.helperHint}
+                    </div>
+                  ) : null}
+
+                  <div className="flex min-h-0 flex-1 gap-1.5">
+                    <textarea
+                      className={[
+                        "min-h-[12rem] min-w-0 flex-1 resize-none overflow-y-auto rounded-xl border border-amber-100 bg-[#fffcf7] p-2.5 text-[15px] leading-relaxed outline-none placeholder:text-amber-900/35 focus:ring-2 read-only:bg-amber-50/40 md:min-h-0",
+                        activeTheme.inputFocus,
+                      ].join(" ")}
+                      placeholder={STAGE_WRITING_HINT[activeStage]}
+                      value={oridDisplay.stages[activeStage].d1}
+                      readOnly={oridReadOnly}
+                      onFocus={() => setFocusStage(activeStage)}
+                      onChange={
+                        oridReadOnly
+                          ? undefined
+                          : (e) =>
+                              setWritingData((prev) => ({
+                                ...prev,
+                                stages: {
+                                  ...prev.stages,
+                                  [activeStage]: { ...prev.stages[activeStage], d1: e.target.value },
+                                },
+                              }))
+                      }
+                    />
+                    <div
+                      className={[
+                        "flex w-[34%] min-w-[6rem] shrink-0 flex-col overflow-y-auto rounded-xl border p-1.5 text-[11px] leading-snug sm:w-[32%] sm:min-w-[7rem] sm:p-2 sm:text-xs md:w-[30%] md:max-w-none lg:w-[28%]",
+                        activeTheme.hintPanel,
+                      ].join(" ")}
+                    >
+                      <div className={["mb-1 flex shrink-0 items-center gap-1 font-semibold", activeTheme.hintTitle].join(" ")}>
+                        {weekNum === 1 ? <PersimmonBullet size={16} /> : null}
+                        {activeAiExample ? "小幫手建議：" : "可以這樣開頭："}
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        {activeAiExample ? (
+                          <div className="flex gap-1 break-words font-medium text-amber-950/85">
+                            {weekNum === 1 ? <PersimmonBullet size={14} className="mt-0.5" /> : null}
+                            <span>{activeAiExample}</span>
                           </div>
                         ) : (
-                          <span className="text-[10px] text-slate-400 sm:text-xs"> </span>
+                          STAGE_SCAFFOLD_LINES[activeStage].map((line) => (
+                            <div key={line} className="flex gap-1 break-words">
+                              <PersimmonBullet size={14} className="mt-0.5" />
+                              <span>{line}</span>
+                            </div>
+                          ))
                         )}
                       </div>
-
-                      <div className="mt-1 flex min-h-0 flex-1 gap-1.5">
-                        <textarea
-                          className="min-h-0 min-w-0 flex-1 resize-none overflow-y-auto rounded-lg border border-slate-200 bg-white p-2 text-sm leading-snug outline-none placeholder:text-slate-400/85 placeholder:text-left focus:border-sky-400 focus:ring-1 focus:ring-sky-400/25 read-only:bg-slate-50 read-only:text-slate-700"
-                          placeholder={STAGE_WRITING_HINT[stage]}
-                          value={oridDisplay.stages[stage].d1}
-                          readOnly={oridReadOnly}
-                          onFocus={() => setFocusStage(stage)}
-                          onChange={
-                            oridReadOnly
-                              ? undefined
-                              : (e) =>
-                                  setWritingData((prev) => ({
-                                    ...prev,
-                                    stages: {
-                                      ...prev.stages,
-                                      [stage]: { ...prev.stages[stage], d1: e.target.value },
-                                    },
-                                  }))
-                          }
-                        />
-                        <div className="flex w-[34%] min-w-[5.75rem] max-w-[9.5rem] shrink-0 flex-col overflow-y-auto rounded-lg bg-sky-50/70 px-1.5 py-1.5 text-xs leading-snug text-slate-600 sm:w-[32%] sm:min-w-[6.5rem] sm:max-w-[10.5rem] sm:px-2 sm:text-sm sm:leading-snug">
-                          <div className="mb-1 shrink-0 text-xs font-semibold text-slate-700 sm:text-sm">可以這樣開頭：</div>
-                          <div className="flex flex-col gap-1">
-                            {STAGE_SCAFFOLD_LINES[stage].map((line, idx) => (
-                              <div key={line} className="flex gap-1 break-words">
-                                <span className="shrink-0 font-medium text-slate-700">{idx + 1}.</span>
-                                <span>{line}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
                     </div>
-                  );
-                })}
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div className="shrink-0 border-t border-slate-100 px-3 pb-2 pt-1.5 sm:px-3 sm:pb-3">
+            <div className="shrink-0 border-t border-amber-100 px-3 pb-2.5 pt-2">
               <div className="flex flex-col gap-2">
                 {weekNum === 2 && w2Phase === "orid_review" ? (
                   <button
                     type="button"
-                    className="kid-btn-primary w-full py-2 text-sm sm:text-base"
+                    className="kid-btn-primary w-full"
                     disabled={!sessionId || !readingId || writingSubmitting}
                     onClick={() => void submitWeek2PhaseToSynthesis()}
                   >
                     ⏭️ 進入整合寫作
                   </button>
                 ) : (
-                  <div className="flex flex-col gap-1.5 sm:flex-row">
+                  <div className="flex flex-col gap-2 sm:flex-row">
                     {weekNum === 1 ? (
                       <button
                         type="button"
-                        className="kid-btn-secondary w-full py-2 text-sm sm:text-base"
+                        className="kid-btn-secondary w-full sm:flex-1"
                         disabled={!sessionId || writingSubmitting}
                         onClick={() => saveWriting("draft")}
                       >
@@ -1264,34 +1223,31 @@ export default function WeekBookPage() {
                     ) : null}
                     <button
                       type="button"
-                      className="kid-btn-primary w-full py-2 text-sm sm:text-base"
+                      className="kid-btn-primary w-full sm:flex-[1.4]"
                       disabled={!sessionId || !readingId || writingSubmitting}
                       onClick={() => saveWriting("submit")}
                     >
-                      {writingSubmitting ? "儲存中…" : "💾 儲存並提交我的寫作"}
+                      {writingSubmitting ? "儲存中…" : "🌰 儲存並提交我的寫作"}
                     </button>
                   </div>
                 )}
               </div>
-              {fbError && <div className="mt-1.5 text-xs text-red-600 whitespace-pre-wrap sm:text-sm">{fbError}</div>}
-              {encourageMsg && <div className="mt-1.5 text-xs font-medium text-sky-700 sm:text-sm">{encourageMsg}</div>}
+              {fbError && <div className="mt-1.5 whitespace-pre-wrap text-xs text-red-600 sm:text-sm">{fbError}</div>}
+              {encourageMsg && <div className="mt-1.5 text-xs font-medium text-amber-800 sm:text-sm">{encourageMsg}</div>}
               {saveMsg && <div className="mt-1.5 text-xs font-medium text-emerald-600 sm:text-sm">{saveMsg}</div>}
-              {writingError && <div className="mt-1.5 text-xs text-red-600 whitespace-pre-wrap sm:text-sm">{writingError}</div>}
+              {writingError && <div className="mt-1.5 whitespace-pre-wrap text-xs text-red-600 sm:text-sm">{writingError}</div>}
             </div>
           </div>
         </div>
 
         {showSynthesisColumn ? (
-          <div className="kid-shell order-2 flex h-full min-h-0 flex-col overflow-hidden">
-            <div className="kid-section-header shrink-0 justify-between">
-              <div className="flex items-center gap-2">
-                <span className="text-lg">🔗</span>
-                <span className="text-sm font-bold">整合寫作</span>
-              </div>
+          <div className="kid-shell order-2 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[30vh] md:order-3 md:col-span-2 xl:order-2 xl:col-span-1 xl:h-full">
+            <div className="kid-section-header-partner">
+              <span className="text-sm font-bold text-amber-950">整合寫作</span>
             </div>
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2">
               <textarea
-                className="min-h-0 w-full flex-1 resize-none rounded-xl border border-slate-200 bg-white p-3 text-sm leading-relaxed outline-none focus:border-sky-400 focus:ring-1 focus:ring-sky-400/25"
+                className="min-h-0 w-full flex-1 resize-none rounded-xl border border-amber-100 bg-[#fffcf7] p-3 text-base leading-relaxed outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-300/30"
                 placeholder="在這裡撰寫整合稿…（怎麼寫可參考右側聊天室開場說明）"
                 value={writingData.synthesis_draft ?? ""}
                 onChange={(e) =>
@@ -1313,53 +1269,79 @@ export default function WeekBookPage() {
           </div>
         ) : null}
 
-        <div className="kid-shell order-3 flex h-full min-h-0 flex-col overflow-hidden md:h-full">
-          <div className="kid-section-header shrink-0">
-            <span className="text-lg">💬</span>
-            <span className="text-sm font-bold">寫作回饋夥伴</span>
+        <div className={aiPartnerShellClass}>
+          <div className="kid-section-header-partner">
+            <div className="text-sm font-bold text-amber-950 sm:text-base">AI 小幫手的回饋夥伴</div>
           </div>
 
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-gradient-to-b from-slate-50 to-white">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#fffcf7]">
+            <div className="shrink-0 border-b border-amber-100 px-3 py-3 sm:px-4">
+              <div className="flex items-start gap-3">
+                {getBookWeekArt(weekNum) ? (
+                  <BookHelperAvatar week={weekNum} size={68} />
+                ) : (
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white ring-2 ring-amber-100">
+                    <OridPartnerMascot size={40} />
+                  </div>
+                )}
+                <div className="kid-bubble-ai max-w-[calc(100%-5rem)] text-xs leading-relaxed sm:max-w-[18rem] sm:text-sm">
+                  你好！我是松果小夥伴 🌰
+                  <br />
+                  寫好後點「取得回饋」，我會用小小卡片回你，不會一次塞滿整頁喔。
+                </div>
+              </div>
+            </div>
+
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-2 sm:p-3">
               {messages.length === 0 ? (
-                <div className="flex min-h-full flex-col items-center justify-center px-2 py-3 text-center text-xs text-slate-400 sm:text-sm">
+                <div className="flex h-full min-h-[6rem] items-center justify-center px-2 text-center text-xs text-amber-900/50 sm:text-sm">
                   {!historyLoaded
                     ? "載入中…"
                     : seededInitial && !readingContentReady
                       ? "載入教材中…"
                       : awaitingFirstAiBubble
-                        ? "正在準備開場…"
-                        : "尚無訊息"}
+                        ? "小幫手正在準備開場…"
+                        : "還沒有回饋訊息，先去寫作吧！"}
                 </div>
               ) : (
-                <div className="flex flex-col gap-2">
+                <div className="flex flex-col gap-3">
                   {messages.map((m, idx) => {
                     const isStudent = m.role === "student";
                     const parsedFeedback = !isStudent ? parseFeedbackNarration(m.text) : null;
+                    const helperAvatar = getBookWeekArt(weekNum) ? (
+                      <BookHelperAvatar week={weekNum} size={44} />
+                    ) : (
+                      <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white ring-2 ring-amber-100">
+                        <OridPartnerMascot size={32} />
+                      </div>
+                    );
+
                     return (
                       <div
                         key={idx}
                         className={["flex items-end gap-2", isStudent ? "justify-end" : "justify-start"].join(" ")}
                       >
-                        {!isStudent && (
-                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm shadow-sm">
-                            🤖
-                          </div>
-                        )}
-                        {parsedFeedback ? (
-                          <FeedbackGuideCard parsed={parsedFeedback} />
-                        ) : (
-                          <div
-                            className={["max-w-[min(92%,28rem)]", isStudent ? "kid-bubble-student" : "kid-bubble-ai"].join(
-                              " ",
-                            )}
-                          >
-                            <div className="whitespace-pre-wrap leading-relaxed">{m.text}</div>
-                          </div>
-                        )}
+                        {!isStudent && <div className="shrink-0">{helperAvatar}</div>}
+                        <div
+                          className={
+                            isStudent
+                              ? "max-w-[min(88%,16rem)] shrink-0"
+                              : parsedFeedback
+                                ? "shrink min-w-0"
+                                : "max-w-[min(88%,18rem)] shrink-0"
+                          }
+                        >
+                          {parsedFeedback ? (
+                            <FeedbackGuideCard parsed={parsedFeedback} />
+                          ) : (
+                            <div className={isStudent ? "kid-bubble-student" : "kid-bubble-ai"}>
+                              <div className="whitespace-pre-wrap leading-relaxed">{m.text}</div>
+                            </div>
+                          )}
+                        </div>
                         {isStudent && (
-                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm shadow-sm">
-                            🧒
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-lg ring-2 ring-amber-200/80">
+                            <span aria-hidden>🧒</span>
                           </div>
                         )}
                       </div>
@@ -1369,35 +1351,28 @@ export default function WeekBookPage() {
               )}
               <div ref={chatEndRef} className="h-0 shrink-0" aria-hidden />
             </div>
+
             {showAiTyping && (
-              <div
-                className="shrink-0 border-t border-sky-100/70 bg-sky-50/95 px-2 py-2 sm:px-3"
-                aria-live="polite"
-                aria-label="機器人正在輸入"
-              >
-                <div className="flex items-end gap-2 justify-start">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm shadow-sm">
-                    🤖
-                  </div>
-                  <div className="max-w-[min(92%,28rem)] kid-bubble-ai">
-                    <div className="flex items-center gap-1.5 py-1">
-                      <span className="h-2 w-2 rounded-full bg-sky-400/80 animate-bounce [animation-delay:-0.24s]" />
-                      <span className="h-2 w-2 rounded-full bg-sky-400/80 animate-bounce [animation-delay:-0.12s]" />
-                      <span className="h-2 w-2 rounded-full bg-sky-400/80 animate-bounce" />
-                      <span className="ml-2 text-xs text-slate-500 sm:text-sm">正在思考中…</span>
+              <div className="shrink-0 border-t border-amber-100 bg-white/90 px-3 py-2" aria-live="polite">
+                <div className="flex items-end gap-2">
+                  {getBookWeekArt(weekNum) ? (
+                    <BookHelperAvatar week={weekNum} size={44} />
+                  ) : (
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white ring-2 ring-amber-100">
+                      <OridPartnerMascot size={32} />
+                    </div>
+                  )}
+                  <div className="kid-bubble-ai max-w-[16rem]">
+                    <div className="flex items-center gap-1.5 py-0.5">
+                      <span className="h-2 w-2 rounded-full bg-amber-500/80 animate-bounce [animation-delay:-0.24s]" />
+                      <span className="h-2 w-2 rounded-full bg-amber-500/80 animate-bounce [animation-delay:-0.12s]" />
+                      <span className="h-2 w-2 rounded-full bg-amber-500/80 animate-bounce" />
+                      <span className="ml-2 text-xs text-amber-900/70">松果小幫手正在思考…</span>
                     </div>
                   </div>
                 </div>
               </div>
             )}
-          </div>
-
-          <div className="shrink-0 border-t border-slate-200 bg-slate-50/80 px-2 py-1.5 text-center text-[10px] text-slate-500 sm:px-3 sm:py-2 sm:text-xs">
-            {showStageFeedbackButtons
-              ? "點左側任一格的「取得回饋」，回覆會出現在這裡。"
-              : showSynthesisColumn
-                ? "整合稿寫在中欄；按「取得整合回饋」後，教練回覆會出現在這裡。"
-                : "請用右側對話與寫作教練聊聊。"}
           </div>
         </div>
       </div>

@@ -4,60 +4,26 @@
 
 @layer base {
   :root {
-    /* 接近你參考圖：外層淡藍灰、內層白卡 */
-    --background: 210 60% 98%;
-    --foreground: 222 47% 11%;
-
-    --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
-
-    --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
-
-    /* 主色：乾淨藍 */
-    --primary: 210 100% 45%;
-    --primary-foreground: 0 0% 100%;
-
-    --secondary: 210 40% 96%;
-    --secondary-foreground: 222 47% 11%;
-
-    --muted: 210 40% 96%;
-    --muted-foreground: 215 16% 46%;
-
-    --accent: 204 100% 95%;
-    --accent-foreground: 222 47% 11%;
-
+    --background: 40 33% 96%;
+    --foreground: 25 30% 18%;
+    --card: 40 40% 99%;
+    --card-foreground: 25 30% 18%;
+    --popover: 40 40% 99%;
+    --popover-foreground: 25 30% 18%;
+    --primary: 25 55% 38%;
+    --primary-foreground: 40 40% 98%;
+    --secondary: 38 45% 92%;
+    --secondary-foreground: 25 30% 22%;
+    --muted: 38 35% 93%;
+    --muted-foreground: 25 15% 42%;
+    --accent: 85 35% 90%;
+    --accent-foreground: 25 30% 18%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 98%;
-
-    --border: 214 32% 90%;
-    --input: 214 32% 90%;
-    --ring: 210 100% 45%;
-
-    /* 大圓角：像兒童介面 */
+    --border: 35 28% 86%;
+    --input: 35 28% 86%;
+    --ring: 25 55% 38%;
     --radius: 1.25rem;
-  }
-
-  .dark {
-    --background: 222 47% 7%;
-    --foreground: 0 0% 98%;
-    --card: 222 47% 10%;
-    --card-foreground: 0 0% 98%;
-    --popover: 222 47% 10%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 210 100% 60%;
-    --primary-foreground: 222 47% 11%;
-    --secondary: 222 47% 15%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 222 47% 15%;
-    --muted-foreground: 215 20% 70%;
-    --accent: 222 47% 15%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 222 47% 18%;
-    --input: 222 47% 18%;
-    --ring: 210 100% 60%;
   }
 }
 
@@ -72,40 +38,62 @@
 }
 
 @layer components {
+  .orid-forest-page {
+    background-color: #faf5eb;
+    background-image:
+      radial-gradient(ellipse 70% 50% at 0% 0%, rgba(210, 180, 140, 0.12), transparent 55%),
+      radial-gradient(ellipse 50% 40% at 100% 0%, rgba(180, 150, 110, 0.1), transparent 50%);
+  }
+
+  .orid-week-hero {
+    background-color: #faf5eb;
+  }
+
   .kid-shell {
-    @apply rounded-2xl bg-white shadow-md border border-slate-200;
+    @apply rounded-2xl border border-amber-200/60 bg-[#fffcf7] shadow-md shadow-amber-900/5;
   }
-  .kid-pill {
-    @apply inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-medium text-slate-500 transition-all;
-  }
-  .kid-pill-active {
-    @apply bg-gradient-to-r from-sky-500 to-blue-600 text-white border-transparent shadow-sm;
-  }
+
   .kid-bubble-ai {
-    @apply rounded-2xl bg-sky-50 border border-sky-200 px-3 py-2 text-sm leading-relaxed text-slate-700;
+    @apply rounded-2xl rounded-bl-md border border-amber-100 bg-white px-3 py-2.5 text-sm leading-relaxed text-amber-950 shadow-sm;
   }
+
   .kid-bubble-student {
-    @apply rounded-2xl bg-gradient-to-br from-sky-500 to-blue-600 px-3 py-2 text-sm leading-relaxed text-white;
+    @apply rounded-2xl rounded-br-md bg-gradient-to-br from-amber-800 to-amber-900 px-3 py-2.5 text-sm leading-relaxed text-amber-50 shadow-sm;
   }
-  .kid-box {
-    @apply rounded-xl border border-slate-200 bg-slate-50/50 p-4;
+
+  .kid-section-header-partner {
+    @apply shrink-0 border-b border-amber-100 bg-[#fffcf7] px-3 py-2.5 sm:px-4 sm:py-3;
   }
-  .kid-box-blue {
-    @apply border-sky-200 bg-sky-50/30;
-  }
-  .kid-hint-panel {
-    @apply rounded-xl border border-amber-200 bg-amber-50/60 p-4;
-  }
-  .kid-chip {
-    @apply inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-2.5 py-0.5 text-sm text-sky-700 font-medium;
-  }
-  .kid-section-header {
-    @apply flex items-center gap-2 rounded-t-xl bg-gradient-to-r from-sky-500 to-blue-600 px-3 py-2 text-sm text-white;
-  }
+
   .kid-btn-primary {
-    @apply rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-3 py-1.5 text-sm font-semibold text-white shadow-md shadow-sky-200 transition-all hover:from-sky-400 hover:to-blue-500 disabled:opacity-50;
+    @apply min-h-[44px] rounded-2xl bg-gradient-to-r from-amber-800 to-orange-900 px-4 py-2.5 text-sm font-semibold text-amber-50 shadow-md shadow-amber-900/15 transition-all hover:from-amber-700 hover:to-orange-800 disabled:opacity-50 sm:text-base;
   }
+
   .kid-btn-secondary {
-    @apply rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-600 shadow-sm transition-all hover:bg-slate-50 disabled:opacity-50;
+    @apply min-h-[44px] rounded-2xl border-2 border-amber-300 bg-[#faf5eb] px-4 py-2.5 text-sm font-semibold text-amber-900 shadow-sm transition-all hover:bg-amber-50 disabled:opacity-50 sm:text-base;
+  }
+
+  .kid-btn-feedback-o {
+    @apply min-h-[44px] shrink-0 cursor-pointer rounded-full border-2 border-sky-600 bg-sky-100 px-4 py-2 text-sm font-bold text-sky-900 shadow-sm transition-all hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-[46px] sm:px-5;
+  }
+
+  .kid-btn-feedback-r {
+    @apply min-h-[44px] shrink-0 cursor-pointer rounded-full border-2 border-amber-600 bg-amber-100 px-4 py-2 text-sm font-bold text-amber-900 shadow-sm transition-all hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-[46px] sm:px-5;
+  }
+
+  .kid-btn-feedback-i {
+    @apply min-h-[44px] shrink-0 cursor-pointer rounded-full border-2 border-emerald-600 bg-emerald-100 px-4 py-2 text-sm font-bold text-emerald-900 shadow-sm transition-all hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-[46px] sm:px-5;
+  }
+
+  .kid-btn-feedback-d {
+    @apply min-h-[44px] shrink-0 cursor-pointer rounded-full border-2 border-violet-600 bg-violet-100 px-4 py-2 text-sm font-bold text-violet-900 shadow-sm transition-all hover:bg-violet-200 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-[46px] sm:px-5;
+  }
+
+  .orid-nav-link-active {
+    @apply bg-amber-100 text-amber-900;
+  }
+
+  .orid-nav-link {
+    @apply text-amber-900/65 hover:bg-amber-50 hover:text-amber-900;
   }
 }
