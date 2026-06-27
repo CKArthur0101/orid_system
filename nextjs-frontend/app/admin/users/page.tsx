@@ -45,6 +45,7 @@ type AdminUser = {
   display_name: string | null;
   role: string;
   is_active: boolean;
+  orid_condition: "experimental" | "control";
   class_names: string[];
   class_ids: string[];
 };
@@ -54,6 +55,7 @@ type UserForm = {
   display_name: string;
   password: string;
   role: "student" | "teacher";
+  orid_condition: "experimental" | "control";
   class_ids: string[];
   is_active: boolean;
 };
@@ -63,6 +65,7 @@ const emptyForm = (): UserForm => ({
   display_name: "",
   password: "",
   role: "student",
+  orid_condition: "experimental",
   class_ids: [],
   is_active: true,
 });
@@ -71,6 +74,11 @@ const ROLE_LABEL: Record<string, string> = {
   student: "學生",
   teacher: "教師",
   admin: "管理員",
+};
+
+const CONDITION_LABEL: Record<string, string> = {
+  experimental: "實驗組",
+  control: "控制組",
 };
 
 function nextSortDirection(
@@ -169,6 +177,7 @@ export default function AdminUsersPage() {
       display_name: u.display_name ?? "",
       password: "",
       role: u.role === "teacher" ? "teacher" : "student",
+      orid_condition: u.orid_condition === "control" ? "control" : "experimental",
       class_ids: [...u.class_ids],
       is_active: u.is_active,
     });
@@ -205,6 +214,7 @@ export default function AdminUsersPage() {
           email: form.email.trim(),
           display_name: form.display_name.trim() || null,
           role: form.role,
+          orid_condition: form.orid_condition,
           is_active: form.is_active,
           class_ids: form.class_ids,
         };
@@ -235,6 +245,7 @@ export default function AdminUsersPage() {
             display_name: form.display_name.trim() || null,
             password: form.password.trim(),
             role: form.role,
+            orid_condition: form.orid_condition,
             class_ids: form.class_ids,
           }),
         });
@@ -306,6 +317,7 @@ export default function AdminUsersPage() {
                   <SortableTableHead field="email" label="登入帳號" sort={sort} onSort={handleSort} />
                   <SortableTableHead field="display_name" label="顯示名稱" sort={sort} onSort={handleSort} />
                   <SortableTableHead field="role" label="角色" sort={sort} onSort={handleSort} />
+                  <TableHead>組別</TableHead>
                   <SortableTableHead field="class" label="班級" sort={sort} onSort={handleSort} />
                   <TableHead>密碼</TableHead>
                   <TableHead>狀態</TableHead>
@@ -318,6 +330,20 @@ export default function AdminUsersPage() {
                     <TableCell className="font-medium">{u.email}</TableCell>
                     <TableCell>{u.display_name || "—"}</TableCell>
                     <TableCell>{ROLE_LABEL[u.role] ?? u.role}</TableCell>
+                    <TableCell>
+                      {u.role !== "admin" && (
+                        <Badge
+                          variant="outline"
+                          className={
+                            u.orid_condition === "control"
+                              ? "border-orange-300 text-orange-700"
+                              : "border-blue-300 text-blue-700"
+                          }
+                        >
+                          {CONDITION_LABEL[u.orid_condition] ?? u.orid_condition}
+                        </Badge>
+                      )}
+                    </TableCell>
                     <TableCell>
                       <div className="flex flex-wrap gap-1">
                         {u.class_names.length
@@ -424,6 +450,21 @@ export default function AdminUsersPage() {
                     <SelectContent>
                       <SelectItem value="student">學生</SelectItem>
                       <SelectItem value="teacher">教師</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>研究組別</Label>
+                  <Select
+                    value={form.orid_condition}
+                    onValueChange={(v) => setForm({ ...form, orid_condition: v as "experimental" | "control" })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="experimental">實驗組（AI 個人化回饋）</SelectItem>
+                      <SelectItem value="control">控制組（固定提示小幫手）</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

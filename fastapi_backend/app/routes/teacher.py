@@ -24,6 +24,7 @@ from app.models import (
     OridWeekSubmission,
     OridFeedbackEvent,
     OridPostTestScore,
+    OridBadgeEvent,
 )
 from app.schemas import (
     OridMessageRead,
@@ -278,6 +279,12 @@ def _extract_submission_research_fields(content: str | None) -> dict[str, str]:
         fields[f"{stage}_feedback_ok"] = ""
         fields[f"{stage}_rubric_focus"] = ""
         fields[f"{stage}_rubric_level_estimate"] = ""
+    # Score fields
+    fields["total_score"] = ""
+    fields["orid_subtotal"] = ""
+    fields["sel_subtotal"] = ""
+    # Badge snapshot
+    fields["earned_badges"] = ""
 
     if not content:
         return fields
@@ -285,26 +292,43 @@ def _extract_submission_research_fields(content: str | None) -> dict[str, str]:
         obj = json.loads(content)
     except Exception:
         return fields
-    stages = obj.get("stages") if isinstance(obj, dict) else None
-    if not isinstance(stages, dict):
+    if not isinstance(obj, dict):
         return fields
 
-    for stage in ("O", "R", "I", "D"):
-        stage_obj = stages.get(stage)
-        if not isinstance(stage_obj, dict):
-            continue
-        fields[f"{stage}_text"] = str(stage_obj.get("d1") or "").strip()
-        feedback = stage_obj.get("feedback")
-        if not isinstance(feedback, dict):
-            continue
-        d1_feedback = feedback.get("d1")
-        if not isinstance(d1_feedback, dict):
-            continue
-        fields[f"{stage}_feedback_ok"] = _csv_bool(d1_feedback.get("ok"))
-        meta = d1_feedback.get("meta")
-        if isinstance(meta, dict):
-            fields[f"{stage}_rubric_focus"] = str(meta.get("rubric_focus") or "").strip()
-            fields[f"{stage}_rubric_level_estimate"] = str(meta.get("rubric_level_estimate") or "").strip()
+    stages = obj.get("stages")
+    if isinstance(stages, dict):
+        for stage in ("O", "R", "I", "D"):
+            stage_obj = stages.get(stage)
+            if not isinstance(stage_obj, dict):
+                continue
+            fields[f"{stage}_text"] = str(stage_obj.get("d1") or "").strip()
+            feedback = stage_obj.get("feedback")
+            if not isinstance(feedback, dict):
+                continue
+            d1_feedback = feedback.get("d1")
+            if not isinstance(d1_feedback, dict):
+                continue
+            fields[f"{stage}_feedback_ok"] = _csv_bool(d1_feedback.get("ok"))
+            meta = d1_feedback.get("meta")
+            if isinstance(meta, dict):
+                fields[f"{stage}_rubric_focus"] = str(meta.get("rubric_focus") or "").strip()
+                fields[f"{stage}_rubric_level_estimate"] = str(meta.get("rubric_level_estimate") or "").strip()
+
+    # Score snapshot from writing content
+    score_snap = obj.get("score")
+    if isinstance(score_snap, dict):
+        if score_snap.get("totalScore") is not None:
+            fields["total_score"] = str(score_snap["totalScore"])
+        if score_snap.get("oridSubtotal") is not None:
+            fields["orid_subtotal"] = str(score_snap["oridSubtotal"])
+        if score_snap.get("selSubtotal") is not None:
+            fields["sel_subtotal"] = str(score_snap["selSubtotal"])
+
+    # Badge snapshot from writing content
+    earned_badges = obj.get("earnedBadges")
+    if isinstance(earned_badges, list):
+        fields["earned_badges"] = "|".join(str(b) for b in earned_badges)
+
     return fields
 
 
@@ -863,6 +887,41 @@ async def export_class_csv(
             if submission.user_id not in submission_fields_by_student:
                 submission_fields_by_student[submission.user_id] = _extract_submission_research_fields(submission.content)
 
+    # Fetch user orid_condition
+    condition_by_student: dict[UUID, str] = {}
+    if student_ids:
+        user_res = await db.execute(select(User.id, User.orid_condition).where(User.id.in_(student_ids)))
+        for uid_val, cond in user_res.all():
+            condition_by_student[uid_val] = str(cond or "experimental")
+
+    # Fetch badge events per student per week
+    badge_events_by_student: dict[UUID, list[OridBadgeEvent]] = {}
+    if student_ids:
+        badge_res = await db.execute(
+            select(OridBadgeEvent)
+            .where(
+                OridBadgeEvent.user_id.in_(student_ids),
+                OridBadgeEvent.week == week,
+            )
+            .order_by(OridBadgeEvent.created_at.asc())
+        )
+        for evt in badge_res.scalars().all():
+            badge_events_by_student.setdefault(evt.user_id, []).append(evt)
+
+    def _badge_events_to_fields(events: list[OridBadgeEvent]) -> dict[str, str]:
+        fields: dict[str, str] = {}
+        badge_ids = ["badge_start", "badge_30", "badge_60", "badge_90"]
+        for bid in badge_ids:
+            earned_evt = next((e for e in events if e.badge_id == bid), None)
+            fields[f"{bid}_earned"] = "1" if earned_evt else "0"
+            fields[f"{bid}_earned_at"] = earned_evt.created_at.isoformat() if earned_evt else ""
+        total_scores = [e.total_score for e in events if e.total_score is not None]
+        fields["badge_max_score"] = str(max(total_scores)) if total_scores else ""
+        fields["badge_feedback_count"] = str(max((e.feedback_count or 0) for e in events) if events else 0)
+        fields["badge_prompt_view_count"] = str(max((e.prompt_view_count or 0) for e in events) if events else 0)
+        fields["badge_word_count"] = str(max((e.word_count or 0) for e in events) if events else 0)
+        return fields
+
     output = io.StringIO()
     writer = csv.writer(output)
     research_headers: list[str] = []
@@ -875,19 +934,32 @@ async def export_class_csv(
                 f"{stage}_rubric_level_estimate",
             ]
         )
+    badge_headers = [
+        "badge_start_earned", "badge_start_earned_at",
+        "badge_30_earned", "badge_30_earned_at",
+        "badge_60_earned", "badge_60_earned_at",
+        "badge_90_earned", "badge_90_earned_at",
+        "badge_max_score", "badge_feedback_count",
+        "badge_prompt_view_count", "badge_word_count",
+    ]
     writer.writerow([
-        "姓名", "學生信箱", "目前階段", "對話輪數",
+        "姓名", "學生信箱", "研究組別", "目前階段", "對話輪數",
         "寫作完成格數", "回饋點擊次數", "回饋通過次數", "回饋通過格數",
         "後測_O", "後測_R", "後測_I", "後測_D", "後測_ALL",
+        "總分_90", "ORID分", "SEL分", "已獲徽章",
         *research_headers,
+        *badge_headers,
     ])
     for row in overview.students:
         uid = row.student_id
         pts = pt_by_student.get(uid, {})
         research_fields = submission_fields_by_student.get(uid, _extract_submission_research_fields(None))
+        badge_fields = _badge_events_to_fields(badge_events_by_student.get(uid, []))
+        condition_label = condition_by_student.get(uid, "experimental")
         writer.writerow([
             row.student_display_name,
             row.student_email,
+            condition_label,
             row.current_stage,
             row.interaction_count,
             row.writing_completed_stages,
@@ -899,7 +971,12 @@ async def export_class_csv(
             pts.get("I", ""),
             pts.get("D", ""),
             pts.get("ALL", ""),
+            research_fields.get("total_score", ""),
+            research_fields.get("orid_subtotal", ""),
+            research_fields.get("sel_subtotal", ""),
+            research_fields.get("earned_badges", ""),
             *(research_fields.get(h, "") for h in research_headers),
+            *(badge_fields.get(h, "") for h in badge_headers),
         ])
 
     output.seek(0)

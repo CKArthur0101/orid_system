@@ -15,6 +15,9 @@ class Base(DeclarativeBase):
 class User(SQLAlchemyBaseUserTableUUID, Base):
     role = Column(String, nullable=False, default="student", server_default="student")
     display_name = Column(String(128), nullable=True)
+    # experimental / control; defaults to experimental to preserve existing AI sessions
+    orid_condition = Column(String(16), nullable=False, default="experimental", server_default="experimental")
+    orid_condition_updated_at = Column(DateTime(timezone=True), nullable=True)
     items = relationship("Item", back_populates="user", cascade="all, delete-orphan")
 
 
@@ -207,3 +210,29 @@ class OridPostTestScore(Base):
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class OridBadgeEvent(Base):
+    """One row per badge earned per user per session per week. Append-only research log."""
+
+    __tablename__ = "orid_badge_events"
+    __table_args__ = (
+        UniqueConstraint("user_id", "session_id", "week", "badge_id", name="uq_badge_user_session_week_badge"),
+        Index("ix_orid_badge_events_user_week", "user_id", "week"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False, index=True)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("orid_sessions.id"), nullable=False)
+    reading_id = Column(UUID(as_uuid=True), ForeignKey("readings.id"), nullable=True)
+    week = Column(Integer, nullable=False)
+    task_type = Column(String(32), nullable=True)    # orid_stage / synthesis
+    condition = Column(String(32), nullable=True)    # genai / control
+    badge_id = Column(String(32), nullable=False)    # badge_start / badge_30 / badge_60 / badge_90
+    total_score = Column(Integer, nullable=True)
+    word_count = Column(Integer, nullable=True)
+    feedback_count = Column(Integer, nullable=True, default=0)
+    prompt_view_count = Column(Integer, nullable=True, default=0)
+    used_feedback_or_prompt = Column(Boolean, nullable=False, default=False)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

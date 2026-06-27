@@ -4,11 +4,16 @@ import { useParams } from "next/navigation";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { BookHelperAvatar } from "@/components/orid/BookIllustration";
+import { BadgeDisplay } from "@/components/orid/BadgeDisplay";
+import { BadgeModal } from "@/components/orid/BadgeModal";
 import { FeedbackGuideCard } from "@/components/orid/FeedbackGuideCard";
 import { OridWeekHero } from "@/components/orid/OridWeekHero";
 import { OridPartnerMascot } from "@/components/orid/OridMascotImage";
 import { PersimmonBullet } from "@/components/orid/PersimmonBullet";
+import { WritingPromptHelper } from "@/components/orid/WritingPromptHelper";
 import { getBookWeekArt } from "@/lib/orid-book-art";
+import { type BadgeId, calculateEarnedBadges, getNewlyEarnedBadges } from "@/lib/orid/badgeRules";
+import { formatScore, type ScoreResult } from "@/lib/orid/rubricScoring";
 import {
   DRAFT_SAVE_ENCOURAGEMENT,
   STAGE_MISSION_META,
@@ -56,6 +61,9 @@ type OridWritingV1 = {
   synthesis_align_scaffold?: string;
   synthesis_short_draft?: string;
   synthesis_active_phase?: string;
+  /** Persisted score snapshot for reload / research export */
+  score?: Pick<ScoreResult, "totalScore" | "maxTotal">;
+  earnedBadges?: BadgeId[];
 };
 
 type BookPackV1 = {
@@ -93,6 +101,33 @@ function formatApiError(status: number, body: string, fallback: string) {
 
 function localDraftStorageKey(sessionId: string, week: number) {
   return `orid-writing-draft:${sessionId}:${week}`;
+}
+
+function mergeProgressIntoWriting(
+  writing: OridWritingV1,
+  totalScore: number | null,
+  badges: BadgeId[],
+): OridWritingV1 {
+  const next: OridWritingV1 = { ...writing };
+  if (totalScore != null) {
+    next.score = { totalScore, maxTotal: 90 };
+  }
+  if (badges.length > 0) {
+    next.earnedBadges = Array.from(new Set(badges)) as BadgeId[];
+  }
+  return next;
+}
+
+function extractProgressFromWriting(writing: OridWritingV1): {
+  totalScore: number | null;
+  earnedBadges: BadgeId[];
+} {
+  const totalScore =
+    writing.score?.totalScore != null ? Number(writing.score.totalScore) : null;
+  const earnedBadges = Array.isArray(writing.earnedBadges)
+    ? (writing.earnedBadges.filter(Boolean) as BadgeId[])
+    : [];
+  return { totalScore, earnedBadges };
 }
 
 const STAGE_CARD_META: Record<StageKey, { title: string; question: string }> = {
@@ -249,6 +284,12 @@ function normalizeWritingContent(raw: unknown, week: number): OridWritingV1 {
     stages,
     ...(flow ? { week2_flow: flow } : {}),
     ...(typeof o?.synthesis_draft === "string" ? { synthesis_draft: o.synthesis_draft } : {}),
+    ...(typeof o?.score?.totalScore === "number"
+      ? { score: { totalScore: o.score.totalScore, maxTotal: 90 } }
+      : {}),
+    ...(Array.isArray(o?.earnedBadges)
+      ? { earnedBadges: o.earnedBadges.filter(Boolean) as BadgeId[] }
+      : {}),
   };
 
   if (weekNum === 2 && flow === "synthesis") {
@@ -410,6 +451,13 @@ export default function WeekBookPage() {
   const [focusStage, setFocusStage] = useState<StageKey>("O");
   const [fbLoading, setFbLoading] = useState(false);
   const [fbError, setFbError] = useState<string | null>(null);
+
+  // Score and badge state
+  const [totalScore, setTotalScore] = useState<number | null>(null);
+  const [earnedBadges, setEarnedBadges] = useState<BadgeId[]>([]);
+  const [badgeModalQueue, setBadgeModalQueue] = useState<BadgeId[]>([]);
+  const [promptViewCount, setPromptViewCount] = useState(0);
+  const [progressHydratedSessionId, setProgressHydratedSessionId] = useState<string | null>(null);
   /** 避免連續按「取得回饋」時，先完成的請求在 finally 把 loading 清掉，導致後續請求沒有思考動畫 */
   const fbInflightRef = useRef(0);
 
@@ -510,6 +558,10 @@ export default function WeekBookPage() {
       setFocusStage("O");
       setMessages([]);
       setSeededInitial(false);
+      setTotalScore(null);
+      setEarnedBadges([]);
+      setBadgeModalQueue([]);
+      setProgressHydratedSessionId(null);
     } catch (e: any) {
       setError(e?.message ?? "重新開始失敗");
     } finally {
@@ -596,6 +648,8 @@ export default function WeekBookPage() {
   const aiPartnerShellClass = showSynthesisColumn
     ? "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[35vh] md:order-2 md:col-start-2 md:h-full md:row-start-1 xl:order-3 xl:col-start-3"
     : "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[35vh] md:order-2 md:col-start-2 md:h-full md:row-start-1";
+
+  const isControl = isControlConditionValue(condition);
 
   const activeStageDef = STAGES.find((s) => s.key === focusStage) ?? STAGES[0];
   const activeStage = activeStageDef.key;
@@ -747,7 +801,15 @@ export default function WeekBookPage() {
         }
 
         if (latest?.content) {
-          setWritingData(parseWritingRecordContent(latest.content, weekNum));
+          const parsed = parseWritingRecordContent(latest.content, weekNum);
+          setWritingData(parsed);
+          const fromWriting = extractProgressFromWriting(parsed);
+          if (fromWriting.totalScore != null) setTotalScore(fromWriting.totalScore);
+          if (fromWriting.earnedBadges.length > 0) {
+            setEarnedBadges((prev) =>
+              Array.from(new Set([...prev, ...fromWriting.earnedBadges])) as BadgeId[],
+            );
+          }
         } else {
           let restored = false;
           if (typeof window !== "undefined") {
@@ -755,7 +817,15 @@ export default function WeekBookPage() {
               const raw = localStorage.getItem(localDraftStorageKey(sessionId, weekNum));
               if (raw) {
                 const parsed = JSON.parse(raw) as unknown;
-                setWritingData(normalizeWritingContent(parsed, weekNum));
+                const normalized = normalizeWritingContent(parsed, weekNum);
+                setWritingData(normalized);
+                const fromWriting = extractProgressFromWriting(normalized);
+                if (fromWriting.totalScore != null) setTotalScore(fromWriting.totalScore);
+                if (fromWriting.earnedBadges.length > 0) {
+                  setEarnedBadges((prev) =>
+                    Array.from(new Set([...prev, ...fromWriting.earnedBadges])) as BadgeId[],
+                  );
+                }
                 restored = true;
               }
             } catch {
@@ -774,6 +844,41 @@ export default function WeekBookPage() {
 
     return () => ac.abort();
   }, [sessionId, weekNum, writingHydratedSessionId]);
+
+  useEffect(() => {
+    if (!sessionId || progressHydratedSessionId === sessionId) return;
+    const ac = new AbortController();
+
+    (async () => {
+      try {
+        const qs = new URLSearchParams({
+          session_id: sessionId,
+          week: String(weekNum),
+        });
+        const res = await fetch(`/api/orid/progress?${qs.toString()}`, {
+          credentials: "include",
+          cache: "no-store",
+          signal: ac.signal,
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data?.totalScore != null) {
+          setTotalScore(Number(data.totalScore));
+        }
+        if (Array.isArray(data?.earnedBadges) && data.earnedBadges.length > 0) {
+          setEarnedBadges((prev) =>
+            Array.from(new Set([...prev, ...(data.earnedBadges as BadgeId[])])) as BadgeId[],
+          );
+        }
+      } catch {
+        // ignore — progress restore is best-effort
+      } finally {
+        if (!ac.signal.aborted) setProgressHydratedSessionId(sessionId);
+      }
+    })();
+
+    return () => ac.abort();
+  }, [sessionId, weekNum, progressHydratedSessionId]);
 
   /** 聊天載入後：第 2 週整合寫作保證出現一次開場架構（不受 seededInitial 影響）；其餘週次維持原「空聊天才種 ORID 開場」。 */
   useEffect(() => {
@@ -818,6 +923,33 @@ export default function WeekBookPage() {
     const reply = String(text ?? "").trim();
     if (!reply) return;
     setMessages((prev) => [...prev, { role: "ai", text: reply }]);
+  }
+
+  async function persistWritingSnapshot(
+    snapshot: OridWritingV1,
+    totalScore: number | null,
+    badges: BadgeId[],
+  ) {
+    if (!sessionId || !readingId) return;
+    const payload = mergeProgressIntoWriting(snapshot, totalScore, badges);
+    try {
+      const r = await fetch(`/api/orid/writings`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reading_id: readingId,
+          session_id: sessionId,
+          week: weekNum,
+          content: JSON.stringify(payload),
+        }),
+      });
+      if (!r.ok) return;
+      const data = await r.json();
+      if (isUuid(data?.id)) setWritingId(String(data.id));
+    } catch {
+      // silent — progress restore still works from badge events
+    }
   }
 
   async function runFeedback(stage: StageKey) {
@@ -871,26 +1003,51 @@ export default function WeekBookPage() {
         meta: data?.meta ?? null,
       };
 
-      setWritingData((prev) => {
-        const next = {
-          ...prev,
-          stages: {
-            ...prev.stages,
-            [outStage]: {
-              ...prev.stages[outStage],
-              feedback: {
-                ...(prev.stages[outStage].feedback ?? {}),
-                [outDraft]: fb,
-              },
+      const nextWriting: OridWritingV1 = {
+        ...writingData,
+        stages: {
+          ...writingData.stages,
+          [outStage]: {
+            ...writingData.stages[outStage],
+            feedback: {
+              ...(writingData.stages[outStage].feedback ?? {}),
+              [outDraft]: fb,
             },
           },
-        };
-        return next;
-      });
+        },
+      };
       showEncourage(STAGE_MISSION_META[outStage].submitEncouragement);
 
       const savedId = String(data?.meta?.saved_to_writing_id ?? "");
       if (isUuid(savedId)) setWritingId(savedId);
+
+      // Update score and badges from meta (with client-side fallback)
+      const meta = data?.meta ?? {};
+      const scoreFromMeta =
+        meta.score?.totalScore != null ? Number(meta.score.totalScore) : null;
+      let mergedBadges: BadgeId[] = Array.isArray(meta.earnedBadges)
+        ? (meta.earnedBadges as BadgeId[])
+        : [];
+      if (mergedBadges.length === 0) {
+        mergedBadges = calculateEarnedBadges({
+          hasWritingContent: text.length > 0,
+          hasUsedFeedbackOrPrompt: true,
+          totalScore: scoreFromMeta,
+        });
+      }
+      const allBadges = Array.from(new Set([...earnedBadges, ...mergedBadges])) as BadgeId[];
+      const newOnes: BadgeId[] =
+        Array.isArray(meta.newlyEarnedBadges) && meta.newlyEarnedBadges.length > 0
+          ? (meta.newlyEarnedBadges as BadgeId[])
+          : getNewlyEarnedBadges(earnedBadges, allBadges);
+
+      setWritingData(mergeProgressIntoWriting(nextWriting, scoreFromMeta, allBadges));
+      if (scoreFromMeta != null) setTotalScore(scoreFromMeta);
+      setEarnedBadges(allBadges);
+      if (newOnes.length > 0) {
+        setBadgeModalQueue((prev) => [...prev, ...newOnes.filter((b) => !prev.includes(b))]);
+      }
+      await persistWritingSnapshot(nextWriting, scoreFromMeta, allBadges);
     } catch (e: any) {
       setFbError(e?.message ?? "回饋失敗");
     } finally {
@@ -951,6 +1108,47 @@ export default function WeekBookPage() {
     }
   }
 
+  async function runPromptUsage() {
+    if (!sessionId) return;
+    const wordCount = String(writingData.stages[focusStage]?.d1 ?? "").trim().length;
+    try {
+      const r = await fetch("/api/orid/prompt-usage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          session_id: sessionId,
+          week: weekNum,
+          stage: focusStage,
+          word_count: wordCount,
+          prompt_view_count: 1,
+        }),
+      });
+      if (!r.ok) return;
+      const data = await r.json();
+      setPromptViewCount(data.prompt_view_count ?? 0);
+      if (Array.isArray(data.earnedBadges)) {
+        const hasContent = wordCount > 0;
+        const currentBadges = calculateEarnedBadges({
+          hasWritingContent: hasContent,
+          hasUsedFeedbackOrPrompt: true,
+          totalScore: totalScore,
+        });
+        const merged = Array.from(
+          new Set([...(data.earnedBadges as BadgeId[]), ...currentBadges]),
+        ) as BadgeId[];
+        const newOnes = getNewlyEarnedBadges(earnedBadges, merged);
+        setEarnedBadges(merged);
+        if (newOnes.length > 0) {
+          setBadgeModalQueue((prev) => [...prev, ...newOnes]);
+        }
+        await persistWritingSnapshot(writingData, totalScore, merged);
+      }
+    } catch {
+      // silently ignore prompt usage logging errors
+    }
+  }
+
   async function saveWriting(label: "draft" | "submit") {
     if (!sessionId || !readingId) return;
 
@@ -962,9 +1160,12 @@ export default function WeekBookPage() {
 
       if (label === "draft") {
         try {
+          const payload = mergeProgressIntoWriting(writingData, totalScore, earnedBadges);
           if (typeof window !== "undefined") {
-            localStorage.setItem(localDraftStorageKey(sessionId, weekNum), JSON.stringify(writingData));
+            localStorage.setItem(localDraftStorageKey(sessionId, weekNum), JSON.stringify(payload));
           }
+          await persistWritingSnapshot(writingData, totalScore, earnedBadges);
+          setWritingData(payload);
           setSaveMsg(DRAFT_SAVE_ENCOURAGEMENT);
         } catch {
           setWritingError("無法寫入本機儲存");
@@ -972,15 +1173,16 @@ export default function WeekBookPage() {
         return;
       }
 
+      const payload = mergeProgressIntoWriting(writingData, totalScore, earnedBadges);
       try {
         if (typeof window !== "undefined") {
-          localStorage.setItem(localDraftStorageKey(sessionId, weekNum), JSON.stringify(writingData));
+          localStorage.setItem(localDraftStorageKey(sessionId, weekNum), JSON.stringify(payload));
         }
       } catch {
         /* ignore local backup failure; server submit may still succeed */
       }
 
-      const content = JSON.stringify(writingData);
+      const content = JSON.stringify(payload);
       const r = await fetch(`/api/orid/writings`, {
         method: "POST",
         credentials: "include",
@@ -999,6 +1201,7 @@ export default function WeekBookPage() {
       const data = text ? JSON.parse(text) : null;
       if (isUuid(data?.id)) setWritingId(String(data.id));
 
+      setWritingData(payload);
       try {
         if (typeof window !== "undefined") {
           localStorage.removeItem(localDraftStorageKey(sessionId, weekNum));
@@ -1101,15 +1304,20 @@ export default function WeekBookPage() {
             <div className="flex min-h-0 w-full flex-1 flex-col p-2">
               <div
                 className={[
-                  "relative flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-2xl border-2 border-t-4 bg-white shadow-sm transition-all",
+                  "relative flex min-h-0 w-full flex-1 flex-col rounded-2xl border-2 border-t-4 bg-white shadow-sm transition-all",
                   activeTheme.topBorder,
                   activeTheme.cardFocus,
                 ].join(" ")}
               >
-                <div className="flex shrink-0 items-start justify-between gap-2 px-2.5 pb-1 pt-2 sm:px-3">
-                  <div className="min-w-0">
-                    <div className={`text-xs font-bold sm:text-sm ${activeTheme.titleColor}`}>
-                      {weekNum === 1 ? activeCardMeta.title : STAGE_TITLES[activeStage]}
+                <div className="relative z-20 flex shrink-0 items-start justify-between gap-2 overflow-visible px-2.5 pb-1 pt-2 sm:px-3">
+                  <div className="min-w-0 flex-1 pr-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="inline-flex shrink-0 items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900/80 ring-1 ring-amber-200">
+                        {formatScore(totalScore)}
+                      </span>
+                      <div className={`text-xs font-bold sm:text-sm ${activeTheme.titleColor}`}>
+                        {weekNum === 1 ? activeCardMeta.title : STAGE_TITLES[activeStage]}
+                      </div>
                     </div>
                     <div className="text-[11px] leading-snug text-amber-900/65 sm:text-xs">
                       {weekNum === 1 ? activeCardMeta.question : STAGE_WRITING_HINT[activeStage]}
@@ -1125,19 +1333,34 @@ export default function WeekBookPage() {
                       {activeStageStatus === "passed" ? "✓ 已完成" : STAGE_STATUS_TEXT[activeStageStatus]}
                     </span>
                   </div>
-                  {showStageFeedbackButtons ? (
-                    <button
-                      type="button"
-                      className={activeTheme.btnClass}
-                      disabled={!sessionId || fbLoading}
-                      onClick={() => runFeedback(activeStage)}
-                    >
-                      {fbLoading ? "…" : "取得回饋"}
-                    </button>
-                  ) : null}
+                  {/* 徽章在左、按鈕在右，同一橫列 */}
+                  <div className="flex shrink-0 flex-row items-center gap-2 overflow-visible">
+                    <BadgeDisplay earnedBadges={earnedBadges} size={32} />
+                    {showStageFeedbackButtons ? (
+                      isControl ? (
+                        <button
+                          type="button"
+                          className={[activeTheme.btnClass, "shrink-0"].join(" ")}
+                          disabled={!sessionId}
+                          onClick={() => void runPromptUsage()}
+                        >
+                          查看寫作提示
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className={[activeTheme.btnClass, "shrink-0"].join(" ")}
+                          disabled={!sessionId || fbLoading}
+                          onClick={() => runFeedback(activeStage)}
+                        >
+                          {fbLoading ? "…" : "取得回饋"}
+                        </button>
+                      )
+                    ) : null}
+                  </div>
                 </div>
 
-                <div className="relative flex min-h-0 flex-1 flex-col px-2 pt-0 sm:px-2.5">
+                <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden px-2 pt-0 sm:px-2.5">
                   {weekNum === 1 ? (
                     <div className="mb-1 shrink-0 text-[10px] text-amber-900/60 sm:text-[11px]">
                       {activeMissionMeta.helperHint}
@@ -1271,9 +1494,17 @@ export default function WeekBookPage() {
 
         <div className={aiPartnerShellClass}>
           <div className="kid-section-header-partner">
-            <div className="text-sm font-bold text-amber-950 sm:text-base">AI 小幫手的回饋夥伴</div>
+            <div className="text-sm font-bold text-amber-950 sm:text-base">
+              {isControl ? "寫作提示小幫手" : "AI 小幫手的回饋夥伴"}
+            </div>
           </div>
 
+          {isControl ? (
+            <WritingPromptHelper
+              focusStage={focusStage}
+              onPromptViewed={() => void runPromptUsage()}
+            />
+          ) : (
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#fffcf7]">
             <div className="shrink-0 border-b border-amber-100 px-3 py-3 sm:px-4">
               <div className="flex items-start gap-3">
@@ -1374,8 +1605,17 @@ export default function WeekBookPage() {
               </div>
             )}
           </div>
+          )}
         </div>
       </div>
+
+      {/* Badge congratulations modal */}
+      {badgeModalQueue.length > 0 && (
+        <BadgeModal
+          badgeId={badgeModalQueue[0]}
+          onClose={() => setBadgeModalQueue((prev) => prev.slice(1))}
+        />
+      )}
     </div>
   );
 }

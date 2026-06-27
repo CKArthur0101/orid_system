@@ -27,6 +27,7 @@ class UserRead(schemas.BaseUser[uuid.UUID]):
     email: str  # type: ignore[assignment]
     role: str = "student"
     display_name: str | None = None
+    orid_condition: str = "experimental"
 
 
 class UserCreate(schemas.BaseUserCreate):
@@ -84,6 +85,7 @@ class OridMeCapabilitiesRead(BaseModel):
 # Admin (user / class management)
 # ----------------------------
 ADMIN_ASSIGNABLE_ROLES = frozenset({"student", "teacher"})
+ADMIN_ASSIGNABLE_CONDITIONS = frozenset({"experimental", "control"})
 
 
 class AdminClassSummary(BaseModel):
@@ -131,6 +133,7 @@ class AdminUserListItem(BaseModel):
     display_name: str | None = None
     role: str
     is_active: bool
+    orid_condition: str = "experimental"
     class_names: list[str] = Field(default_factory=list)
     class_ids: list[UUID] = Field(default_factory=list)
 
@@ -145,6 +148,7 @@ class AdminUserCreate(BaseModel):
     password: str = Field(..., min_length=1, max_length=128)
     display_name: str | None = Field(None, max_length=128)
     role: str = "student"
+    orid_condition: str = "experimental"
     class_ids: list[UUID] = Field(default_factory=list)
 
     @field_validator("email")
@@ -171,11 +175,20 @@ class AdminUserCreate(BaseModel):
             raise ValueError("role must be student or teacher")
         return r
 
+    @field_validator("orid_condition")
+    @classmethod
+    def normalize_orid_condition(cls, v: str) -> str:
+        c = (v or "experimental").strip().lower()
+        if c not in ADMIN_ASSIGNABLE_CONDITIONS:
+            raise ValueError("orid_condition must be experimental or control")
+        return c
+
 
 class AdminUserUpdate(BaseModel):
     email: str | None = Field(None, max_length=128)
     display_name: str | None = Field(None, max_length=128)
     role: str | None = None
+    orid_condition: str | None = None
     is_active: bool | None = None
     new_password: str | None = Field(None, min_length=1, max_length=128)
     class_ids: list[UUID] | None = None
@@ -197,6 +210,16 @@ class AdminUserUpdate(BaseModel):
         if r not in ADMIN_ASSIGNABLE_ROLES:
             raise ValueError("role must be student or teacher")
         return r
+
+    @field_validator("orid_condition")
+    @classmethod
+    def normalize_orid_condition(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        c = v.strip().lower()
+        if c not in ADMIN_ASSIGNABLE_CONDITIONS:
+            raise ValueError("orid_condition must be experimental or control")
+        return c
 
 
 class AdminUserCreateResponse(BaseModel):
@@ -342,6 +365,29 @@ class WritingCoachChatResponse(BaseModel):
     feedback_example: str | None = None
     feedback_improved: str | None = None
     meta: dict[str, Any] = {}
+
+
+# ----------------------------
+# Control group prompt usage
+# ----------------------------
+class PromptUsageRequest(BaseModel):
+    session_id: UUID
+    week: int
+    stage: str
+    word_count: int | None = None
+    prompt_view_count: int = 1  # How many additional views to count in this call
+
+
+class PromptUsageResponse(BaseModel):
+    prompt_view_count: int
+    earnedBadges: list[str] = []
+    newlyEarnedBadges: list[str] = []
+
+
+class OridProgressRead(BaseModel):
+    earnedBadges: list[str] = []
+    totalScore: int | None = None
+    score: dict[str, Any] = {}
 
 
 # ----------------------------

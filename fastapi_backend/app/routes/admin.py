@@ -10,9 +10,12 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_async_session
+from datetime import timezone
+
 from app.models import (
     ClassRoom,
     Item,
+    OridBadgeEvent,
     OridChatMessage,
     OridFeedbackEvent,
     OridPostTestScore,
@@ -96,6 +99,10 @@ async def _class_names_for_user(
     return ids, names
 
 
+def _user_orid_condition(user: User) -> str:
+    return str(getattr(user, "orid_condition", "experimental") or "experimental").strip().lower()
+
+
 def _user_to_list_item(
     user: User,
     class_ids: list[UUID],
@@ -107,6 +114,7 @@ def _user_to_list_item(
         display_name=user.display_name,
         role=_user_role(user),
         is_active=bool(user.is_active),
+        orid_condition=_user_orid_condition(user),
         class_ids=class_ids,
         class_names=class_names,
     )
@@ -125,6 +133,7 @@ def _user_to_detail(
         is_active=bool(user.is_active),
         is_verified=bool(user.is_verified),
         is_superuser=bool(user.is_superuser),
+        orid_condition=_user_orid_condition(user),
         class_ids=class_ids,
         class_names=class_names,
     )
@@ -164,6 +173,7 @@ async def _sync_user_classes(
 
 
 async def _delete_user_cascade(db: AsyncSession, user_id: UUID) -> None:
+    await db.execute(delete(OridBadgeEvent).where(OridBadgeEvent.user_id == user_id))
     await db.execute(delete(OridFeedbackEvent).where(OridFeedbackEvent.user_id == user_id))
     await db.execute(delete(OridStageAttempt).where(OridStageAttempt.user_id == user_id))
     await db.execute(
@@ -244,6 +254,7 @@ async def admin_create_user(
         is_verified=True,
         role=data.role,
         display_name=data.display_name,
+        orid_condition=data.orid_condition,
     )
     db.add(user)
     await db.flush()
@@ -283,6 +294,10 @@ async def admin_update_user(
         if _user_role(user) == "admin":
             raise HTTPException(status_code=400, detail="Cannot change admin role via API")
         user.role = data.role
+    if data.orid_condition is not None:
+        from datetime import datetime
+        user.orid_condition = data.orid_condition
+        user.orid_condition_updated_at = datetime.now(tz=timezone.utc)
     if data.new_password:
         validate_admin_password(data.new_password)
         user.hashed_password = _password_helper.hash(data.new_password)

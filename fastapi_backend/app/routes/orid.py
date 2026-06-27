@@ -20,7 +20,7 @@ from openai import AsyncOpenAI, BadRequestError
 
 from app.database import get_async_session, User
 from app.users import current_active_user
-from app.models import Reading, OridSession, OridChatMessage, OridWeekSubmission, OridStageAttempt, OridFeedbackEvent
+from app.models import Reading, OridSession, OridChatMessage, OridWeekSubmission, OridStageAttempt, OridFeedbackEvent, OridBadgeEvent
 from app.schemas import (
     ReadingCreate, ReadingRead,
     OridSessionCreate, OridSessionRead,
@@ -29,6 +29,9 @@ from app.schemas import (
     OridMeCapabilitiesRead,
     WritingCoachChatRequest,
     WritingCoachChatResponse,
+    PromptUsageRequest,
+    PromptUsageResponse,
+    OridProgressRead,
 )
 
 router = APIRouter(tags=["orid"])
@@ -53,6 +56,21 @@ from app.prompts.builders.coach_chat import (
 )
 from app.prompts.playbook_variants import pick_variant
 from app.utils import strip_markdown_for_student_chat
+from app.services.orid_rubric_scoring import (
+    apply_single_level_estimate,
+    calculate_orid_sel_score,
+    clamp_total_score,
+    collect_levels_from_writing_obj,
+    extract_orid_levels_from_rubric_meta,
+)
+from app.services.orid_badges import (
+    calculate_earned_badges,
+    get_new_badges,
+    get_earned_badges_from_db,
+    load_session_progress,
+    record_badge_events,
+    update_session_score_snapshot,
+)
 from app.prompts.policy.student_input_bucket import (
     classify_student_input,
     skip_book_grounding_enforcement,
@@ -2509,11 +2527,32 @@ async def ensure_session(
     bu = book_unit_from_week(week)
     user_email = getattr(user, "email", None)
 
+    # Determine the effective condition for this user:
+    # admin/test override via URL ?condition=, else use user.orid_condition mapped to session condition.
+    def _resolve_condition(url_override: Optional[str]) -> str:
+        if url_override and _user_can_force_new(user):
+            return normalize_orid_condition(url_override, default=DEFAULT_ORID_CONDITION)
+        user_group = str(getattr(user, "orid_condition", "experimental") or "experimental").strip().lower()
+        return "genai" if user_group == "experimental" else "control"
+
+    def _session_stale(sess: OridSession) -> bool:
+        """True if the user's condition changed after this session was created."""
+        updated_at = getattr(user, "orid_condition_updated_at", None)
+        if updated_at is None:
+            return False
+        sess_created = getattr(sess, "created_at", None)
+        if sess_created is None:
+            return False
+        if sess_created.tzinfo is None:
+            import pytz
+            sess_created = pytz.utc.localize(sess_created)
+        return sess_created < updated_at
+
     if force_new:
         if not _user_can_force_new(user):
             raise HTTPException(status_code=403, detail="force_new 未授權")
         reading = await _get_or_create_reading_for_week(db, week)
-        new_condition = normalize_orid_condition(condition, default=DEFAULT_ORID_CONDITION)
+        new_condition = _resolve_condition(condition)
         new_session = OridSession(
             user_id=user.id,
             reading_id=reading.id,
@@ -2541,32 +2580,34 @@ async def ensure_session(
 
     reading = await _get_or_create_reading_for_week(db, week)
 
-    if session:
+    if session and not _session_stale(session):
         session.reading_id = reading.id
         await db.commit()
         await db.refresh(session)
         await seed_writing_coach_welcome_if_needed(db, session=session, reading=reading)
         return session
 
-    # 舊資料：依當週 reading title 找的 session（無 book_unit）
-    legacy_stmt = (
-        select(OridSession)
-        .join(Reading, OridSession.reading_id == Reading.id)
-        .where(OridSession.user_id == user.id, Reading.title == title)
-        .order_by(OridSession.created_at.desc())
-        .limit(1)
-    )
-    s2 = await db.execute(legacy_stmt)
-    session = s2.scalars().first()
-    if session:
-        session.book_unit = bu
-        session.reading_id = reading.id
-        await db.commit()
-        await db.refresh(session)
-        await seed_writing_coach_welcome_if_needed(db, session=session, reading=reading)
-        return session
+    # 舊資料：依當週 reading title 找的 session（無 book_unit），也要檢查是否過期
+    if not session:
+        legacy_stmt = (
+            select(OridSession)
+            .join(Reading, OridSession.reading_id == Reading.id)
+            .where(OridSession.user_id == user.id, Reading.title == title)
+            .order_by(OridSession.created_at.desc())
+            .limit(1)
+        )
+        s2 = await db.execute(legacy_stmt)
+        session = s2.scalars().first()
+        if session and not _session_stale(session):
+            session.book_unit = bu
+            session.reading_id = reading.id
+            await db.commit()
+            await db.refresh(session)
+            await seed_writing_coach_welcome_if_needed(db, session=session, reading=reading)
+            return session
 
-    new_condition = normalize_orid_condition(condition, default=DEFAULT_ORID_CONDITION)
+    # Create new session (either no existing session, or existing session is stale due to condition change)
+    new_condition = _resolve_condition(condition)
     new_session = OridSession(
         user_id=user.id,
         reading_id=reading.id,
@@ -2581,6 +2622,97 @@ async def ensure_session(
     await db.refresh(new_session)
     await seed_writing_coach_welcome_if_needed(db, session=new_session, reading=reading)
     return new_session
+
+
+@router.get("/progress", response_model=OridProgressRead)
+async def get_orid_progress(
+    session_id: UUID = Query(...),
+    week: int = Query(..., ge=1, le=6),
+    db: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_active_user),
+):
+    """Return persisted badges and score for the student's session/week."""
+    r = await db.execute(select(OridSession).filter(OridSession.id == session_id))
+    session = r.scalars().first()
+    if not session or session.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    writing_content = await _fetch_latest_writing_content_for_week(
+        db, user.id, session.id, week
+    )
+    progress = await load_session_progress(
+        db,
+        user_id=user.id,
+        session_id=session.id,
+        week=week,
+        writing_content=writing_content,
+        empty_writing_factory=_ensure_orid_writing_v1,
+    )
+    return OridProgressRead(**progress)
+
+
+@router.post("/prompt-usage", response_model=PromptUsageResponse)
+async def record_prompt_usage(
+    data: PromptUsageRequest,
+    db: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_active_user),
+):
+    """Control group: record that user viewed a writing prompt.
+
+    Returns current badge state and any newly earned badges.
+    """
+    r = await db.execute(select(OridSession).filter(OridSession.id == data.session_id))
+    session = r.scalars().first()
+    if not session or session.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    week = data.week
+    stage = (data.stage or "O").strip().upper()
+    word_count = data.word_count
+
+    # Count how many prompt views already exist for this session
+    existing_stmt = select(func.coalesce(func.sum(OridBadgeEvent.prompt_view_count), 0)).where(
+        OridBadgeEvent.user_id == user.id,
+        OridBadgeEvent.session_id == session.id,
+        OridBadgeEvent.week == week,
+    )
+    existing_count_res = await db.execute(existing_stmt)
+    existing_prompt_views = int(existing_count_res.scalar() or 0)
+    new_prompt_total = existing_prompt_views + data.prompt_view_count
+
+    # Badge evaluation
+    has_content = bool(word_count and word_count > 0)
+    prev_badges = await get_earned_badges_from_db(db, user_id=user.id, session_id=session.id, week=week)
+    current_badges = calculate_earned_badges(
+        has_writing_content=has_content,
+        has_used_feedback_or_prompt=True,
+        total_score=None,
+    )
+    new_badges = get_new_badges(prev_badges, current_badges)
+    if new_badges:
+        await record_badge_events(
+            db,
+            user_id=user.id,
+            session_id=session.id,
+            reading_id=session.reading_id,
+            week=week,
+            task_type="orid_stage",
+            condition=session.condition,
+            new_badge_ids=new_badges,
+            total_score=None,
+            word_count=word_count,
+            feedback_count=0,
+            prompt_view_count=new_prompt_total,
+            used_feedback_or_prompt=True,
+        )
+        await db.commit()
+
+    all_earned = list(set(prev_badges + current_badges))
+    return PromptUsageResponse(
+        prompt_view_count=new_prompt_total,
+        earnedBadges=all_earned,
+        newlyEarnedBadges=new_badges,
+    )
 
 
 @router.post("/writing-coach/chat", response_model=WritingCoachChatResponse)
@@ -2959,6 +3091,91 @@ async def writing_coach_chat(
         },
     )
 
+    # ---- Scoring + badge computation ----
+    score_result: dict[str, Any] = {}
+    badge_meta: dict[str, Any] = {}
+    if source == "feedback_button":
+        week_num = getattr(session, "book_unit", None)
+        try:
+            week_num = int(week_num or 1)
+        except (ValueError, TypeError):
+            week_num = 1
+
+        orid_levels: dict[str, Any] = {}
+        sel_levels: dict[str, Any] = {}
+        try:
+            saved_raw = await _fetch_latest_writing_content_for_week(
+                db, user.id, session.id, week_num
+            )
+            if saved_raw:
+                saved_obj = ensure_orid_writing_obj(
+                    raw_content=saved_raw,
+                    week=week_num,
+                    empty_factory=_ensure_orid_writing_v1,
+                )
+                orid_levels, sel_levels = collect_levels_from_writing_obj(saved_obj)
+        except Exception:
+            logger.warning("collect saved rubric levels failed", exc_info=True)
+
+        rubric_level_estimate = (fb_rubric or {}).get("rubric_level_estimate")
+        rubric_focus = (fb_rubric or {}).get("rubric_focus")
+        if rubric_level_estimate is not None and str(rubric_level_estimate).strip():
+            apply_single_level_estimate(
+                stage=stage_ctx,
+                rubric_focus=rubric_focus,
+                rubric_level_estimate=rubric_level_estimate,
+                orid_levels=orid_levels,
+                sel_levels=sel_levels,
+            )
+            score_result = calculate_orid_sel_score(orid_levels, sel_levels)
+
+        # Badge evaluation — always run after feedback, even without rubric data
+        has_content = bool((body or "").strip())
+        total_score_int = score_result.get("totalScore") if score_result else None
+        prev_badges = await get_earned_badges_from_db(db, user_id=user.id, session_id=session.id, week=week_num)
+        current_badges = calculate_earned_badges(
+            has_writing_content=has_content,
+            has_used_feedback_or_prompt=True,
+            total_score=total_score_int,
+        )
+        new_badges = get_new_badges(prev_badges, current_badges)
+        try:
+            if new_badges:
+                await record_badge_events(
+                    db,
+                    user_id=user.id,
+                    session_id=session.id,
+                    reading_id=session.reading_id,
+                    week=week_num,
+                    task_type="orid_stage",
+                    condition=condition,
+                    new_badge_ids=new_badges,
+                    total_score=total_score_int,
+                    word_count=len(body) if body else 0,
+                    feedback_count=1,
+                    prompt_view_count=0,
+                    used_feedback_or_prompt=True,
+                )
+            if total_score_int is not None:
+                await update_session_score_snapshot(
+                    db,
+                    user_id=user.id,
+                    session_id=session.id,
+                    week=week_num,
+                    total_score=total_score_int,
+                )
+            if new_badges or total_score_int is not None:
+                await db.commit()
+        except Exception:
+            logger.exception(
+                "badge/score persistence failed",
+                extra={"session_id": str(session.id)},
+            )
+        badge_meta = {
+            "earnedBadges": list(set(prev_badges + current_badges)),
+            "newlyEarnedBadges": new_badges,
+        }
+
     coach_meta.update(
         {
             "condition": condition,
@@ -2969,6 +3186,8 @@ async def writing_coach_chat(
             "opening_hint": opening_hint,
             **({"rubric_focus": rf} if (rf := (fb_rubric.get("rubric_focus") if source == "feedback_button" else None)) else {}),
             **({"rubric_level_estimate": rl} if (rl := (fb_rubric.get("rubric_level_estimate") if source == "feedback_button" else None)) else {}),
+            **({"score": score_result} if score_result else {}),
+            **badge_meta,
         }
     )
     return WritingCoachChatResponse(
