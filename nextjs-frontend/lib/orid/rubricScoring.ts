@@ -6,11 +6,13 @@
  *   SEL:  SEL_EA / SEL_PT_R / SEL_VR / SEL_PT_I / SEL_RA × 10 pts each = 50 pts max
  *   Total max: 90
  *
- * Each criterion level 1–4:
- *   1 → 2.5 pts (25%)
- *   2 → 5.0 pts (50%)
- *   3 → 7.5 pts (75%)
- *   4 → 10.0 pts (100%)
+ * Triangular cumulative scoring — reaching level n means levels 1..n are all achieved:
+ *   1 →  1 pt   (= 1)
+ *   2 →  3 pts  (= 1+2)
+ *   3 →  6 pts  (= 1+2+3)
+ *   4 → 10 pts  (= 1+2+3+4)
+ *
+ * Formula: triangularPoints(n) = n * (n + 1) / 2
  */
 
 export const ORID_CRITERION_IDS = ["O1", "R1", "I1", "D1"] as const;
@@ -34,11 +36,14 @@ export interface ScoreResult {
   missing: string[];
 }
 
-const LEVEL_PCT: Record<number, number> = { 1: 0.25, 2: 0.5, 3: 0.75, 4: 1.0 };
+function triangularPoints(level: number): number {
+  return (level * (level + 1)) / 2;
+}
 
 function scoreCriterion(level: number | null | undefined): number {
   if (level == null) return 0;
-  return (LEVEL_PCT[level] ?? 0) * POINTS_PER_CRITERION;
+  if (level < 1 || level > 4) return 0;
+  return triangularPoints(level);
 }
 
 function clamp(score: number): number {
@@ -79,8 +84,8 @@ export function calculateOridSelScore(
   };
 }
 
-/** Format score for display: "50/90" or "--/90" when null. */
+/** Format score for display: "50/90"; null/undefined shows as "0/90". */
 export function formatScore(totalScore: number | null | undefined): string {
-  if (totalScore == null) return "--/90";
-  return `${totalScore}/90`;
+  const n = totalScore ?? 0;
+  return `${n}/90`;
 }

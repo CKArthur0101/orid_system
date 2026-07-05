@@ -14,7 +14,7 @@ const SECTIONS: { key: keyof ParsedFeedbackNarration; label: string; panelClass:
   },
   {
     key: "example",
-    label: "③ 可以這樣開始",
+    label: "③ 試著補一句",
     panelClass: "bg-sky-50/70 border-sky-100/80",
   },
 ];

@@ -385,7 +385,7 @@ function buildSynthesisWelcomeScaffold(week1: OridWritingV1 | null, bookPack: Bo
     "・收尾：呼應你上週 D，用一句寫「如果以後…我想先試試看…」。",
     "",
     "請在**中間大空白**寫整合稿；寫好後按下面的「取得整合回饋」。",
-    "我會用三小段回覆你，標題跟第 1 週一樣好讀：「你已經做到：」「你可以再加強：」「試試看這樣寫：」。",
+    "我會用三小段回覆你，標題跟第 1 週一樣好讀：「你已經做到：」「你可以再加強：」「試著補一句：」。",
   ].join("\n");
   return { role: "ai", text };
 }
@@ -661,38 +661,63 @@ export default function WeekBookPage() {
 
   useEffect(() => {
     if (sessionId) return;
-    const ac = new AbortController();
+    let cancelled = false;
 
     (async () => {
       try {
         setLoading(true);
         setError(null);
+        setHistoryLoaded(false);
+        setReadingContentReady(false);
+        setSeededInitial(false);
+        setWritingHydratedSessionId(null);
+        setProgressHydratedSessionId(null);
 
-        const s = await ensureNewOrLatestSession(forceNewOnce, conditionFromUrl);
-        if (ac.signal.aborted) return;
+        let s: unknown = null;
+        let lastErr: Error | null = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            s = await ensureNewOrLatestSession(forceNewOnce, conditionFromUrl);
+            lastErr = null;
+            break;
+          } catch (e: unknown) {
+            lastErr = e instanceof Error ? e : new Error(String(e));
+            if (attempt === 0) {
+              await new Promise((r) => setTimeout(r, 400));
+            }
+          }
+        }
+        if (cancelled) return;
+        if (lastErr) throw lastErr;
 
-        if (isUuid(s?.id)) {
-          setSessionId(String(s.id));
+        if (isUuid((s as { id?: string })?.id)) {
+          setSessionId(String((s as { id: string }).id));
           setHistoryLoaded(false);
         }
-        if (isUuid(s?.reading_id)) {
-          setReadingId(String(s.reading_id));
+        if (isUuid((s as { reading_id?: string })?.reading_id)) {
+          setReadingId(String((s as { reading_id: string }).reading_id));
           setReadingReloadNonce((n) => n + 1);
         }
-        if (s?.condition) {
-          const c = String(s.condition).toLowerCase();
+        if ((s as { condition?: string })?.condition) {
+          const c = String((s as { condition: string }).condition).toLowerCase();
           setCondition((c === "control" ? "template" : c) as ConditionKey);
         }
-      } catch (e: any) {
-        if (e?.name === "AbortError") return;
-        setError(e?.message ?? "初始化失敗");
+      } catch (e: unknown) {
+        if (cancelled) return;
+        const msg = e instanceof Error ? e.message : "初始化失敗";
+        setError(msg);
+        setHistoryLoaded(true);
+        setReadingContentReady(true);
+        setSeededInitial(true);
       } finally {
-        if (!ac.signal.aborted) setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
 
-    return () => ac.abort();
-  }, [weekNum, sessionId, forceNewOnce]);
+    return () => {
+      cancelled = true;
+    };
+  }, [weekNum, sessionId, forceNewOnce, conditionFromUrl]);
 
   useEffect(() => {
     if (!sessionId || historyLoaded) return;
@@ -1041,13 +1066,14 @@ export default function WeekBookPage() {
           ? (meta.newlyEarnedBadges as BadgeId[])
           : getNewlyEarnedBadges(earnedBadges, allBadges);
 
-      setWritingData(mergeProgressIntoWriting(nextWriting, scoreFromMeta, allBadges));
-      if (scoreFromMeta != null) setTotalScore(scoreFromMeta);
+      const resolvedScore = scoreFromMeta ?? 0;
+      setWritingData(mergeProgressIntoWriting(nextWriting, resolvedScore, allBadges));
+      setTotalScore(resolvedScore);
       setEarnedBadges(allBadges);
       if (newOnes.length > 0) {
         setBadgeModalQueue((prev) => [...prev, ...newOnes.filter((b) => !prev.includes(b))]);
       }
-      await persistWritingSnapshot(nextWriting, scoreFromMeta, allBadges);
+      await persistWritingSnapshot(nextWriting, resolvedScore, allBadges);
     } catch (e: any) {
       setFbError(e?.message ?? "回饋失敗");
     } finally {
@@ -1526,13 +1552,15 @@ export default function WeekBookPage() {
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-2 sm:p-3">
               {messages.length === 0 ? (
                 <div className="flex h-full min-h-[6rem] items-center justify-center px-2 text-center text-xs text-amber-900/50 sm:text-sm">
-                  {!historyLoaded
-                    ? "載入中…"
-                    : seededInitial && !readingContentReady
-                      ? "載入教材中…"
-                      : awaitingFirstAiBubble
-                        ? "小幫手正在準備開場…"
-                        : "還沒有回饋訊息，先去寫作吧！"}
+                  {error && !sessionId
+                    ? error
+                    : !historyLoaded
+                      ? "載入中…"
+                      : seededInitial && !readingContentReady
+                        ? "載入教材中…"
+                        : awaitingFirstAiBubble
+                          ? "小幫手正在準備開場…"
+                          : "還沒有回饋訊息，先去寫作吧！"}
                 </div>
               ) : (
                 <div className="flex flex-col gap-3">

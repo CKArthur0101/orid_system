@@ -38,6 +38,13 @@
 }
 
 @layer components {
+  .orid-dashboard-page {
+    background-color: #ede3d3;
+    background-image:
+      radial-gradient(ellipse 80% 55% at 0% 0%, rgba(160, 120, 80, 0.14), transparent 55%),
+      radial-gradient(ellipse 60% 45% at 100% 100%, rgba(140, 100, 60, 0.1), transparent 50%);
+  }
+
   .orid-forest-page {
     background-color: #faf5eb;
     background-image:
@@ -50,7 +57,7 @@
   }
 
   .kid-shell {
-    @apply rounded-2xl border border-amber-200/60 bg-[#fffcf7] shadow-md shadow-amber-900/5;
+    @apply rounded-2xl border-2 border-amber-400/50 bg-[#f3e8d8] shadow-md shadow-amber-950/10;
   }
 
   .kid-bubble-ai {
@@ -90,10 +97,10 @@
   }
 
   .orid-nav-link-active {
-    @apply bg-amber-100 text-amber-900;
+    @apply border border-amber-500/35 bg-amber-200/60 text-amber-950;
   }
 
   .orid-nav-link {
-    @apply text-amber-900/65 hover:bg-amber-50 hover:text-amber-900;
+    @apply text-amber-900/70 hover:bg-amber-100/60 hover:text-amber-950;
   }
 }

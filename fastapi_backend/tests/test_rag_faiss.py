@@ -88,3 +88,27 @@ async def test_get_relevant_context_auto_falls_back_to_memory(monkeypatch):
 
     out = await rag.get_relevant_context(book_pack, "柿子樹", top_k=1)
     assert "柿子樹" in out
+
+
+@pytest.mark.asyncio
+async def test_get_feedback_rag_context_skips_d_stage(monkeypatch):
+    monkeypatch.setenv("ORID_RAG_IN_FEEDBACK", "true")
+
+    async def fake_get_relevant_context(_book_pack, _query, top_k=3):
+        return "「測試片段」"
+
+    monkeypatch.setattr(rag, "get_relevant_context", fake_get_relevant_context)
+    out = await rag.get_feedback_rag_context({"book_title": "x"}, "學生文字", stage="D")
+    assert out == ""
+
+
+@pytest.mark.asyncio
+async def test_get_feedback_rag_context_respects_disable_flag(monkeypatch):
+    monkeypatch.setenv("ORID_RAG_IN_FEEDBACK", "false")
+
+    async def fake_get_relevant_context(_book_pack, _query, top_k=3):
+        raise AssertionError("should not call retrieval when disabled")
+
+    monkeypatch.setattr(rag, "get_relevant_context", fake_get_relevant_context)
+    out = await rag.get_feedback_rag_context({"book_title": "x"}, "學生文字", stage="O")
+    assert out == ""

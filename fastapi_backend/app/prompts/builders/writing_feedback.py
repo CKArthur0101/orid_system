@@ -14,6 +14,7 @@ from app.prompts.templates.writing_feedback import (
     SHARED_CORE,
     STAGE_BLOCKS,
 )
+from app.services.rag import format_rag_context_for_prompt
 
 
 def _format_writing_rubric_for_prompt(book_pack: Optional[dict[str, Any]], stage: str) -> str:
@@ -38,6 +39,7 @@ def _format_writing_rubric_for_prompt(book_pack: Optional[dict[str, Any]], stage
     lines: list[str] = [
         "【ORID 主要評量標準（ok=true ← 層級3達標或4精進；ok=false ← 層級1或2）】",
         "ok 只依 ORID 本段標準判斷；SEL 只能輔助提問，不能改變 ok。",
+        "計分採累加制：達到第 n 階 = 1+2+…+n 分（第1階=1, 第2階=3, 第3階=6, 第4階=10）。",
     ]
     for it in items[:4]:
         if not isinstance(it, dict):
@@ -60,7 +62,7 @@ def _format_writing_rubric_for_prompt(book_pack: Optional[dict[str, Any]], stage
         head = f"- {rid_tag}{name}" + (f"（評量重點：{focus}）" if focus else "")
         lines.append(head + (f"：{lv_str}" if lv_str else ""))
 
-    lines.append("rubric_focus=向度id，rubric_level_estimate=最接近層級標籤")
+    lines.append("rubric_focus=本段 ORID 主向度id（必填，不可 null）；rubric_level_estimate=依段填多向度物件（見 JSON 格式）")
     return "\n".join(lines)
 
 
@@ -185,6 +187,34 @@ _O_STUCK_HINT_PHRASES: tuple[str, ...] = (
 )
 
 
+_STAGE_RUBRIC_LEVEL_KEYS: dict[str, str] = {
+    "O": '"O1": "X 層級"',
+    "R": '"R1": "X 層級", "SEL_EA": "X 層級", "SEL_PT": "X 層級"',
+    "I": '"I1": "X 層級", "SEL_VR": "X 層級", "SEL_PT": "X 層級"',
+    "D": '"D1": "X 層級", "SEL_RA": "X 層級"',
+}
+
+
+def _rasf_json_format_block(stage: str) -> str:
+    """RASF-Anchor 規則：多向度估層級 + 原文錨點引導。"""
+    keys = _STAGE_RUBRIC_LEVEL_KEYS.get(stage.upper(), '"O1": "X 層級"')
+    return f"""【RASF-Anchor 輸出規則（評量對準 + 原文錨點，重要）】
+- rubric_focus：必填本段 ORID 主向度 id（O1 / R1 / I1 / D1），不可 null。
+- rubric_level_estimate：必須是**物件**，依本段填入所有對應向度的層級估計：
+  本段格式：{{{ keys }}}
+  層級用語：「1 起步」「2 接近」「3 達標」「4 精進」（有把握才填，不確定可填 null）
+  SEL 向度只估層級，**不要**另寫 missing；missing 只對 ORID 主向度（一刀）。
+- student_anchor_quote（必填，除非草稿空白）：從學生原文**原封不動**摘 4～20 個連續字（人名、事件、感受詞、行動詞），供後續引導錨定；禁止改寫或捏造。
+- draft_next_step（必填，除非草稿空白）：用白話寫**在學生哪一句前/後加什麼**才能升到下一階（預設目標 3 達標）；禁止給整段新例文。
+- missing / suggestions 引導規則（RASF 核心）：
+  先估 ORID 主向度目前是第幾階，再只描述「從目前階 → min(下一階, 3 達標)」還差的一個缺口。
+  missing **必須**引用 student_anchor_quote（或同句中的學生用詞），用「你已經有○○，再補△△會更完整」語意。
+  suggestions：**一個問句**，引導學生在 anchor 那句前/後自己補一句；不要列多步驟。
+  example：多數填 null；若必填，只能是**接在 anchor 上的半句填空**（保留＿＿＿），禁止「故事的主角是……」這類從零開始的通用例句。
+  **禁止**在第一輪就要求學生直接跳到 4 精進（除非 ORID 主向度已是 3 達標，才可引導精進）。
+  SEL 的缺口不得成為 missing 的主題；SEL 最多用來把 ORID 那一刀的問句問得更具體。""".strip()
+
+
 def _o_needs_book_plot_anchor(*, text: str, input_bucket: str) -> bool:
     """O 段若幾乎沒內容或學生表達卡住，JSON 層要強制帶書裡具體情節，避免只剩『一步一步』空架。"""
     if input_bucket in (BUCKET_EMPTY, BUCKET_TOO_SHORT):
@@ -203,6 +233,7 @@ def build_genai_feedback_prompts(
     text: str,
     book_pack: Optional[dict[str, Any]],
     input_bucket: str = "normal",
+    rag_context: str = "",
 ) -> Tuple[str, str]:
     """
     兩層：共用核心 + 依 O/R/I/D 分流。
@@ -218,7 +249,13 @@ def build_genai_feedback_prompts(
     stage_block = STAGE_BLOCKS.get(stage, STAGE_BLOCKS["O"])
     rubric_block = _format_writing_rubric_for_prompt(book_pack, stage)
     sel_guidance_block = _format_sel_guidance_for_prompt(book_pack, stage)
+    rasf_block = _rasf_json_format_block(stage)
     bucket_hint = bucket_tone_hint_zh(input_bucket)
+    rag_block = ""
+    if stage != "D":
+        formatted_rag = format_rag_context_for_prompt(rag_context)
+        if formatted_rag:
+            rag_block = formatted_rag + "\n"
 
     book_fact_section = "" if stage == "D" else f"""
 {BOOK_FACT_RULES}
@@ -242,6 +279,7 @@ def build_genai_feedback_prompts(
 {"角色清單（學生寫的角色名必須對照這裡）：" + characters_block if stage != "D" else "書名已知；D 段不做角色名查核。"}
 {"故事摘要：" + chr(10) + key_events_str if stage != "D" else "（D 段：故事摘要僅供背景參考，不要要求學生對齊書本情節。）"}
 {"故事摘錄（可以直接引用句子來引導學生）：" + chr(10) + excerpts_block if stage != "D" else ""}
+{rag_block if stage != "D" else ""}
 教師本段說明：{guide or "（未提供）"}
 {rubric_block if rubric_block else "（本週未提供 writing_rubric；仍依本段專屬規則回饋。）"}
 {sel_guidance_block}
@@ -263,10 +301,12 @@ def build_genai_feedback_prompts(
 三、JSON 欄位與品質
 ====================
 - praise：**必須**看得出你有讀學生原文，盡量點到裡面的人/事/詞（若完全空白再用鼓勵下筆，禁止空泛罐頭讚美）。
-- missing：不多於 1 條，對準本段**一個**主問題（一刀）。
+- missing：不多於 1 條，對準本段**一個**主問題（一刀）；依 RASF 規則只談「下一階 gap」。
 - suggestions：不多於 1 條；用 **1 個問句**或「下一步只補……」引導學生自己改，不要列多步驟，也不要把答案寫完。
 - example：只給句型開頭、填空式提示或半句支架（例如「我覺得＿＿＿，因為＿＿＿。」）；不要填入完整角色、情節與答案讓學生可直接複製。
 - improved：通常 null。
+
+{rasf_block}
 
 【輸出格式】只輸出純 JSON，不要 markdown，不要 ```。
 {{
@@ -274,13 +314,16 @@ def build_genai_feedback_prompts(
   "praise": string,
   "missing": string[],
   "suggestions": string[],
-  "example": string,
+  "example": string or null,
   "improved": null,
-  "rubric_focus": string or null,
-  "rubric_level_estimate": string or null
+  "rubric_focus": string,
+  "rubric_level_estimate": object,
+  "student_anchor_quote": string,
+  "draft_next_step": string
 }}
-- rubric_focus：本輪回饋主要對準的評量向度（有提供 writing_rubric 時填 id 或名稱；沒有則可 null）。
-- rubric_level_estimate：依該向度估計學生草稿接近哪一層（用向度裡的層級用語；沒把握可 null）。
+- rubric_focus：本段 ORID 主向度 id（O1 / R1 / I1 / D1），必填。
+- rubric_level_estimate：依段填入多向度層級物件（見 RASF 規則），以「X 層級」格式填入。
+- student_anchor_quote / draft_next_step：見 RASF-Anchor 規則；草稿空白時可填 null。
 
 {FEW_SHOT_BLOCK}
 """.strip()
@@ -309,7 +352,7 @@ suggestions 可用問句帶到書裡一幕；example 仍只能是填空或半句
 {text}
 ---
 
-{o_summary_priority}{o_plot_anchor + chr(10) + chr(10) if o_plot_anchor else ""}請輸出 JSON。missing 與 suggestions 陣列各至多只放 1 個字串；suggestions 請用 1 個問句或一個短方向引導學生自己補；example 只給填空式支架或半句開頭，仍不要整篇代寫。improved 多數情況為 null。
+{o_summary_priority}{o_plot_anchor + chr(10) + chr(10) if o_plot_anchor else ""}請輸出 JSON。missing 與 suggestions 各至多 1 個字串；必須填 student_anchor_quote 與 draft_next_step（除非草稿空白）；suggestions 用 1 個問句引導在 anchor 句前/後補寫；example 多數 null，若填只能接 anchor 的半句填空。improved 多數 null。
 """.strip()
 
     return system_prompt, user_prompt

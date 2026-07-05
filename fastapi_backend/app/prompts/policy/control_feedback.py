@@ -61,6 +61,20 @@ def _default_example_line(stage: str, anchor: str = "") -> str:
     return "例如：下次遇到……，我會先……。先寫你做得到的第一步就好。"
 
 
+def _draft_snippet(student_draft: str, max_len: int = 18) -> str:
+    raw = strip_orid_stage_tag((student_draft or "").strip())
+    if not raw:
+        return ""
+    one = raw.replace("\n", " ")
+    for sep in ("。", "！", "？", "，"):
+        if sep in one:
+            one = one.split(sep, 1)[0].strip()
+            break
+    if len(one) > max_len:
+        one = one[:max_len] + "…"
+    return one
+
+
 def format_control_feedback_reply(
     *,
     ok: bool,
@@ -145,6 +159,11 @@ def format_control_feedback_reply(
             "D": "我們先想想書裡帶給你的提醒，再把你下次會做的行動寫清楚。",
         }
         base_line3 = grounding_stem_map.get(s_up, "我們先對回書裡真的人物和事情，再照順序把內容寫清楚。")
+        snippet = _draft_snippet(st)
+        if snippet:
+            line3_custom = f"在你寫的「{snippet}」附近，把不對的地方改回書裡真的說法。想先改哪一個字？"
+        else:
+            line3_custom = base_line3
     elif short_o_plain:
         shown = anchor if len(anchor) <= 44 else anchor[:41] + "…"
         base_line3 = f"故事裡有「{shown}」這一幕，你可以先問自己：誰做了什麼？句型：{scaffold_for_stage(s_up)}"
@@ -171,7 +190,7 @@ def format_control_feedback_reply(
     return (
         f"你已經做到：\n{line1}\n\n"
         f"你可以再加強：\n{line2}\n\n"
-        f"試試看這樣寫：\n{line3}"
+        f"試著補一句：\n{line3}"
     ).strip()
 
 

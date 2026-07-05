@@ -306,6 +306,7 @@ def test_orid_rubric_level_controls_ok_without_sel_override():
             True,
             {"rubric_level_estimate": "2 接近", "rubric_focus": "R1"},
             [],
+            stage="R",
         )
         is False
     )
@@ -314,17 +315,31 @@ def test_orid_rubric_level_controls_ok_without_sel_override():
             False,
             {"rubric_level_estimate": "3 達標", "rubric_focus": "D1"},
             [],
+            stage="D",
         )
         is True
     )
     assert (
         orid._apply_orid_rubric_ok_rule(
             True,
-            {"rubric_level_estimate": "4 精進", "rubric_focus": "O1"},
+            {"rubric_level_estimate": {"O1": "4 精進"}, "rubric_focus": "O1"},
             ["你寫的「打籃球」看起來不在書裡；書裡說的是「阿松爺爺」。"],
+            stage="O",
         )
         is False
     )
+
+
+def test_primary_rubric_level_fallback_sets_level_for_non_empty_text():
+    out = orid._ensure_primary_rubric_level_fallback(
+        stage="O",
+        student_text="阿松爺爺把柿子藏起來。",
+        ok=False,
+        rubric_meta={},
+    )
+    assert out["rubric_focus"] == "O1"
+    assert out["rubric_level_estimate"]["O1"].startswith("1 ")
+    assert out["rubric_level_fallback"] is True
 
 
 @pytest.mark.asyncio
@@ -452,7 +467,7 @@ def test_control_feedback_reply_preserves_example_in_try_section():
         example="故事裡先發生的是阿松爺爺把柿子藏起來，後來大家才知道他不想分給別人。",
         student_draft="阿松爺爺不分享柿子",
     )
-    assert "試試看這樣寫：" in reply
+    assert "試著補一句：" in reply
     assert "誰做了什麼" in reply
     assert "例如：" in reply
     assert "＿＿＿" in reply

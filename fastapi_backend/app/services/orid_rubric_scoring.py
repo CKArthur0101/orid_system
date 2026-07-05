@@ -5,11 +5,14 @@ Scoring:
   SEL:  5 criteria (SEL_EA, SEL_PT/R, SEL_VR, SEL_PT/I, SEL_RA) × 10 pts each = 50 pts max
   Total: 90 pts max
 
-Each criterion uses level 1–4:
-  level 1 (起步)  → 25%  → 2.5 pts
-  level 2 (接近)  → 50%  → 5.0 pts
-  level 3 (達標)  → 75%  → 7.5 pts
-  level 4 (精進)  → 100% → 10.0 pts
+Each criterion uses level 1–4 with triangular cumulative scoring
+(reaching level n means levels 1..n are all achieved):
+  level 1 (起步)  → 1  pt   (= 1)
+  level 2 (接近)  → 3  pts  (= 1+2)
+  level 3 (達標)  → 6  pts  (= 1+2+3)
+  level 4 (精進)  → 10 pts  (= 1+2+3+4)
+
+Formula: triangular_points(n) = n × (n + 1) ÷ 2
 """
 from __future__ import annotations
 
@@ -25,9 +28,6 @@ POINTS_PER_CRITERION = 10.0
 ORID_MAX = len(ORID_CRITERION_IDS) * POINTS_PER_CRITERION   # 40
 SEL_MAX = len(SEL_CRITERION_IDS) * POINTS_PER_CRITERION      # 50
 TOTAL_MAX = 90
-
-# Mapping from level int (1–4) to percentage of max_points
-_LEVEL_PCT = {1: 0.25, 2: 0.50, 3: 0.75, 4: 1.00}
 
 # Chinese level label → int
 _LABEL_TO_INT = {
@@ -71,15 +71,26 @@ def parse_level(value: object) -> Optional[int]:
     return None
 
 
-def score_criterion(level: Optional[int], max_points: float = POINTS_PER_CRITERION) -> float:
-    """Convert level (1–4) to points for this criterion.
+def triangular_points(level: int) -> int:
+    """Triangular cumulative score for a given level (1–4).
+
+    Reaching level n means levels 1..n are all achieved:
+      n=1 → 1,  n=2 → 3,  n=3 → 6,  n=4 → 10
+    """
+    return level * (level + 1) // 2
+
+
+def score_criterion(level: Optional[int], max_points: float = POINTS_PER_CRITERION) -> float:  # noqa: ARG001
+    """Convert level (1–4) to cumulative triangular points for this criterion.
 
     Returns 0.0 if level is None (missing/not yet scored).
+    max_points is kept for API compatibility but is unused (max is always 10).
     """
     if level is None:
         return 0.0
-    pct = _LEVEL_PCT.get(level, 0.0)
-    return round(pct * max_points, 2)
+    if level not in (1, 2, 3, 4):
+        return 0.0
+    return float(triangular_points(level))
 
 
 def calculate_orid_sel_score(
@@ -159,6 +170,28 @@ def normalize_sel_criterion_id(criterion_id: str, stage: str) -> Optional[str]:
         return None
     if cid in SEL_CRITERION_IDS:
         return cid
+    return None
+
+
+def primary_orid_level_from_rubric_meta(
+    rubric_meta: dict[str, object],
+    stage: str,
+) -> Optional[int]:
+    """Resolve the ORID primary criterion level from rubric meta (string or dict)."""
+    rl = rubric_meta.get("rubric_level_estimate")
+    focus = str(rubric_meta.get("rubric_focus") or "").strip().upper()
+    stage_u = (stage or "O").strip().upper()
+    if isinstance(rl, dict):
+        key = focus if focus in ORID_CRITERION_IDS else STAGE_TO_ORID_CRITERION.get(stage_u)
+        if key:
+            return parse_level(rl.get(key))
+        for cid in ORID_CRITERION_IDS:
+            lv = parse_level(rl.get(cid))
+            if lv is not None:
+                return lv
+        return None
+    if rl is not None and str(rl).strip():
+        return parse_level(rl)
     return None
 
 

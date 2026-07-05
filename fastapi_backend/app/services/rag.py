@@ -18,6 +18,23 @@ _client: Optional[AsyncOpenAI] = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_A
 EMBEDDING_MODEL = "text-embedding-3-small"
 ORID_RAG_BACKEND = (os.getenv("ORID_RAG_BACKEND") or "auto").strip().lower()
 
+
+def rag_in_feedback_enabled() -> bool:
+    """Whether genai feedback prompts should call vector retrieval."""
+    v = (os.getenv("ORID_RAG_IN_FEEDBACK") or "true").strip().lower()
+    return v not in {"0", "false", "off", "no"}
+
+
+def format_rag_context_for_prompt(rag_text: str) -> str:
+    raw = (rag_text or "").strip()
+    if not raw:
+        return ""
+    return (
+        "【與本則草稿最相關的教材片段（向量檢索；須與上方摘要一致，不可編造新情節）】\n"
+        f"{raw}"
+    ).strip()
+
+
 _embed_cache: dict[str, tuple[list[str], list[list[float]]]] = {}
 
 
@@ -177,3 +194,22 @@ async def get_relevant_context(
             results.append(f"「{chunks[idx]}」")
 
     return "\n".join(results)
+
+
+async def get_feedback_rag_context(
+    book_pack: Optional[dict[str, Any]],
+    student_text: str,
+    *,
+    stage: str,
+    top_k: int = 3,
+) -> str:
+    """Retrieve book chunks for the writing-feedback LLM (O/R/I only)."""
+    if not rag_in_feedback_enabled():
+        return ""
+    stage_up = (stage or "O").strip().upper()
+    if stage_up == "D" or not book_pack:
+        return ""
+    query = (student_text or "").strip()
+    if not query:
+        return ""
+    return await get_relevant_context(book_pack, query, top_k=top_k)

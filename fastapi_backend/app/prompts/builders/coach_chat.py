@@ -236,6 +236,6 @@ def build_feedback_narration_prompt(
     user = (
         f"【輸入粗分類】{input_bucket}\n"
         f"【學生草稿摘錄】\n{excerpt}\n\n"
-        f"結構化回饋 JSON：\n{feedback_json_summary}"
+        f"結構化回饋 JSON（含 rasf 白話、student_anchor_quote、draft_next_step、rag_context；請依 RASF-Anchor 規則組三段，第三段標題用「試著補一句：」）：\n{feedback_json_summary}"
     )
     return sys, user

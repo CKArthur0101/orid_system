@@ -148,6 +148,27 @@ def test_genai_feedback_builder_changes_contract_by_stage():
     assert "3 達標：能正確寫出人物與至少一件重要事件。" in o_system
     assert "學生「D」段原文如下" in d_user
     assert "對照上方「故事摘要」" not in d_user
+    assert "student_anchor_quote" in o_system
+    assert "draft_next_step" in o_system
+    assert "RASF-Anchor" in o_system
+
+    rag_system, _ = build_genai_feedback_prompts(
+        stage="O",
+        text="隔天用柿子蒂打陀螺",
+        book_pack=_book_pack(),
+        rag_context="「哎喲奶奶和小朋友用柿子蒂玩陀螺」",
+    )
+    assert "向量檢索" in rag_system
+    assert "柿子蒂玩陀螺" in rag_system
+
+    d_rag_system, _ = build_genai_feedback_prompts(
+        stage="D",
+        text="下次我會分享",
+        book_pack=_book_pack(),
+        rag_context="不應出現在 D 段",
+    )
+    assert "向量檢索" not in d_rag_system
+    assert "不應出現在 D 段" not in d_rag_system
 
     ts_system, _ = build_genai_feedback_prompts(
         stage="O",
@@ -295,10 +316,10 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "每段最多 2 句" in narration_system
     assert "你已經做到：" in narration_system
     assert "你可以再加強：" in narration_system
-    assert "試試看這樣寫：" in narration_system
+    assert "試著補一句：" in narration_system
     assert "像老師坐在學生旁邊" in narration_system
-    assert "第二段**一定要保留這個重點**" in narration_system
-    assert "如果 JSON 裡有 example" in narration_system
+    assert "書裡完全沒有的詞" in narration_system
+    assert "RASF-Anchor" in narration_system
     assert "填空" in narration_system
     assert "故事覆蓋" in narration_system or "書裡情節" in narration_system or "去看／掃故事摘要" in narration_system
     assert "Markdown" in narration_system or "純文字" in narration_system
@@ -306,7 +327,7 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "繁體中文為主" in narration_system
     assert "循序漸進" in narration_system
     assert "【I 段】" in narration_system
-    assert "禁止出現「我們一步一步來」" in narration_system or "一步一步來」等套語" in narration_system
+    assert "禁止「我們一步一步來」" in narration_system
     assert "2～4 個短任務" not in narration_system
     assert "【輸入粗分類】mixed_script" in narration_user
     assert "我觉得故事很有趣" in narration_user

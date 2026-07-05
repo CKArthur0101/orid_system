@@ -20,6 +20,25 @@ describe("parseFeedbackNarration", () => {
     });
   });
 
+  it("parses 試著補一句 third heading", () => {
+    const text = [
+      "你已經做到：",
+      "你有寫到「用柿子蒂打陀螺」。",
+      "",
+      "你可以再加強：",
+      "再補上是誰帶著玩。",
+      "",
+      "試著補一句：",
+      "在你寫的「一開始……」後面，加一句藏進倉庫。",
+    ].join("\n");
+
+    expect(parseFeedbackNarration(text)).toEqual({
+      praise: "你有寫到「用柿子蒂打陀螺」。",
+      rethink: "再補上是誰帶著玩。",
+      example: "在你寫的「一開始……」後面，加一句藏進倉庫。",
+    });
+  });
+
   it("accepts shortened third heading", () => {
     const text = [
       "你已經做到：",

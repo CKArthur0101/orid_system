@@ -84,12 +84,13 @@ export function OridWeekHero({
             </div>
           </div>
           {weekNum <= 2 ? (
-            <div className="mt-2 rounded-xl border border-amber-100 bg-white/85 px-2 py-1.5 sm:px-3 sm:py-2">
+            <div className="mt-2 min-w-0 overflow-x-auto rounded-xl border border-amber-100 bg-white/85 px-2 py-1.5 sm:px-3 sm:py-2">
               <OridMissionProgress
                 progress={progress}
                 writtenCount={writtenCount}
                 onFocusStage={onFocusStage}
                 focusStage={focusStage}
+                week={weekNum}
               />
             </div>
           ) : null}

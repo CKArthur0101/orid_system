@@ -8,7 +8,9 @@ WEEK1_ORID_RUBRIC: dict[str, Any] = {
     "version": 3,
     "purpose": "primary_orid_feedback_and_research_scoring",
     "score_range": "1-4",
-    "total_score": "O+R+I+D, max 16",
+    "scoring_formula": "triangular_cumulative_v1",
+    "scoring_note": "level n → n*(n+1)/2 pts (1→1, 2→3, 3→6, 4→10); ORID max 40, SEL max 50, total max 90",
+    "total_score": "ORID(O1+R1+I1+D1) max 40 + SEL(SEL_EA+SEL_PT_R+SEL_VR+SEL_PT_I+SEL_RA) max 50 = 90",
     "ok_rule": "level_3_or_4_true_level_1_or_2_false",
     "by_stage": {
         "O": [
@@ -70,7 +72,9 @@ WEEK1_ORID_RUBRIC: dict[str, Any] = {
 WEEK1_SEL_RUBRIC: dict[str, Any] = {
     "schema": "sel_rubric_v1",
     "version": 1,
-    "purpose": "auxiliary_guidance_only",
+    "purpose": "auxiliary_guidance_and_research_scoring",
+    "scoring_formula": "triangular_cumulative_v1",
+    "scoring_note": "Same formula as ORID: level n → n*(n+1)/2 pts; SEL max 50",
     "student_language_policy": "Do not mention SEL dimension names to students; convert them into concrete questions.",
     "by_stage": {
         "O": [],

@@ -23,7 +23,7 @@ _LATIN_RE = re.compile(r"[A-Za-z]")
 _REPEAT_RE = re.compile(r"(.)\1{4,}")  # same char 5+ in a row
 
 
-def truncate_student_draft_excerpt(text: str, *, max_len: int = 180) -> str:
+def truncate_student_draft_excerpt(text: str, *, max_len: int = 400) -> str:
     """Single-line-ish excerpt for prompts; no PII logic beyond truncation."""
     t = " ".join((text or "").split())
     if not t:

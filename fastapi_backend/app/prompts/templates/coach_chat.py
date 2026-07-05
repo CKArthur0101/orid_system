@@ -4,7 +4,7 @@ from __future__ import annotations
 FEEDBACK_NARRATION_SECTION_TITLES = (
     "你已經做到：",
     "你可以再加強：",
-    "試試看這樣寫：",
+    "試著補一句：",
 )
 
 COACH_SOURCE_NOTES = {

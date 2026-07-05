@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from uuid import UUID, uuid4
-from typing import Optional, Any, Tuple, List, Dict
+from typing import Optional, Any, Tuple, List, Dict, Union
 from dataclasses import dataclass
 import os
 import re
@@ -57,11 +57,15 @@ from app.prompts.builders.coach_chat import (
 from app.prompts.playbook_variants import pick_variant
 from app.utils import strip_markdown_for_student_chat
 from app.services.orid_rubric_scoring import (
+    ORID_CRITERION_IDS,
+    SEL_CRITERION_IDS,
     apply_single_level_estimate,
     calculate_orid_sel_score,
     clamp_total_score,
     collect_levels_from_writing_obj,
     extract_orid_levels_from_rubric_meta,
+    parse_level,
+    primary_orid_level_from_rubric_meta,
 )
 from app.services.orid_badges import (
     calculate_earned_badges,
@@ -81,6 +85,7 @@ from app.prompts.policy.feedback_focus import (
     detect_feedback_strength,
     normalize_feedback_focus,
 )
+from app.prompts.policy.rasf_narration_context import build_rasf_narration_context
 from app.prompts.policy.control_feedback import (
     format_control_feedback_reply,
     format_control_free_text_reply,
@@ -113,6 +118,7 @@ from app.prompts.parsers.json_payloads import (
     parse_book_grounding_checker_json,
 )
 from app.services.safety import check_safety
+from app.services.rag import get_feedback_rag_context
 from app.services.orid_condition import normalize_orid_condition, is_control_condition
 from app.services.orid_writing_store import (
     ensure_orid_writing_obj,
@@ -823,23 +829,27 @@ async def seed_writing_coach_welcome_if_needed(
 ) -> None:
     book_pack = load_book_pack_from_reading(reading)
     text = build_writing_coach_welcome_text(book_pack)
-    cnt = await db.scalar(
-        select(func.count(OridChatMessage.id)).where(OridChatMessage.session_id == session.id)
-    )
-    if (cnt or 0) == 0:
-        db.add(OridChatMessage(session_id=session.id, stage="O", sender="ai", text=text))
-        await db.commit()
-        return
-    if (cnt or 0) == 1:
-        legacy = await db.scalar(
-            select(OridChatMessage)
-            .where(OridChatMessage.session_id == session.id)
-            .where(OridChatMessage.sender == "ai")
-            .limit(1)
+    try:
+        cnt = await db.scalar(
+            select(func.count(OridChatMessage.id)).where(OridChatMessage.session_id == session.id)
         )
-        if legacy and LEGACY_WRITING_COACH_WELCOME_SNIPPET in str(legacy.text or ""):
-            legacy.text = text
+        if (cnt or 0) == 0:
+            db.add(OridChatMessage(session_id=session.id, stage="O", sender="ai", text=text))
             await db.commit()
+            return
+        if (cnt or 0) == 1:
+            legacy = await db.scalar(
+                select(OridChatMessage)
+                .where(OridChatMessage.session_id == session.id)
+                .where(OridChatMessage.sender == "ai")
+                .limit(1)
+            )
+            if legacy and LEGACY_WRITING_COACH_WELCOME_SNIPPET in str(legacy.text or ""):
+                legacy.text = text
+                await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.warning("seed_writing_coach_welcome failed for session %s", session.id, exc_info=True)
 
 
 def book_anchor_one_line(book_pack: Optional[dict[str, Any]], max_len: int = 72) -> str:
@@ -1990,9 +2000,10 @@ class GenAIFeedbackOutput(BaseModel):
     suggestions: list[str] = Field(default_factory=list)
     example: Optional[str] = None
     improved: Optional[str] = None
-    # 與 book_pack.writing_rubric 對齊，供後測／分析（可為 null）
     rubric_focus: Optional[str] = None
-    rubric_level_estimate: Optional[str] = None
+    rubric_level_estimate: Optional[Union[str, dict[str, Any]]] = None
+    student_anchor_quote: Optional[str] = None
+    draft_next_step: Optional[str] = None
 
 
 def _normalize_feedback_list(value: Any, *, max_items: int = 3) -> list[str]:
@@ -2014,8 +2025,48 @@ def _rubric_meta_from_obj(obj: dict[str, Any]) -> dict[str, Any]:
     rl = obj.get("rubric_level_estimate")
     if rf is not None and str(rf).strip():
         out["rubric_focus"] = str(rf).strip()
-    if rl is not None and str(rl).strip():
-        out["rubric_level_estimate"] = str(rl).strip()
+    if rl is not None:
+        # Preserve dict (new multi-dimensional format) or non-empty string (legacy)
+        if isinstance(rl, dict):
+            out["rubric_level_estimate"] = rl
+        elif str(rl).strip():
+            out["rubric_level_estimate"] = str(rl).strip()
+    for key in ("student_anchor_quote", "draft_next_step"):
+        val = obj.get(key)
+        if val is not None and str(val).strip():
+            out[key] = str(val).strip()
+    return out
+
+
+def _ensure_primary_rubric_level_fallback(
+    *,
+    stage: str,
+    student_text: str,
+    ok: bool,
+    rubric_meta: dict[str, Any],
+) -> dict[str, Any]:
+    """Ensure first feedback round with content is not score-empty."""
+    out = dict(rubric_meta or {})
+    if not (student_text or "").strip():
+        return out
+    if primary_orid_level_from_rubric_meta(out, stage=stage) is not None:
+        return out
+
+    stage_u = (stage or "O").strip().upper()
+    stage_to_primary = {"O": "O1", "R": "R1", "I": "I1", "D": "D1"}
+    primary_id = stage_to_primary.get(stage_u, "O1")
+    fallback_level = 3 if bool(ok) else 1
+    fallback_label = "達標" if fallback_level >= 3 else "起步"
+
+    out.setdefault("rubric_focus", primary_id)
+    rl = out.get("rubric_level_estimate")
+    if isinstance(rl, dict):
+        if parse_level(rl.get(primary_id)) is None:
+            rl[primary_id] = f"{fallback_level} {fallback_label}"
+            out["rubric_level_estimate"] = rl
+    else:
+        out["rubric_level_estimate"] = {primary_id: f"{fallback_level} {fallback_label}"}
+    out["rubric_level_fallback"] = True
     return out
 
 
@@ -2023,6 +2074,8 @@ def _apply_orid_rubric_ok_rule(
     ok: bool,
     rubric_meta: dict[str, Any],
     missing: list[str],
+    *,
+    stage: str = "O",
 ) -> bool:
     """
     V1.2 rule: ORID rubric is the only pass/fail source.
@@ -2031,13 +2084,16 @@ def _apply_orid_rubric_ok_rule(
     """
     if _has_feedback_book_grounding_issue(missing):
         return False
-    rl_est = (rubric_meta.get("rubric_level_estimate") or "").strip()
-    if not rl_est:
+    level = primary_orid_level_from_rubric_meta(rubric_meta, stage=stage)
+    if level is None:
+        rl_est = rubric_meta.get("rubric_level_estimate")
+        if isinstance(rl_est, str) and rl_est.strip():
+            level = parse_level(rl_est)
+    if level is None:
         return bool(ok)
-    level = rl_est[:1]
-    if level in ("1", "2"):
+    if level in (1, 2):
         return False
-    if level in ("3", "4") and not _has_feedback_book_grounding_issue(missing):
+    if level in (3, 4) and not _has_feedback_book_grounding_issue(missing):
         return True
     return bool(ok)
 
@@ -2099,8 +2155,9 @@ def _looks_valid_feedback_narration(text: str) -> bool:
     if not t:
         return False
     # Keep narration stable: must contain all three required sections.
-    required = ("你已經做到", "你可以再加強", "試試看")
-    return all(x in t for x in required)
+    if not ("你已經做到" in t and "你可以再加強" in t):
+        return False
+    return "試著補一句" in t or "試試看" in t
 
 
 def _prev_ai_opener_from_messages(msgs: list[Any]) -> Optional[str]:
@@ -2179,9 +2236,24 @@ async def _genai_feedback(
     book_pack: Optional[dict[str, Any]],
     input_bucket: str = "normal",
     grounding_check: Optional[BookGroundingCheck] = None,
+    rag_context: str = "",
 ) -> Tuple[bool, list[str], list[str], Optional[str], Optional[str], Optional[str], dict[str, Any]]:
+    rag_ctx = (rag_context or "").strip() or await get_feedback_rag_context(
+        book_pack,
+        text,
+        stage=stage,
+    )
+
+    def _with_rag(
+        result: Tuple[bool, list[str], list[str], Optional[str], Optional[str], Optional[str], dict[str, Any]],
+    ) -> Tuple[bool, list[str], list[str], Optional[str], Optional[str], Optional[str], dict[str, Any]]:
+        ok, miss, sug, ex, imp, praise, rubric = result
+        if rag_ctx:
+            rubric = {**(rubric or {}), "rag_context": rag_ctx}
+        return ok, miss, sug, ex, imp, praise, rubric
+
     sys, user_msg = build_genai_feedback_prompts(
-        stage=stage, text=text, book_pack=book_pack, input_bucket=input_bucket
+        stage=stage, text=text, book_pack=book_pack, input_bucket=input_bucket, rag_context=rag_ctx
     )
     if grounding_check is not None and grounding_check.grounded is False:
         user_msg = _genai_grounding_user_hint(grounding_check, book_pack) + user_msg
@@ -2260,7 +2332,7 @@ async def _genai_feedback(
                 obj = parsed
             else:
                 obj = getattr(parsed, "__dict__", {}) or {}
-            return _feedback_from_obj(stage=stage, text=text, obj=obj)
+            return _with_rag(_feedback_from_obj(stage=stage, text=text, obj=obj))
 
     except Exception as e:
         logger.warning("writing feedback structured parse failed")
@@ -2287,7 +2359,7 @@ async def _genai_feedback(
                         obj2 = parsed2
                     else:
                         obj2 = getattr(parsed2, "__dict__", {}) or {}
-                    return _feedback_from_obj(stage=stage, text=text, obj=obj2)
+                    return _with_rag(_feedback_from_obj(stage=stage, text=text, obj=obj2))
             except Exception:
                 logger.warning("writing feedback structured parse retry failed")
 
@@ -2306,7 +2378,7 @@ async def _genai_feedback(
         )
         obj = extract_json_object(raw)
         if obj:
-            return _feedback_from_obj(stage=stage, text=text, obj=obj)
+            return _with_rag(_feedback_from_obj(stage=stage, text=text, obj=obj))
     except Exception:
         logger.warning("writing feedback manual json parse failed")
 
@@ -2537,6 +2609,8 @@ async def ensure_session(
 
     def _session_stale(sess: OridSession) -> bool:
         """True if the user's condition changed after this session was created."""
+        from datetime import timezone
+
         updated_at = getattr(user, "orid_condition_updated_at", None)
         if updated_at is None:
             return False
@@ -2544,8 +2618,9 @@ async def ensure_session(
         if sess_created is None:
             return False
         if sess_created.tzinfo is None:
-            import pytz
-            sess_created = pytz.utc.localize(sess_created)
+            sess_created = sess_created.replace(tzinfo=timezone.utc)
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
         return sess_created < updated_at
 
     if force_new:
@@ -2568,43 +2643,42 @@ async def ensure_session(
         await seed_writing_coach_welcome_if_needed(db, session=new_session, reading=reading)
         return new_session
 
-    # 同書單元：優先沿用已帶 book_unit 的 session
+    # 同書單元：沿用最近且未因組別變更而過期的 session
     s_stmt = (
         select(OridSession)
         .where(OridSession.user_id == user.id, OridSession.book_unit == bu)
         .order_by(OridSession.created_at.desc())
-        .limit(1)
+        .limit(8)
     )
     s_res = await db.execute(s_stmt)
-    session = s_res.scalars().first()
+    session = next((s for s in s_res.scalars().all() if not _session_stale(s)), None)
 
     reading = await _get_or_create_reading_for_week(db, week)
 
-    if session and not _session_stale(session):
+    if session:
         session.reading_id = reading.id
         await db.commit()
         await db.refresh(session)
         await seed_writing_coach_welcome_if_needed(db, session=session, reading=reading)
         return session
 
-    # 舊資料：依當週 reading title 找的 session（無 book_unit），也要檢查是否過期
-    if not session:
-        legacy_stmt = (
-            select(OridSession)
-            .join(Reading, OridSession.reading_id == Reading.id)
-            .where(OridSession.user_id == user.id, Reading.title == title)
-            .order_by(OridSession.created_at.desc())
-            .limit(1)
-        )
-        s2 = await db.execute(legacy_stmt)
-        session = s2.scalars().first()
-        if session and not _session_stale(session):
-            session.book_unit = bu
-            session.reading_id = reading.id
-            await db.commit()
-            await db.refresh(session)
-            await seed_writing_coach_welcome_if_needed(db, session=session, reading=reading)
-            return session
+    # 舊資料：依當週 reading title 找的 session（無 book_unit）
+    legacy_stmt = (
+        select(OridSession)
+        .join(Reading, OridSession.reading_id == Reading.id)
+        .where(OridSession.user_id == user.id, Reading.title == title)
+        .order_by(OridSession.created_at.desc())
+        .limit(8)
+    )
+    s2 = await db.execute(legacy_stmt)
+    legacy_session = next((s for s in s2.scalars().all() if not _session_stale(s)), None)
+    if legacy_session:
+        legacy_session.book_unit = bu
+        legacy_session.reading_id = reading.id
+        await db.commit()
+        await db.refresh(legacy_session)
+        await seed_writing_coach_welcome_if_needed(db, session=legacy_session, reading=reading)
+        return legacy_session
 
     # Create new session (either no existing session, or existing session is stale due to condition change)
     new_condition = _resolve_condition(condition)
@@ -2882,27 +2956,21 @@ async def writing_coach_chat(
             suggestions=fb_sug,
         )
         grounding_issue = _has_feedback_book_grounding_issue(fb_missing)
-        if grounding_issue:
-            fb_praise = _book_grounding_praise(stage_ctx)
-            fb_ex = _book_grounding_example(stage_ctx, book_pack)
+        if grounding_issue and fb_ex and "故事的主角" in str(fb_ex):
+            fb_ex = None
 
         fb_sug = scaffold_feedback_suggestions(stage_ctx, fb_sug)
         fb_ex = scaffold_feedback_example(stage_ctx, fb_ex)
 
-        fb_ok = _apply_orid_rubric_ok_rule(bool(fb_ok), fb_rubric, fb_missing)
+        fb_rubric = _ensure_primary_rubric_level_fallback(
+            stage=stage_ctx,
+            student_text=body,
+            ok=bool(fb_ok),
+            rubric_meta=fb_rubric,
+        )
+        fb_ok = _apply_orid_rubric_ok_rule(bool(fb_ok), fb_rubric, fb_missing, stage=stage_ctx)
 
-        if grounding_issue:
-            ai_reply = format_control_feedback_reply(
-                ok=bool(fb_ok),
-                missing=fb_missing,
-                suggestions=fb_sug,
-                stage=stage_ctx,
-                book_anchor=anchor_line,
-                example=fb_ex,
-                praise=fb_praise,
-                student_draft=body,
-            )
-        elif is_control_condition(condition, default=DEFAULT_ORID_CONDITION) or client is None:
+        if is_control_condition(condition, default=DEFAULT_ORID_CONDITION) or client is None:
             ai_reply = format_control_feedback_reply(
                 ok=bool(fb_ok),
                 missing=fb_missing,
@@ -2924,6 +2992,17 @@ async def writing_coach_chat(
                     "improved": fb_imp,
                     "rubric_focus": fb_rubric.get("rubric_focus"),
                     "rubric_level_estimate": fb_rubric.get("rubric_level_estimate"),
+                    "student_anchor_quote": fb_rubric.get("student_anchor_quote"),
+                    "draft_next_step": fb_rubric.get("draft_next_step"),
+                    "rag_context": fb_rubric.get("rag_context"),
+                    "rasf": build_rasf_narration_context(
+                        stage=stage_ctx,
+                        book_pack=book_pack,
+                        rubric_focus=fb_rubric.get("rubric_focus"),
+                        rubric_level_estimate=fb_rubric.get("rubric_level_estimate"),
+                        student_anchor_quote=fb_rubric.get("student_anchor_quote"),
+                        draft_next_step=fb_rubric.get("draft_next_step"),
+                    ),
                 },
                 ensure_ascii=False,
             )
@@ -3094,6 +3173,7 @@ async def writing_coach_chat(
     # ---- Scoring + badge computation ----
     score_result: dict[str, Any] = {}
     badge_meta: dict[str, Any] = {}
+    rubric_levels_snapshot: dict[str, int] = {}
     if source == "feedback_button":
         week_num = getattr(session, "book_unit", None)
         try:
@@ -3119,7 +3199,9 @@ async def writing_coach_chat(
 
         rubric_level_estimate = (fb_rubric or {}).get("rubric_level_estimate")
         rubric_focus = (fb_rubric or {}).get("rubric_focus")
-        if rubric_level_estimate is not None and str(rubric_level_estimate).strip():
+        if rubric_level_estimate is not None and (
+            isinstance(rubric_level_estimate, dict) or str(rubric_level_estimate).strip()
+        ):
             apply_single_level_estimate(
                 stage=stage_ctx,
                 rubric_focus=rubric_focus,
@@ -3127,7 +3209,18 @@ async def writing_coach_chat(
                 orid_levels=orid_levels,
                 sel_levels=sel_levels,
             )
-            score_result = calculate_orid_sel_score(orid_levels, sel_levels)
+        score_result = calculate_orid_sel_score(orid_levels, sel_levels)
+
+        # Build rubric_levels snapshot: integer 1–4 per criterion (for frontend/research)
+        rubric_levels_snapshot: dict[str, int] = {}
+        for cid in ORID_CRITERION_IDS:
+            lv = parse_level(orid_levels.get(cid))
+            if lv is not None:
+                rubric_levels_snapshot[cid] = lv
+        for cid in SEL_CRITERION_IDS:
+            lv = parse_level(sel_levels.get(cid))
+            if lv is not None:
+                rubric_levels_snapshot[cid] = lv
 
         # Badge evaluation — always run after feedback, even without rubric data
         has_content = bool((body or "").strip())
@@ -3186,6 +3279,7 @@ async def writing_coach_chat(
             "opening_hint": opening_hint,
             **({"rubric_focus": rf} if (rf := (fb_rubric.get("rubric_focus") if source == "feedback_button" else None)) else {}),
             **({"rubric_level_estimate": rl} if (rl := (fb_rubric.get("rubric_level_estimate") if source == "feedback_button" else None)) else {}),
+            **({"rubric_levels": rubric_levels_snapshot} if (source == "feedback_button" and rubric_levels_snapshot) else {}),
             **({"score": score_result} if score_result else {}),
             **badge_meta,
         }
@@ -3313,10 +3407,17 @@ async def writing_feedback(
         missing=missing,
         suggestions=suggestions,
     )
+    rubric_snap = _ensure_primary_rubric_level_fallback(
+        stage=data.stage,
+        student_text=text,
+        ok=bool(ok),
+        rubric_meta=rubric_snap,
+    )
     if _has_feedback_book_grounding_issue(missing):
-        praise = _book_grounding_praise(data.stage)
+        if example and "故事的主角" in str(example):
+            example = None
 
-    ok = _apply_orid_rubric_ok_rule(bool(ok), rubric_snap, missing)
+    ok = _apply_orid_rubric_ok_rule(bool(ok), rubric_snap, missing, stage=data.stage)
 
     await _try_dual_write_feedback(
         db,
