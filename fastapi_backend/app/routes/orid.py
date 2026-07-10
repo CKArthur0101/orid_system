@@ -1552,6 +1552,8 @@ async def _llm_natural_grounding_correction(
 - suggestions：一個短問句或下一步，引導學生改用書裡真的事件再寫。
 - 禁止出現「對齊教材」「對照摘要」「掃摘要」。
 - 禁止把學生的錯誤情節當成真實發生去追問（例如不要問「為什麼爺爺吃奶奶」）。
+- R/I 段特別規則：若學生「因為…」子句是書中某一幕的語意近義改寫（省略了「故意」「流口水」等細節，但大意吻合），missing 應說「可以寫得更貼近書中哪一幕，讓讀者更清楚」；**禁止**說「這在書裡沒有出現」或「不在書裡」。
+- R 段：若學生已有感受詞＋大意正確的「因為…」，建議只引導更具體的畫面，不要直接否定。
 - 繁體中文，每欄 1～2 短句，適合國小生。
 
 目前階段：{stage_u}
@@ -1772,6 +1774,14 @@ async def _enforce_feedback_book_grounding(
                 reason=(check.reason or "教材摘錄未支持此說法").strip(),
             )
         if check.grounded is False:
+            # For R/I stages, don't downgrade on LLM-checker alone — the checker
+            # can over-penalise semantic paraphrases. Require heuristic corroboration.
+            if stage_upper in ("R", "I"):
+                heuristic_ri_bad = looks_likely_factual_mismatch(
+                    t, book_pack
+                ) or looks_likely_ungrounded_in_book(t, book_pack, stage=stage)
+                if not heuristic_ri_bad:
+                    return ok, missing, suggestions
             miss = list(missing)
             sug = list(suggestions)
             if _has_feedback_book_grounding_issue(miss):

@@ -27,11 +27,12 @@ export function parseFeedbackNarration(text: string): ParsedFeedbackNarration | 
   if (!normalized) return null;
 
   const praiseHeading = findHeading(normalized, /你已經做到[:：]?\s*/);
-  const rethinkHeading = findHeading(normalized, /你可以再加強[:：]?\s*/);
-  const exampleHeading = findHeading(
-    normalized,
-    /(?:試著補一句|試試看(?:這樣寫)?)[:：]?\s*/,
-  );
+  const rethinkHeading =
+    findHeading(normalized, /你可以再加強[:：]?\s*/) ??
+    findHeading(normalized, /再想一想[:：]?\s*/);
+  const exampleHeading =
+    findHeading(normalized, /(?:試著補一句|試試看(?:這樣寫)?)[:：]?\s*/) ??
+    findHeading(normalized, /可以這樣修改[:：]?\s*/);
 
   if (!praiseHeading || !rethinkHeading || !exampleHeading) return null;
   if (!(praiseHeading.start < rethinkHeading.start && rethinkHeading.start < exampleHeading.start)) return null;

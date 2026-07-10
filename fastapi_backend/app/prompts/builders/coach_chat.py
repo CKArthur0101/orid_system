@@ -16,10 +16,10 @@ from app.prompts.templates.coach_chat import (
 _SYNTHESIS_PHASE_CHOICES = frozenset({"select_evidence", "align_prompt", "short_draft", "expand_revise"})
 
 _SYNTHESIS_RUBRICS: tuple[tuple[str, str], ...] = (
-    ("R1", "有具體呼應第 1 週 ORID 或閱讀摘記的材料，避免空泛形容。"),
-    ("R2", "讀者跟得上「故事／提問」主線，知道你在回應什麼。"),
-    ("R3", "段落之間有銜接，先說什麼、再說什麼不會突然跳走。"),
-    ("R4", "句子長度與指稱清楚，少用讓人猜的「那個、這樣」。"),
+    ("完整性", "文章是否包含故事事件、感受、體會與未來行動四個部分？"),
+    ("連貫性", "句子之間是否順暢？不是把四段硬貼在一起，而是有串接。"),
+    ("反思深度", "學生是否說明原因、想法、體會，並能從故事連結到自己？"),
+    ("行動具體性", "D 的部分是否具體？學生是否說出實際能做到的行動？"),
 )
 
 
@@ -49,11 +49,11 @@ def _synthesis_operational_instructions(
         rubric_lines = [f"- {rid}：{text}" for rid, text in _SYNTHESIS_RUBRICS if rid in rubric_ids]
         lines.append("【本輪檢查重點（對照下列 1～2 條即可）】\n" + "\n".join(rubric_lines))
     elif not r1:
-        lines.append("【本輪為第二輪】可在銜接、例子與語句清楚度上給較具體建議，仍以短段落、不要代寫全文。")
+        lines.append("【本輪為第二輪】可在連貫性、反思深度與行動具體性上給較具體建議，仍以短段落、不要代寫全文。")
         lines.append(
             "【本輪檢查重點（對照下列 1～2 條即可）】\n"
-            "- R3：段落之間有銜接，先說什麼、再說什麼不會突然跳走。\n"
-            "- R4：句子長度與指稱清楚，少用讓人猜的「那個、這樣」。"
+            "- 連貫性：段落之間有銜接，先說什麼、再說什麼不會突然跳走。\n"
+            "- 行動具體性：D 的部分是否具體說出實際能做到的行動？"
         )
 
     if r1:
@@ -81,20 +81,20 @@ def _synthesis_layer_and_rubrics(*, phase: str, feedback_round: int) -> tuple[st
     r2 = feedback_round == 2
     if phase == "select_evidence":
         if not r2:
-            return "證據層：材料是否具體、是否真能支持後面想說的。", frozenset({"R1", "R2"})
-        return "證據層為主，並輕輕點一下如何接到下一段（一句）。", frozenset({"R1", "R2"})
+            return "完整性為主：文章是否包含故事事件、感受、體會與未來行動？", frozenset({"完整性", "反思深度"})
+        return "完整性為主，並輕輕點一下各部分是否有串接。", frozenset({"完整性", "連貫性"})
     if phase == "align_prompt":
         if not r2:
-            return "扣題層：鷹架句子是否把「故事／提問」對準了。", frozenset({"R2", "R3"})
-        return "結構層：鷹架之間是否順、有沒有跳題。", frozenset({"R2", "R3"})
+            return "連貫性為主：句子之間是否有銜接，不是只把四段硬貼在一起？", frozenset({"連貫性", "完整性"})
+        return "連貫性與反思深度：文章是否能從故事連結到自己的想法？", frozenset({"連貫性", "反思深度"})
     if phase == "short_draft":
         if not r2:
-            return "證據＋扣題：短稿有沒有帶到材料、讀者懂不懂主線。", frozenset({"R1", "R2"})
-        return "結構層：句序與小段之間的銜接。", frozenset({"R3", "R4"})
+            return "完整性與連貫性：短稿是否有各部分，讀者看得懂主線。", frozenset({"完整性", "連貫性"})
+        return "反思深度：學生是否說明原因並連結到自己？", frozenset({"反思深度", "行動具體性"})
     # expand_revise
     if not r2:
-        return "結構層為主：段落功能與銜接。", frozenset({"R2", "R3"})
-    return "語言層為主（必要時一句結構）：句長、指稱、讀起來是否順。", frozenset({"R3", "R4"})
+        return "反思深度與行動具體性：體會是否清楚？未來行動是否具體可做？", frozenset({"反思深度", "行動具體性"})
+    return "行動具體性為主：D 的部分是否具體說出實際能做到的行動？", frozenset({"行動具體性", "連貫性"})
 
 
 def compose_synthesis_coach_mid_block(

@@ -265,6 +265,117 @@ def test_grounding_checker_does_not_false_positive_on_correct_book_paraphrase():
     assert grounding.looks_likely_ungrounded_in_book(fabricated, book_pack, "O") is True
 
 
+def test_r_stage_paraphrase_only_looking_not_flagged():
+    """
+    Regress: 「因為旁邊的人只能看著」是「卻只能眼睜睜的看著他吃」的語意近義改寫，
+    heuristic 不應把它判為 ungrounded。
+    """
+    book_pack = {
+        "book_title": "阿松爺爺的柿子樹",
+        "key_events": [
+            "阿松爺爺在大家面前吃柿子、炫耀柿子有多好，旁人只能羨慕地看著。",
+            "阿松爺爺家的柿子很甜，但他一直想把柿子獨占起來，不想分給別人。",
+        ],
+        "story_excerpts": [
+            {
+                "page": 4,
+                "text": (
+                    "他一邊說，還故意在大家面前狼吞虎嚥，\n"
+                    "像在炫耀什麼似的。\n"
+                    "每個人都羨慕得快流口水了，\n"
+                    "卻只能眼睜睜的看著他吃。"
+                ),
+            }
+        ],
+        "characters": [{"name": "阿松爺爺"}, {"name": "哎喲奶奶"}],
+    }
+    # R stage: "因為旁邊的人只能看著" is a valid paraphrase — must NOT be flagged
+    r_text = "我覺得很不公平，因為旁邊的人只能看著"
+    assert grounding.looks_likely_factual_mismatch(r_text, book_pack) is False
+    assert grounding.looks_likely_ungrounded_in_book(r_text, book_pack, "R") is False
+
+
+def test_o_stage_kaki_deco_partial_match_not_fully_ungrounded():
+    """
+    O 段學生寫「哎喲奶奶用柿子蒂打陀螺」漏掉小朋友，大意正確（「打陀螺」出現在書中摘錄），
+    heuristic 不應整段判為 ungrounded。
+    """
+    book_pack = {
+        "book_title": "阿松爺爺的柿子樹",
+        "key_events": [
+            "哎喲奶奶拿到柿子蒂很開心；隔天她和小朋友用柿子蒂玩陀螺，大家覺得很厲害。",
+            "阿松爺爺家的柿子很甜，但他一直想把柿子獨占起來，不想分給別人。",
+        ],
+        "story_excerpts": [
+            {
+                "page": 9,
+                "text": "哎喲奶奶和一群小朋友正在打陀螺。\n而且，打的還是柿子蒂陀螺呢。",
+            }
+        ],
+        "characters": [{"name": "阿松爺爺"}, {"name": "哎喲奶奶"}, {"name": "小朋友們"}],
+    }
+    o_text = "哎喲奶奶拿到柿子蒂，用來打陀螺"
+    assert grounding.looks_likely_factual_mismatch(o_text, book_pack) is False
+    assert grounding.looks_likely_ungrounded_in_book(o_text, book_pack, "O") is False
+
+
+def test_i_stage_sowing_seeds_not_flagged():
+    """
+    I 段「大家把種子撒出去種樹」連回書中播種場景，不應被判為 ungrounded。
+    """
+    book_pack = {
+        "book_title": "阿松爺爺的柿子樹",
+        "key_events": [
+            "大家一起把柿子拿出來吃，並把柿子裡的種子到處撒開，準備種出新的柿子樹。",
+        ],
+        "story_excerpts": [],
+        "characters": [{"name": "阿松爺爺"}, {"name": "哎喲奶奶"}],
+    }
+    i_text = "我學到分享讓大家一起快樂，因為大家把種子撒出去種出新的柿子樹"
+    assert grounding.looks_likely_factual_mismatch(i_text, book_pack) is False
+    assert grounding.looks_likely_ungrounded_in_book(i_text, book_pack, "I") is False
+
+
+@pytest.mark.asyncio
+async def test_ri_stage_llm_alone_does_not_downgrade_ok():
+    """
+    R/I 段：LLM checker 單獨說 grounded=false，但 heuristic 沒有觸發時，
+    _enforce_feedback_book_grounding 不應降級 ok，也不應覆寫 missing。
+    """
+    book_pack = {
+        "book_title": "阿松爺爺的柿子樹",
+        "key_events": [
+            "阿松爺爺在大家面前吃柿子、炫耀柿子有多好，旁人只能羨慕地看著。",
+        ],
+        "story_excerpts": [
+            {
+                "page": 4,
+                "text": "卻只能眼睜睜的看著他吃。",
+            }
+        ],
+        "characters": [{"name": "阿松爺爺"}],
+    }
+    # LLM says grounded=false, but heuristic would NOT flag this text
+    llm_false = orid.BookGroundingCheck(
+        grounded=False,
+        unsupported_span="旁邊的人只能看著",
+        reason="原句未出現於教材",
+    )
+    ok, missing, suggestions = await orid._enforce_feedback_book_grounding(
+        "我覺得很不公平，因為旁邊的人只能看著",
+        book_pack,
+        "R",
+        True,
+        ["可以把感受說得更具體"],
+        ["哪一幕讓你有這種感覺？"],
+        use_llm_checker=True,
+        grounding_check=llm_false,
+    )
+    # ok should stay True — heuristic didn't fire, so LLM alone can't downgrade
+    assert ok is True
+    assert missing == ["可以把感受說得更具體"]
+
+
 def test_normalize_feedback_focus_rewrites_vague_feedback():
     missing, suggestions = normalize_feedback_focus(
         stage="I",

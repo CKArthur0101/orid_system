@@ -5,6 +5,22 @@ import { PersimmonBullet } from "./PersimmonBullet";
 
 type StageKey = "O" | "R" | "I" | "D";
 
+// Synthesis mode fixed prompts for control group (week 2)
+const SYNTHESIS_PROMPTS: string[] = [
+  "故事裡讓我印象最深的是……",
+  "看到這件事時，我覺得……，因為……",
+  "這讓我想到……",
+  "我從這個故事學到……",
+  "以後如果我遇到類似的情況，我會……",
+];
+
+const SYNTHESIS_QUESTIONS: string[] = [
+  "你上週的 O 有提到哪個重要情節？可以用那個當開頭。",
+  "你上週的 R 寫了什麼感受？可以用連接詞接到感受那一句。",
+  "你上週的 I 有沒有體會或想法？可以寫「這讓我想到……」。",
+  "你上週的 D 有沒有說要怎麼做？記得在結尾補上具體的行動。",
+];
+
 // Fixed sentence starters for each ORID stage
 const FIXED_PROMPTS: Record<StageKey, string[]> = {
   O: [
@@ -60,9 +76,18 @@ const BOOK_QUESTIONS: Record<StageKey, string[]> = {
 interface WritingPromptHelperProps {
   focusStage: StageKey;
   onPromptViewed?: () => void;
+  /** Week-2 synthesis mode for control group: show synthesis-specific prompts */
+  synthesisMode?: boolean;
+  /** Personalized opening reference (control group synthesis tab) */
+  openingText?: string;
 }
 
-export function WritingPromptHelper({ focusStage, onPromptViewed }: WritingPromptHelperProps) {
+export function WritingPromptHelper({
+  focusStage,
+  onPromptViewed,
+  synthesisMode,
+  openingText,
+}: WritingPromptHelperProps) {
   const [expanded, setExpanded] = useState(false);
 
   function handleViewPrompts() {
@@ -70,8 +95,8 @@ export function WritingPromptHelper({ focusStage, onPromptViewed }: WritingPromp
     onPromptViewed?.();
   }
 
-  const prompts = FIXED_PROMPTS[focusStage] ?? FIXED_PROMPTS.O;
-  const questions = BOOK_QUESTIONS[focusStage] ?? BOOK_QUESTIONS.O;
+  const prompts = synthesisMode ? SYNTHESIS_PROMPTS : (FIXED_PROMPTS[focusStage] ?? FIXED_PROMPTS.O);
+  const questions = synthesisMode ? SYNTHESIS_QUESTIONS : (BOOK_QUESTIONS[focusStage] ?? BOOK_QUESTIONS.O);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#fffcf7]">
@@ -80,9 +105,13 @@ export function WritingPromptHelper({ focusStage, onPromptViewed }: WritingPromp
         <div className="flex items-center gap-2">
           <span className="text-xl">🌰</span>
           <div>
-            <div className="text-sm font-bold text-amber-950">寫作提示小幫手</div>
+            <div className="text-sm font-bold text-amber-950">
+              {synthesisMode ? "整合寫作提示" : "寫作提示小幫手"}
+            </div>
             <div className="text-[11px] text-amber-900/60">
-              固定提示句 + 書本問題，幫助你寫出更完整的反思
+              {synthesisMode
+                ? "句型提示 + 上週內容提問，幫助你完成整合短文"
+                : "固定提示句 + 書本問題，幫助你寫出更完整的反思"}
             </div>
           </div>
         </div>
@@ -90,6 +119,11 @@ export function WritingPromptHelper({ focusStage, onPromptViewed }: WritingPromp
 
       {/* Content */}
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        {synthesisMode && openingText ? (
+          <div className="kid-bubble-ai mb-3 border border-amber-100/80 bg-amber-50/40 text-sm leading-relaxed">
+            <div className="whitespace-pre-wrap">{openingText}</div>
+          </div>
+        ) : null}
         {!expanded ? (
           <div className="flex flex-col items-center gap-3 py-4">
             <p className="text-center text-sm text-amber-900/70">
@@ -107,7 +141,9 @@ export function WritingPromptHelper({ focusStage, onPromptViewed }: WritingPromp
           <div className="flex flex-col gap-4">
             {/* Sentence starters */}
             <div>
-              <div className="mb-2 text-xs font-bold text-amber-900">✏️ 固定提示句</div>
+              <div className="mb-2 text-xs font-bold text-amber-900">
+                {synthesisMode ? "✏️ 整合句型提示" : "✏️ 固定提示句"}
+              </div>
               <div className="flex flex-col gap-1.5">
                 {prompts.map((p) => (
                   <div key={p} className="flex items-start gap-1.5">
@@ -120,7 +156,9 @@ export function WritingPromptHelper({ focusStage, onPromptViewed }: WritingPromp
 
             {/* Book content questions */}
             <div>
-              <div className="mb-2 text-xs font-bold text-amber-900">📖 書本內文問題</div>
+              <div className="mb-2 text-xs font-bold text-amber-900">
+                {synthesisMode ? "📖 上週 ORID 提問" : "📖 書本內文問題"}
+              </div>
               <div className="flex flex-col gap-1.5">
                 {questions.map((q) => (
                   <div key={q} className="flex items-start gap-1.5">

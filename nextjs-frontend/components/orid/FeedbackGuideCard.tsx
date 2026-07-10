@@ -1,7 +1,7 @@
 import type { ParsedFeedbackNarration } from "@/lib/parse-feedback-narration";
 import { PersimmonBullet } from "@/components/orid/PersimmonBullet";
 
-const SECTIONS: { key: keyof ParsedFeedbackNarration; label: string; panelClass: string }[] = [
+const BASE_SECTIONS: { key: keyof ParsedFeedbackNarration; label: string; panelClass: string }[] = [
   {
     key: "praise",
     label: "① 你已經做到",
@@ -19,7 +19,18 @@ const SECTIONS: { key: keyof ParsedFeedbackNarration; label: string; panelClass:
   },
 ];
 
-export function FeedbackGuideCard({ parsed }: { parsed: ParsedFeedbackNarration }) {
+export function FeedbackGuideCard({
+  parsed,
+  section3Label,
+}: {
+  parsed: ParsedFeedbackNarration;
+  section3Label?: string;
+}) {
+  const SECTIONS = section3Label
+    ? BASE_SECTIONS.map((s) =>
+        s.key === "example" ? { ...s, label: section3Label } : s,
+      )
+    : BASE_SECTIONS;
   return (
     <div className="w-full max-w-[min(100%,20rem)] overflow-hidden rounded-2xl border border-amber-200/80 bg-white shadow-sm sm:max-w-[22rem]">
       <div className="flex flex-col gap-0.5 p-2">

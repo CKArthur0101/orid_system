@@ -12,6 +12,9 @@ import { OridPartnerMascot } from "@/components/orid/OridMascotImage";
 import { PersimmonBullet } from "@/components/orid/PersimmonBullet";
 import { WritingPromptHelper } from "@/components/orid/WritingPromptHelper";
 import { getBookWeekArt } from "@/lib/orid-book-art";
+import { buildCoachOpeningMessage } from "@/lib/orid/coach-opening";
+import { buildSynthesisOpeningMessage } from "@/lib/orid/synthesis-opening";
+import { isEvenWeek, isOddWeek, priorOddWeek } from "@/lib/orid/week-flow";
 import { type BadgeId, calculateEarnedBadges, getNewlyEarnedBadges } from "@/lib/orid/badgeRules";
 import { formatScore, type ScoreResult } from "@/lib/orid/rubricScoring";
 import {
@@ -24,7 +27,7 @@ import { ORID_UNLOCKED_WEEKS } from "@/lib/orid-week-access";
 import { ORID_STAGE_THEME } from "@/lib/orid-stage-theme";
 import { parseFeedbackNarration } from "@/lib/parse-feedback-narration";
 
-type ChatMsg = { role: "student" | "ai"; text: string };
+type ChatMsg = { role: "student" | "ai"; text: string; stage?: string };
 
 type StageKey = "O" | "R" | "I" | "D";
 type DraftKey = "d1" | "d2";
@@ -69,6 +72,7 @@ type OridWritingV1 = {
 type BookPackV1 = {
   schema: "book_pack_v1";
   book_title?: string;
+  core_theme?: string[];
   key_events?: string[];
   writing_guide?: Partial<Record<StageKey, string>>;
 };
@@ -197,7 +201,8 @@ function toChatMsg(m: any): ChatMsg | null {
   const text = String(m?.text ?? "").trim();
   if (!text) return null;
   const role: ChatMsg["role"] = m?.sender === "student" ? "student" : "ai";
-  return { role, text };
+  const stage = m?.stage ? String(m.stage) : undefined;
+  return { role, text, stage };
 }
 
 function normalizeDraftKey(v: unknown, fallback: DraftKey): DraftKey {
@@ -275,7 +280,7 @@ function normalizeWritingContent(raw: unknown, week: number): OridWritingV1 {
 
   const weekNum = Number(obj?.week ?? week) || week;
   const flow: Week2Flow | undefined =
-    obj?.week2_flow === "synthesis" || obj?.week2_flow === "orid_review" ? obj.week2_flow : weekNum === 2 ? "orid_review" : undefined;
+    obj?.week2_flow === "synthesis" || obj?.week2_flow === "orid_review" ? obj.week2_flow : isEvenWeek(weekNum) ? "orid_review" : undefined;
 
   const o = obj as any;
   const base: OridWritingV1 = {
@@ -292,7 +297,7 @@ function normalizeWritingContent(raw: unknown, week: number): OridWritingV1 {
       : {}),
   };
 
-  if (weekNum === 2 && flow === "synthesis") {
+  if (isEvenWeek(weekNum) && flow === "synthesis") {
     const out: OridWritingV1 = {
       ...base,
       synthesis_draft: typeof o.synthesis_draft === "string" ? o.synthesis_draft : "",
@@ -343,15 +348,9 @@ function isLegacyCoachWelcome(text: string): boolean {
 }
 
 function buildCoachWelcomeMsg(bookPack: BookPackV1 | null): ChatMsg {
-  const title = String(bookPack?.book_title ?? "").trim();
-  const book = title ? `《${title}》` : "這本書";
   return {
     role: "ai",
-    text: [
-      "哈囉！我是你的寫作小幫手 🤖",
-      `左邊四格，你想先寫哪一格都可以喔！我們一起來想想讀${book}的心得。`,
-      "寫不出來的時候，按那一格的「取得回饋」，我就會在這裡陪你喔！",
-    ].join("\n"),
+    text: buildCoachOpeningMessage(bookPack),
   };
 }
 
@@ -362,33 +361,7 @@ function refreshLegacyCoachWelcome(prev: ChatMsg[], bookPack: BookPackV1 | null)
   return null;
 }
 
-/** 第 2 週整合寫作：進聊天室時顯示，嵌入上週四格摘要與寫作架構（週一資料載入後會再刷新一次）。 */
-function buildSynthesisWelcomeScaffold(week1: OridWritingV1 | null, bookPack: BookPackV1 | null): ChatMsg {
-  const title = String(bookPack?.book_title ?? "").trim();
-  const book = title ? `《${title}》` : "這本書";
-  const w1 = week1 ?? createEmptyWriting(1);
-  const blocks = STAGES.map(({ key }) => {
-    const t = String(w1.stages[key].d1 ?? "").trim();
-    return `${STAGE_TITLES[key]}\n${t || "（這一格還沒有內容）"}`;
-  });
-  const text = [
-    `歡迎來到第 2 週「整合寫作」！`,
-    `這週請把你在第 1 週寫的四段 ORID，收成一段讀起來順、又跟 ${book} 扣得住的心得。`,
-    "",
-    "── 你上週寫了什麼（也可對照左邊唯讀四格）──",
-    "",
-    ...blocks,
-    "",
-    "── 可以怎麼發揮（自由寫，不必照抄）──",
-    "・開頭：一句話帶出「故事裡讓我印象最深的是…」",
-    "・中間：把 O／R／I 用連接詞串起來，可以沿用你上週的句子做刪修、順一順。",
-    "・收尾：呼應你上週 D，用一句寫「如果以後…我想先試試看…」。",
-    "",
-    "請在**中間大空白**寫整合稿；寫好後按下面的「取得整合回饋」。",
-    "我會用三小段回覆你，標題跟第 1 週一樣好讀：「你已經做到：」「你可以再加強：」「試著補一句：」。",
-  ].join("\n");
-  return { role: "ai", text };
-}
+const SYNTHESIS_OPENING_PREFIX = "歡迎來到第 ";
 
 function getForceNewFromUrl(): boolean {
   if (typeof window === "undefined") return false;
@@ -447,10 +420,50 @@ export default function WeekBookPage() {
   const [encourageMsg, setEncourageMsg] = useState<string | null>(null);
   const encourageTimerRef = useRef<number | null>(null);
   const [oridCanForceNew, setOridCanForceNew] = useState(false);
-  const [week1Data, setWeek1Data] = useState<OridWritingV1 | null>(null);
+  const [priorWeekData, setPriorWeekData] = useState<OridWritingV1 | null>(null);
   const [focusStage, setFocusStage] = useState<StageKey>("O");
   const [fbLoading, setFbLoading] = useState(false);
   const [fbError, setFbError] = useState<string | null>(null);
+
+  // Synthesis chat tabs (week 2 synthesis phase only)
+  type ChatTab = "synthesis" | "week1";
+  const [chatTab, setChatTab] = useState<ChatTab>("synthesis");
+  /** ORID feedback thread: student + O/R/I/D replies; excludes synthesis (ALL) and duplicate coach opener. */
+  const ORID_STAGES = ["O", "R", "I", "D"] as const;
+  const oridStageMessages = useMemo(
+    () =>
+      messages.filter(
+        (m) =>
+          m.stage !== "ALL" &&
+          (m.role === "student" ||
+            (ORID_STAGES as readonly string[]).includes(m.stage ?? "")),
+      ),
+    [messages],
+  );
+  /** Alias used by the synthesis tab's "上週回饋" panel. */
+  const week1Messages = oridStageMessages;
+  const synthMessages = useMemo(
+    () => messages.filter((m) => m.stage === "ALL"),
+    [messages],
+  );
+  const synthesisOpeningText = useMemo(
+    () => buildSynthesisOpeningMessage(priorWeekData, bookPack?.book_title, weekNum),
+    [priorWeekData, bookPack?.book_title, weekNum],
+  );
+  /** 整合寫作 tab：開場引導（依上週內容）+ 本週 stage=ALL 的對話，不混入上週 ORID 回饋 */
+  const synthesisTabMessages = useMemo((): ChatMsg[] => {
+    const feedback = synthMessages;
+    const opening: ChatMsg = {
+      role: "ai",
+      text: synthesisOpeningText,
+      stage: "ALL",
+    };
+    const hasPersistedOpening = feedback.some(
+      (m) => m.role === "ai" && m.text.startsWith(SYNTHESIS_OPENING_PREFIX),
+    );
+    if (hasPersistedOpening) return feedback;
+    return [opening, ...feedback];
+  }, [synthMessages, synthesisOpeningText]);
 
   // Score and badge state
   const [totalScore, setTotalScore] = useState<number | null>(null);
@@ -472,7 +485,7 @@ export default function WeekBookPage() {
 
   useLayoutEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, showAiTyping]);
+  }, [messages, showAiTyping, chatTab, synthesisOpeningText]);
 
   useEffect(() => {
     return () => {
@@ -551,7 +564,7 @@ export default function WeekBookPage() {
       setWritingHydratedSessionId(null);
       setWritingId(null);
       setWritingData(emptyWriting);
-      setWeek1Data(null);
+      setPriorWeekData(null);
       setFbError(null);
       setSaveMsg(null);
       setEncourageMsg(null);
@@ -592,46 +605,47 @@ export default function WeekBookPage() {
   }, []);
 
   useEffect(() => {
-    if (weekNum !== 2 || !sessionId) return;
+    if (!isEvenWeek(weekNum) || !sessionId) return;
+    const priorWeek = priorOddWeek(weekNum);
     const ac = new AbortController();
     (async () => {
       try {
-        const res = await fetch(`/api/orid/writings?session_id=${sessionId}&week=1&latest=true`, {
+        const res = await fetch(`/api/orid/writings?session_id=${sessionId}&week=${priorWeek}&latest=true`, {
           credentials: "include",
           cache: "no-store",
           signal: ac.signal,
         });
         const text = await res.text();
         if (!res.ok) {
-          setWeek1Data(createEmptyWriting(1));
+          setPriorWeekData(createEmptyWriting(priorWeek));
           return;
         }
         const list = text ? JSON.parse(text) : [];
         const latest = Array.isArray(list) ? list[0] : null;
         if (latest?.content) {
-          setWeek1Data(parseWritingRecordContent(latest.content, 1));
+          setPriorWeekData(parseWritingRecordContent(latest.content, priorWeek));
         } else {
-          setWeek1Data(createEmptyWriting(1));
+          setPriorWeekData(createEmptyWriting(priorWeek));
         }
       } catch {
-        setWeek1Data(createEmptyWriting(1));
+        setPriorWeekData(createEmptyWriting(priorWeek));
       }
     })();
     return () => ac.abort();
   }, [weekNum, sessionId]);
 
-  const w2Phase = weekNum === 2 ? writingData.week2_flow ?? "orid_review" : null;
-  const oridDisplay = weekNum === 2 ? (week1Data ?? createEmptyWriting(1)) : writingData;
-  const showStageFeedbackButtons = weekNum === 1;
-  const showSynthesisColumn = weekNum === 2 && w2Phase === "synthesis";
-  const oridReadOnly = weekNum === 2;
+  const w2Phase = isEvenWeek(weekNum) ? writingData.week2_flow ?? "orid_review" : null;
+  const oridDisplay = isEvenWeek(weekNum) ? (priorWeekData ?? createEmptyWriting(priorOddWeek(weekNum))) : writingData;
+  const showStageFeedbackButtons = isOddWeek(weekNum);
+  const showSynthesisColumn = isEvenWeek(weekNum) && w2Phase === "synthesis";
+  const oridReadOnly = isEvenWeek(weekNum);
   const missionProgress = useMemo(() => {
-    const data = weekNum === 2 ? (week1Data ?? createEmptyWriting(1)) : writingData;
+    const data = isEvenWeek(weekNum) ? (priorWeekData ?? createEmptyWriting(priorOddWeek(weekNum))) : writingData;
     return STAGES.map(({ key }) => ({
       stage: key,
       status: deriveStageMissionStatus(data.stages[key]),
     }));
-  }, [writingData, week1Data, weekNum]);
+  }, [writingData, priorWeekData, weekNum]);
   const writtenCount = useMemo(
     () => missionProgress.filter((item) => item.status !== "not_started").length,
     [missionProgress],
@@ -642,11 +656,11 @@ export default function WeekBookPage() {
   );
 
   const mainGridClass = showSynthesisColumn
-    ? "grid min-h-0 w-full flex-1 grid-cols-1 gap-2.5 overflow-hidden md:grid-cols-[1fr_1fr] md:gap-3 xl:grid-cols-[1fr_1fr_1fr]"
+    ? "grid min-h-0 w-full flex-1 grid-cols-1 gap-2.5 overflow-hidden md:grid-cols-[1fr_1fr] md:gap-3 xl:grid-cols-[1fr_1.1fr_1fr]"
     : "grid min-h-0 w-full flex-1 grid-cols-1 gap-2.5 overflow-hidden md:grid-cols-[1fr_1fr] md:gap-3";
 
   const aiPartnerShellClass = showSynthesisColumn
-    ? "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[35vh] md:order-2 md:col-start-2 md:h-full md:row-start-1 xl:order-3 xl:col-start-3"
+    ? "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[50vh] md:order-2 md:col-start-2 md:h-full md:row-start-1 xl:order-3 xl:col-start-3"
     : "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[35vh] md:order-2 md:col-start-2 md:h-full md:row-start-1";
 
   const isControl = isControlConditionValue(condition);
@@ -905,24 +919,12 @@ export default function WeekBookPage() {
     return () => ac.abort();
   }, [sessionId, weekNum, progressHydratedSessionId]);
 
-  /** 聊天載入後：第 2 週整合寫作保證出現一次開場架構（不受 seededInitial 影響）；其餘週次維持原「空聊天才種 ORID 開場」。 */
+  /** 聊天載入後：奇數週空聊天才種 ORID 開場；整合寫作開場改由 synthesisTabMessages 顯示，不寫入全域 messages */
   useEffect(() => {
     if (!historyLoaded || !readingContentReady) return;
+    if (isEvenWeek(weekNum) && writingData.week2_flow === "synthesis") return;
 
     setMessages((prev) => {
-      if (weekNum === 2 && writingData.week2_flow === "synthesis") {
-        const hasScaffold = prev.some(
-          (m) => m.role === "ai" && m.text.startsWith("歡迎來到第 2 週「整合寫作」"),
-        );
-        if (hasScaffold) return prev;
-        const scaffold = buildSynthesisWelcomeScaffold(week1Data, bookPack);
-        if (prev.length === 0) return [scaffold];
-        if (prev.length === 1 && prev[0].role === "ai" && isLegacyCoachWelcome(prev[0].text)) {
-          return [scaffold];
-        }
-        return [...prev, scaffold];
-      }
-
       const refreshed = refreshLegacyCoachWelcome(prev, bookPack);
       if (refreshed) return refreshed;
 
@@ -930,24 +932,12 @@ export default function WeekBookPage() {
       if (prev.length > 0) return prev;
       return [buildCoachWelcomeMsg(bookPack)];
     });
-  }, [historyLoaded, readingContentReady, seededInitial, bookPack, weekNum, writingData.week2_flow, week1Data]);
+  }, [historyLoaded, readingContentReady, seededInitial, bookPack, weekNum, writingData.week2_flow]);
 
-  /** 週一資料晚到時，更新已存在的整合寫作開場內容。 */
-  useEffect(() => {
-    if (weekNum !== 2 || writingData.week2_flow !== "synthesis" || !week1Data) return;
-    setMessages((prev) => {
-      const idx = prev.findIndex((m) => m.role === "ai" && m.text.startsWith("歡迎來到第 2 週「整合寫作」"));
-      if (idx < 0) return prev;
-      const next = [...prev];
-      next[idx] = buildSynthesisWelcomeScaffold(week1Data, bookPack);
-      return next;
-    });
-  }, [weekNum, writingData.week2_flow, week1Data, bookPack]);
-
-  function appendAiReply(text: unknown) {
+  function appendAiReply(text: unknown, stage?: string) {
     const reply = String(text ?? "").trim();
     if (!reply) return;
-    setMessages((prev) => [...prev, { role: "ai", text: reply }]);
+    setMessages((prev) => [...prev, { role: "ai", text: reply, stage }]);
   }
 
   async function persistWritingSnapshot(
@@ -991,7 +981,7 @@ export default function WeekBookPage() {
     setFbError(null);
     const draft: DraftKey = "d1";
     const optimisticStudent = `[${stage} 本段寫作]\n${text}`;
-    setMessages((prev) => [...prev, { role: "student", text: optimisticStudent }]);
+    setMessages((prev) => [...prev, { role: "student", text: optimisticStudent, stage }]);
 
     try {
       const r = await fetch("/api/orid/writing-coach/chat", {
@@ -1013,7 +1003,7 @@ export default function WeekBookPage() {
       if (!r.ok) throw new Error(formatApiError(r.status, raw, "回饋失敗"));
 
       const data = raw ? JSON.parse(raw) : {};
-      appendAiReply(data?.ai_reply);
+      appendAiReply(data?.ai_reply, stage);
       const outStage = coerceStageKey(data?.stage, stage);
       const outDraft: DraftKey = normalizeDraftKey(data?.meta?.draft ?? data?.draft, draft);
 
@@ -1086,7 +1076,7 @@ export default function WeekBookPage() {
   }
 
   async function runSynthesisFeedback() {
-    if (!sessionId || weekNum !== 2) return;
+    if (!sessionId || !isEvenWeek(weekNum)) return;
 
     const draft = String(writingData.synthesis_draft ?? "").trim();
     if (draft.length < 12) {
@@ -1098,7 +1088,7 @@ export default function WeekBookPage() {
     setFbLoading(true);
     setFbError(null);
     const optimisticStudent = `[整合寫作]\n${draft}`;
-    setMessages((prev) => [...prev, { role: "student", text: optimisticStudent }]);
+    setMessages((prev) => [...prev, { role: "student", text: optimisticStudent, stage: "ALL" }]);
 
     try {
       const r = await fetch("/api/orid/writing-coach/chat", {
@@ -1120,7 +1110,7 @@ export default function WeekBookPage() {
       if (!r.ok) throw new Error(formatApiError(r.status, raw, "整合回饋失敗"));
 
       const data = raw ? JSON.parse(raw) : {};
-      appendAiReply(data?.ai_reply);
+      appendAiReply(data?.ai_reply, "ALL");
       const savedId = String(data?.meta?.saved_to_writing_id ?? "");
       if (isUuid(savedId)) setWritingId(savedId);
     } catch (e: any) {
@@ -1245,7 +1235,7 @@ export default function WeekBookPage() {
   }
 
   async function submitWeek2PhaseToSynthesis() {
-    if (!sessionId || !readingId || weekNum !== 2) return;
+    if (!sessionId || !readingId || !isEvenWeek(weekNum)) return;
     try {
       setWritingSubmitting(true);
       setWritingError(null);
@@ -1287,13 +1277,7 @@ export default function WeekBookPage() {
 
       setWritingData(next);
       setSaveMsg("已進入整合寫作階段 ✅");
-      setMessages((prev) => {
-        const scaffold = buildSynthesisWelcomeScaffold(week1Data, bookPack);
-        if (prev.length === 1 && prev[0].role === "ai" && isLegacyCoachWelcome(prev[0].text)) {
-          return [scaffold];
-        }
-        return [...prev, scaffold];
-      });
+      setChatTab("synthesis");
     } catch (e: any) {
       setWritingError(e?.message ?? "儲存失敗");
     } finally {
@@ -1321,9 +1305,9 @@ export default function WeekBookPage() {
           />
 
           <div className="kid-shell flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden max-md:min-h-[40vh]">
-            {weekNum === 2 ? (
+            {isEvenWeek(weekNum) ? (
               <div className="shrink-0 border-b border-amber-100 px-3 py-1.5 text-right text-[10px] text-amber-900/70 sm:text-xs">
-                {w2Phase === "orid_review" ? "顯示第 1 週已儲存內容（唯讀）" : "第 1 週四段（唯讀）"}
+                {w2Phase === "orid_review" ? `顯示第 ${priorOddWeek(weekNum)} 週已儲存內容（唯讀）` : `第 ${priorOddWeek(weekNum)} 週四段（唯讀）`}
               </div>
             ) : null}
 
@@ -1449,7 +1433,7 @@ export default function WeekBookPage() {
 
             <div className="shrink-0 border-t border-amber-100 px-3 pb-2.5 pt-2">
               <div className="flex flex-col gap-2">
-                {weekNum === 2 && w2Phase === "orid_review" ? (
+                {isEvenWeek(weekNum) && w2Phase === "orid_review" ? (
                   <button
                     type="button"
                     className="kid-btn-primary w-full"
@@ -1460,7 +1444,7 @@ export default function WeekBookPage() {
                   </button>
                 ) : (
                   <div className="flex flex-col gap-2 sm:flex-row">
-                    {weekNum === 1 ? (
+                    {isOddWeek(weekNum) ? (
                       <button
                         type="button"
                         className="kid-btn-secondary w-full sm:flex-1"
@@ -1497,7 +1481,7 @@ export default function WeekBookPage() {
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2">
               <textarea
                 className="min-h-0 w-full flex-1 resize-none rounded-xl border border-amber-100 bg-[#fffcf7] p-3 text-base leading-relaxed outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-300/30"
-                placeholder="在這裡撰寫整合稿…（怎麼寫可參考右側聊天室開場說明）"
+                placeholder="把上週的 O、R、I、D 接起來，寫成一篇完整反思短文……"
                 value={writingData.synthesis_draft ?? ""}
                 onChange={(e) =>
                   setWritingData((prev) => ({
@@ -1519,120 +1503,338 @@ export default function WeekBookPage() {
         ) : null}
 
         <div className={aiPartnerShellClass}>
-          <div className="kid-section-header-partner">
-            <div className="text-sm font-bold text-amber-950 sm:text-base">
-              {isControl ? "寫作提示小幫手" : "AI 小幫手的回饋夥伴"}
-            </div>
-          </div>
-
-          {isControl ? (
-            <WritingPromptHelper
-              focusStage={focusStage}
-              onPromptViewed={() => void runPromptUsage()}
-            />
-          ) : (
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#fffcf7]">
-            <div className="shrink-0 border-b border-amber-100 px-3 py-3 sm:px-4">
-              <div className="flex items-start gap-3">
-                {getBookWeekArt(weekNum) ? (
-                  <BookHelperAvatar week={weekNum} size={68} />
-                ) : (
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white ring-2 ring-amber-100">
-                    <OridPartnerMascot size={40} />
-                  </div>
-                )}
-                <div className="kid-bubble-ai max-w-[calc(100%-5rem)] text-xs leading-relaxed sm:max-w-[18rem] sm:text-sm">
-                  你好！我是松果小夥伴 🌰
-                  <br />
-                  寫好後點「取得回饋」，我會用小小卡片回你，不會一次塞滿整頁喔。
+          {showSynthesisColumn ? (
+            <>
+              <div className="kid-section-header-partner shrink-0">
+                <div className="text-sm font-bold text-amber-950 sm:text-base">
+                  {isControl ? "寫作提示小幫手" : "AI 小幫手的回饋夥伴"}
                 </div>
               </div>
-            </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-2 sm:p-3">
-              {messages.length === 0 ? (
-                <div className="flex h-full min-h-[6rem] items-center justify-center px-2 text-center text-xs text-amber-900/50 sm:text-sm">
-                  {error && !sessionId
-                    ? error
-                    : !historyLoaded
-                      ? "載入中…"
-                      : seededInitial && !readingContentReady
-                        ? "載入教材中…"
-                        : awaitingFirstAiBubble
-                          ? "小幫手正在準備開場…"
-                          : "還沒有回饋訊息，先去寫作吧！"}
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#fffcf7]">
+                {/* Tab bar */}
+                <div className="flex shrink-0 border-b border-amber-100 bg-amber-50/60">
+                  {(["synthesis", "week1"] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setChatTab(tab)}
+                      className={[
+                        "min-h-[44px] flex-1 px-2 py-2.5 text-xs font-semibold transition-colors sm:text-sm",
+                        chatTab === tab
+                          ? "border-b-2 border-amber-500 text-amber-900"
+                          : "text-amber-700/60 hover:text-amber-800",
+                      ].join(" ")}
+                    >
+                      {tab === "synthesis" ? "整合寫作對話" : "上週對話"}
+                    </button>
+                  ))}
                 </div>
-              ) : (
-                <div className="flex flex-col gap-3">
-                  {messages.map((m, idx) => {
-                    const isStudent = m.role === "student";
-                    const parsedFeedback = !isStudent ? parseFeedbackNarration(m.text) : null;
-                    const helperAvatar = getBookWeekArt(weekNum) ? (
-                      <BookHelperAvatar week={weekNum} size={44} />
-                    ) : (
-                      <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white ring-2 ring-amber-100">
-                        <OridPartnerMascot size={32} />
-                      </div>
-                    );
 
-                    return (
-                      <div
-                        key={idx}
-                        className={["flex items-end gap-2", isStudent ? "justify-end" : "justify-start"].join(" ")}
-                      >
-                        {!isStudent && <div className="shrink-0">{helperAvatar}</div>}
-                        <div
-                          className={
-                            isStudent
-                              ? "max-w-[min(88%,16rem)] shrink-0"
-                              : parsedFeedback
-                                ? "shrink min-w-0"
-                                : "max-w-[min(88%,18rem)] shrink-0"
-                          }
-                        >
-                          {parsedFeedback ? (
-                            <FeedbackGuideCard parsed={parsedFeedback} />
-                          ) : (
-                            <div className={isStudent ? "kid-bubble-student" : "kid-bubble-ai"}>
+                {isControl && chatTab === "synthesis" ? (
+                  <WritingPromptHelper
+                    focusStage={focusStage}
+                    onPromptViewed={() => void runPromptUsage()}
+                    synthesisMode
+                    openingText={synthesisOpeningText}
+                  />
+                ) : isControl && chatTab === "week1" ? (
+                  <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-2 sm:p-3">
+                    {week1Messages.length === 0 ? (
+                      <div className="flex h-full min-h-[6rem] items-center justify-center px-2 text-center text-xs text-amber-900/50 sm:text-sm">
+                        {!historyLoaded ? "載入中…" : "目前沒有上週對話紀錄。"}
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-3">
+                        {week1Messages.map((m, idx) => (
+                          <div
+                            key={`w1c-${idx}`}
+                            className={[
+                              "flex items-end gap-2",
+                              m.role === "student" ? "justify-end" : "justify-start",
+                            ].join(" ")}
+                          >
+                            {m.role === "ai" && (
+                              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white ring-2 ring-amber-100">
+                                <OridPartnerMascot size={32} />
+                              </div>
+                            )}
+                            <div className={m.role === "student" ? "kid-bubble-student max-w-[min(88%,16rem)]" : "kid-bubble-ai max-w-[min(88%,18rem)]"}>
                               <div className="whitespace-pre-wrap leading-relaxed">{m.text}</div>
                             </div>
-                          )}
-                        </div>
-                        {isStudent && (
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-lg ring-2 ring-amber-200/80">
-                            <span aria-hidden>🧒</span>
                           </div>
-                        )}
+                        ))}
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-              <div ref={chatEndRef} className="h-0 shrink-0" aria-hidden />
-            </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-2 sm:p-3">
+                    {chatTab === "synthesis" ? (
+                      <div className="flex flex-col gap-3">
+                        {synthesisTabMessages.map((m, idx) => {
+                          const isStudent = m.role === "student";
+                          const parsedFeedback = !isStudent ? parseFeedbackNarration(m.text) : null;
+                          const isOpening =
+                            !isStudent && m.text.startsWith(SYNTHESIS_OPENING_PREFIX);
+                          const helperAvatar = getBookWeekArt(weekNum) ? (
+                            <BookHelperAvatar week={weekNum} size={44} />
+                          ) : (
+                            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white ring-2 ring-amber-100">
+                              <OridPartnerMascot size={32} />
+                            </div>
+                          );
+                          return (
+                            <div
+                              key={`syn-${idx}`}
+                              className={[
+                                "flex items-end gap-2",
+                                isStudent ? "justify-end" : "justify-start",
+                              ].join(" ")}
+                            >
+                              {!isStudent && <div className="shrink-0">{helperAvatar}</div>}
+                              <div
+                                className={
+                                  isStudent
+                                    ? "max-w-[min(88%,16rem)] shrink-0"
+                                    : parsedFeedback
+                                      ? "shrink min-w-0"
+                                      : "max-w-[min(95%,22rem)] shrink min-w-0"
+                                }
+                              >
+                                {parsedFeedback ? (
+                                  <FeedbackGuideCard
+                                    parsed={parsedFeedback}
+                                    section3Label="③ 可以這樣修改"
+                                  />
+                                ) : (
+                                  <div
+                                    className={
+                                      isStudent
+                                        ? "kid-bubble-student"
+                                        : isOpening
+                                          ? "kid-bubble-ai border border-amber-100/80 bg-amber-50/40"
+                                          : "kid-bubble-ai"
+                                    }
+                                  >
+                                    <div className="whitespace-pre-wrap text-sm leading-relaxed">
+                                      {m.text}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                              {isStudent && (
+                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-lg ring-2 ring-amber-200/80">
+                                  <span aria-hidden>🧒</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {synthesisTabMessages.length <= 1 &&
+                          synthesisTabMessages.every((m) => m.role === "ai") && (
+                            <p className="px-1 text-center text-xs text-amber-900/45">
+                              寫完整合稿後，可以按下「取得整合回饋」。
+                            </p>
+                          )}
+                      </div>
+                    ) : week1Messages.length === 0 ? (
+                      <div className="flex h-full min-h-[6rem] items-center justify-center px-2 text-center text-xs text-amber-900/50 sm:text-sm">
+                        {!historyLoaded ? "載入中…" : "目前沒有上週對話紀錄。"}
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-3">
+                        {week1Messages.map((m, idx) => {
+                          const isStudent = m.role === "student";
+                          const parsedFeedback = !isStudent ? parseFeedbackNarration(m.text) : null;
+                          const helperAvatar = getBookWeekArt(weekNum) ? (
+                            <BookHelperAvatar week={weekNum} size={44} />
+                          ) : (
+                            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white ring-2 ring-amber-100">
+                              <OridPartnerMascot size={32} />
+                            </div>
+                          );
+                          return (
+                            <div
+                              key={`w1-${idx}`}
+                              className={[
+                                "flex items-end gap-2",
+                                isStudent ? "justify-end" : "justify-start",
+                              ].join(" ")}
+                            >
+                              {!isStudent && <div className="shrink-0">{helperAvatar}</div>}
+                              <div
+                                className={
+                                  isStudent
+                                    ? "max-w-[min(88%,16rem)] shrink-0"
+                                    : parsedFeedback
+                                      ? "shrink min-w-0"
+                                      : "max-w-[min(88%,18rem)] shrink-0"
+                                }
+                              >
+                                {parsedFeedback ? (
+                                  <FeedbackGuideCard parsed={parsedFeedback} />
+                                ) : (
+                                  <div className={isStudent ? "kid-bubble-student" : "kid-bubble-ai"}>
+                                    <div className="whitespace-pre-wrap leading-relaxed">{m.text}</div>
+                                  </div>
+                                )}
+                              </div>
+                              {isStudent && (
+                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-lg ring-2 ring-amber-200/80">
+                                  <span aria-hidden>🧒</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <div ref={chatEndRef} className="h-0 shrink-0" aria-hidden />
+                  </div>
+                )}
 
-            {showAiTyping && (
-              <div className="shrink-0 border-t border-amber-100 bg-white/90 px-3 py-2" aria-live="polite">
-                <div className="flex items-end gap-2">
-                  {getBookWeekArt(weekNum) ? (
-                    <BookHelperAvatar week={weekNum} size={44} />
-                  ) : (
-                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white ring-2 ring-amber-100">
-                      <OridPartnerMascot size={32} />
-                    </div>
-                  )}
-                  <div className="kid-bubble-ai max-w-[16rem]">
-                    <div className="flex items-center gap-1.5 py-0.5">
-                      <span className="h-2 w-2 rounded-full bg-amber-500/80 animate-bounce [animation-delay:-0.24s]" />
-                      <span className="h-2 w-2 rounded-full bg-amber-500/80 animate-bounce [animation-delay:-0.12s]" />
-                      <span className="h-2 w-2 rounded-full bg-amber-500/80 animate-bounce" />
-                      <span className="ml-2 text-xs text-amber-900/70">松果小幫手正在思考…</span>
+                {showAiTyping && chatTab === "synthesis" && !isControl && (
+                  <div className="shrink-0 border-t border-amber-100 bg-white/90 px-3 py-2" aria-live="polite">
+                    <div className="flex items-end gap-2">
+                      {getBookWeekArt(weekNum) ? (
+                        <BookHelperAvatar week={weekNum} size={44} />
+                      ) : (
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white ring-2 ring-amber-100">
+                          <OridPartnerMascot size={32} />
+                        </div>
+                      )}
+                      <div className="kid-bubble-ai max-w-[16rem]">
+                        <div className="flex items-center gap-1.5 py-0.5">
+                          <span className="h-2 w-2 animate-bounce rounded-full bg-amber-500/80 [animation-delay:-0.24s]" />
+                          <span className="h-2 w-2 animate-bounce rounded-full bg-amber-500/80 [animation-delay:-0.12s]" />
+                          <span className="h-2 w-2 animate-bounce rounded-full bg-amber-500/80" />
+                          <span className="ml-2 text-xs text-amber-900/70">松果小幫手正在思考…</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
+                )}
+              </div>
+            </>
+          ) : (
+            /* ── Odd weeks (ORID) or orid_review phase: original chat ── */
+            <>
+              <div className="kid-section-header-partner">
+                <div className="text-sm font-bold text-amber-950 sm:text-base">
+                  {isControl ? "寫作提示小幫手" : "AI 小幫手的回饋夥伴"}
                 </div>
               </div>
-            )}
-          </div>
+
+              {isControl ? (
+                <WritingPromptHelper
+                  focusStage={focusStage}
+                  onPromptViewed={() => void runPromptUsage()}
+                />
+              ) : (
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#fffcf7]">
+                  <div className="shrink-0 border-b border-amber-100 px-3 py-3 sm:px-4">
+                    <div className="flex items-start gap-3">
+                      {getBookWeekArt(weekNum) ? (
+                        <BookHelperAvatar week={weekNum} size={68} />
+                      ) : (
+                        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white ring-2 ring-amber-100">
+                          <OridPartnerMascot size={40} />
+                        </div>
+                      )}
+                      <div className="kid-bubble-ai max-w-[calc(100%-5rem)] text-xs leading-relaxed sm:max-w-[18rem] sm:text-sm">
+                        你好！我是松果小夥伴 🌰
+                        <br />
+                        寫好後點「取得回饋」，我會用小小卡片回你，不會一次塞滿整頁喔。
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-2 sm:p-3">
+                    {oridStageMessages.length === 0 ? (
+                      <div className="flex h-full min-h-[6rem] items-center justify-center px-2 text-center text-xs text-amber-900/50 sm:text-sm">
+                        {error && !sessionId
+                          ? error
+                          : !historyLoaded
+                            ? "載入中…"
+                            : seededInitial && !readingContentReady
+                              ? "載入教材中…"
+                              : awaitingFirstAiBubble
+                                ? "小幫手正在準備開場…"
+                                : "還沒有回饋訊息，先去寫作吧！"}
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-3">
+                        {oridStageMessages.map((m, idx) => {
+                          const isStudent = m.role === "student";
+                          const parsedFeedback = !isStudent ? parseFeedbackNarration(m.text) : null;
+                          const helperAvatar = getBookWeekArt(weekNum) ? (
+                            <BookHelperAvatar week={weekNum} size={44} />
+                          ) : (
+                            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white ring-2 ring-amber-100">
+                              <OridPartnerMascot size={32} />
+                            </div>
+                          );
+
+                          return (
+                            <div
+                              key={idx}
+                              className={["flex items-end gap-2", isStudent ? "justify-end" : "justify-start"].join(" ")}
+                            >
+                              {!isStudent && <div className="shrink-0">{helperAvatar}</div>}
+                              <div
+                                className={
+                                  isStudent
+                                    ? "max-w-[min(88%,16rem)] shrink-0"
+                                    : parsedFeedback
+                                      ? "shrink min-w-0"
+                                      : "max-w-[min(88%,18rem)] shrink-0"
+                                }
+                              >
+                                {parsedFeedback ? (
+                                  <FeedbackGuideCard parsed={parsedFeedback} />
+                                ) : (
+                                  <div className={isStudent ? "kid-bubble-student" : "kid-bubble-ai"}>
+                                    <div className="whitespace-pre-wrap leading-relaxed">{m.text}</div>
+                                  </div>
+                                )}
+                              </div>
+                              {isStudent && (
+                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-lg ring-2 ring-amber-200/80">
+                                  <span aria-hidden>🧒</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <div ref={chatEndRef} className="h-0 shrink-0" aria-hidden />
+                  </div>
+
+                  {showAiTyping && (
+                    <div className="shrink-0 border-t border-amber-100 bg-white/90 px-3 py-2" aria-live="polite">
+                      <div className="flex items-end gap-2">
+                        {getBookWeekArt(weekNum) ? (
+                          <BookHelperAvatar week={weekNum} size={44} />
+                        ) : (
+                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white ring-2 ring-amber-100">
+                            <OridPartnerMascot size={32} />
+                          </div>
+                        )}
+                        <div className="kid-bubble-ai max-w-[16rem]">
+                          <div className="flex items-center gap-1.5 py-0.5">
+                            <span className="h-2 w-2 rounded-full bg-amber-500/80 animate-bounce [animation-delay:-0.24s]" />
+                            <span className="h-2 w-2 rounded-full bg-amber-500/80 animate-bounce [animation-delay:-0.12s]" />
+                            <span className="h-2 w-2 rounded-full bg-amber-500/80 animate-bounce" />
+                            <span className="ml-2 text-xs text-amber-900/70">松果小幫手正在思考…</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>

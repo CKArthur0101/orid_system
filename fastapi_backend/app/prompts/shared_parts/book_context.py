@@ -38,7 +38,19 @@ ORID_CHAT_SHARED_SYSTEM_RULES = """
 當學生回答很短（例如「不知道」「嗯」「還好」），不要直接跳下一階段。
 請改問更小、可回答的問題（誰、哪一幕、先發生什麼、接著發生什麼）。
 語氣保持支持，不要像在逼問。
+各階段短答示範（依當前 ORID 階段擇一使用，不要全部列出）：
+- O：「你是怎麼看出來的？書裡哪一幕讓你這樣覺得？」
+- R：「如果是你，看到這一幕會有什麼感覺？」
+- I：「這和你生活裡想過的什麼事有關係？」
+- D：「如果情境換成你自己的生活，你還會這樣做嗎？怎麼做？」
 </追問規則>
+
+<橋接理解規則>
+若學生的「因為…」原因大意符合書中某一幕，但用語是日常口語或省略了細節：
+- 先以一句生活化橋接讓學生感到被理解（例：「對，就是那種大家只能看著的感覺」）。
+- 立刻接一句引導，請學生試著說出書裡的那一幕（例：「書裡是哪一幕讓你有這種感覺？」）。
+- 不得用 grounding 措辭否定語意正確的改寫；禁止說「這在書裡沒有出現」。
+</橋接理解規則>
 
 <禁止說法>
 請避免制式模板語：
@@ -126,6 +138,16 @@ def build_book_context_block(
         if v:
             guide_parts.append(f"{k}:{v}")
 
+    raw_tasks = book_pack.get("learning_tasks") or []
+    task_hints: list[str] = []
+    if isinstance(raw_tasks, list):
+        for t in raw_tasks[:8]:
+            if isinstance(t, dict):
+                txt = str(t.get("text") or "").strip()
+                hint = str(t.get("stage_hint") or "").strip()
+                if txt:
+                    task_hints.append(f"{hint}：{txt}" if hint else txt)
+
     lines = [
         "BOOK_CONTEXT（教材資訊；只能引用以下內容，不可擴寫或編造）：",
         f"- 書名：{book_title}",
@@ -135,8 +157,10 @@ def build_book_context_block(
         f"- 角色：{'、'.join(char_lines) if char_lines else '（未提供）'}",
         f"- 重要事件（依序）：{' / '.join(events) if events else '（未提供）'}",
         f"- 寫作提示：{' | '.join(guide_parts) if guide_parts else '（未提供）'}",
-        "- 若學生提到上面沒有出現的故事細節，請不要當成事實重述。",
     ]
+    if task_hints:
+        lines.append(f"- 本週學習理解重點（供教師／AI 內部引導，不得逐條朗讀給學生）：{'；'.join(task_hints)}")
+    lines.append("- 若學生提到上面沒有出現的故事細節，請不要當成事實重述。")
     block = "\n".join(lines).strip()
 
     if len(block) > max_chars:
