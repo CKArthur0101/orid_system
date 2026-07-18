@@ -32,7 +32,7 @@ export function FeedbackGuideCard({
       )
     : BASE_SECTIONS;
   return (
-    <div className="w-full max-w-[min(100%,20rem)] overflow-hidden rounded-2xl border border-amber-200/80 bg-white shadow-sm sm:max-w-[22rem]">
+    <div className="w-full max-w-full overflow-hidden rounded-2xl border border-amber-200/80 bg-white shadow-sm lg:max-w-[22rem]">
       <div className="flex flex-col gap-0.5 p-2">
         {SECTIONS.map((section) => (
           <div
@@ -43,7 +43,9 @@ export function FeedbackGuideCard({
               <PersimmonBullet size={18} />
               <span>{section.label}</span>
             </div>
-            <div className="max-h-[6rem] overflow-y-auto whitespace-pre-wrap pl-0.5">{parsed[section.key]}</div>
+            <div className="max-h-[5.5rem] overflow-y-auto whitespace-pre-wrap pl-0.5 text-xs leading-snug md:max-h-[6rem] md:text-sm md:leading-relaxed">
+              {parsed[section.key]}
+            </div>
           </div>
         ))}
       </div>

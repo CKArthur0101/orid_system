@@ -23,6 +23,7 @@ export function OridWeekHero({
   showAdminControls,
   onRestart,
   restartDisabled,
+  compact,
   className,
 }: {
   weekNum: number;
@@ -36,6 +37,8 @@ export function OridWeekHero({
   showAdminControls?: boolean;
   onRestart?: () => void;
   restartDisabled?: boolean;
+  /** 整合寫作三欄版面：縮小 hero，騰出左欄寫作高度（平板實驗用） */
+  compact?: boolean;
   className?: string;
 }) {
   const focusTheme = ORID_STAGE_THEME[focusStage];
@@ -52,15 +55,39 @@ export function OridWeekHero({
         .filter(Boolean)
         .join(" ")}
     >
-      <div className="flex w-full gap-3 px-3 py-2.5 sm:px-4 sm:py-3">
+      <div
+        className={[
+          "flex w-full gap-3",
+          compact ? "px-2 py-2" : "px-3 py-2.5 sm:px-4 sm:py-3 md:px-2 md:py-1.5 lg:px-4 lg:py-3",
+        ].join(" ")}
+      >
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="min-w-0">
-              <h1 className="text-base font-bold leading-tight text-amber-950 sm:text-lg">{subtitle}</h1>
+              <h1
+                className={[
+                  "font-bold leading-tight text-amber-950",
+                  compact ? "text-sm" : "text-base sm:text-lg md:text-sm lg:text-lg",
+                ].join(" ")}
+              >
+                {subtitle}
+              </h1>
               {bookTitle ? (
-                <p className="mt-0.5 truncate text-sm font-semibold text-amber-800 sm:text-base">《{bookTitle}》</p>
+                <p
+                  className={[
+                    "mt-0.5 truncate font-semibold text-amber-800",
+                    compact ? "text-xs" : "text-sm sm:text-base md:text-xs lg:text-base",
+                  ].join(" ")}
+                >
+                  《{bookTitle}》
+                </p>
               ) : null}
-              <p className="mt-1 text-xs text-amber-900/70">
+              <p
+                className={[
+                  "mt-0.5 text-amber-900/70 md:mt-0",
+                  compact ? "text-[10px]" : "text-xs md:text-[10px] lg:text-xs",
+                ].join(" ")}
+              >
                 現在專注：
                 <span className={`ml-1 font-semibold ${focusTheme.titleColor}`}>
                   {focusStage} {focusTheme.shortLabel}
@@ -84,20 +111,27 @@ export function OridWeekHero({
             </div>
           </div>
           {weekNum <= 2 ? (
-            <div className="mt-2 min-w-0 overflow-x-auto rounded-xl border border-amber-100 bg-white/85 px-2 py-1.5 sm:px-3 sm:py-2">
+            <div
+              className={[
+                "mt-1.5 min-w-0 overflow-x-auto rounded-xl border border-amber-100 bg-white/85 md:mt-1 lg:mt-2",
+                compact ? "px-1.5 py-1" : "px-2 py-1.5 sm:px-3 sm:py-2 md:px-1.5 md:py-1 lg:px-3 lg:py-2",
+              ].join(" ")}
+            >
               <OridMissionProgress
                 progress={progress}
                 writtenCount={writtenCount}
                 onFocusStage={onFocusStage}
                 focusStage={focusStage}
                 week={weekNum}
+                compact={compact}
+                tabletTight={!compact}
               />
             </div>
           ) : null}
         </div>
 
-        {hasBookArt ? (
-          <div className="hidden aspect-square w-[7.5rem] shrink-0 sm:block md:w-[9.5rem] lg:w-[11rem]">
+        {hasBookArt && !compact ? (
+          <div className="hidden aspect-square w-[11rem] shrink-0 lg:block">
             <BookIllustration week={weekNum} variant="scene" layout="hero" className="h-full w-full" />
           </div>
         ) : null}

@@ -656,11 +656,11 @@ export default function WeekBookPage() {
   );
 
   const mainGridClass = showSynthesisColumn
-    ? "grid min-h-0 w-full flex-1 grid-cols-1 gap-2.5 overflow-hidden md:grid-cols-[1fr_1fr] md:gap-3 xl:grid-cols-[1fr_1.1fr_1fr]"
+    ? "orid-synthesis-grid grid min-h-0 w-full flex-1 grid-cols-1 gap-2 overflow-hidden max-md:gap-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,1fr)] md:gap-2 lg:gap-3"
     : "grid min-h-0 w-full flex-1 grid-cols-1 gap-2.5 overflow-hidden md:grid-cols-[1fr_1fr] md:gap-3";
 
   const aiPartnerShellClass = showSynthesisColumn
-    ? "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[50vh] md:order-2 md:col-start-2 md:h-full md:row-start-1 xl:order-3 xl:col-start-3"
+    ? "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[50vh] md:order-3 md:col-start-3 md:row-start-1 md:h-full"
     : "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[35vh] md:order-2 md:col-start-2 md:h-full md:row-start-1";
 
   const isControl = isControlConditionValue(condition);
@@ -1051,10 +1051,9 @@ export default function WeekBookPage() {
         });
       }
       const allBadges = Array.from(new Set([...earnedBadges, ...mergedBadges])) as BadgeId[];
-      const newOnes: BadgeId[] =
-        Array.isArray(meta.newlyEarnedBadges) && meta.newlyEarnedBadges.length > 0
-          ? (meta.newlyEarnedBadges as BadgeId[])
-          : getNewlyEarnedBadges(earnedBadges, allBadges);
+      const newOnes: BadgeId[] = Array.isArray(meta.newlyEarnedBadges)
+        ? (meta.newlyEarnedBadges as BadgeId[])
+        : getNewlyEarnedBadges(earnedBadges, allBadges);
 
       const resolvedScore = scoreFromMeta ?? 0;
       setWritingData(mergeProgressIntoWriting(nextWriting, resolvedScore, allBadges));
@@ -1144,19 +1143,13 @@ export default function WeekBookPage() {
       const data = await r.json();
       setPromptViewCount(data.prompt_view_count ?? 0);
       if (Array.isArray(data.earnedBadges)) {
-        const hasContent = wordCount > 0;
-        const currentBadges = calculateEarnedBadges({
-          hasWritingContent: hasContent,
-          hasUsedFeedbackOrPrompt: true,
-          totalScore: totalScore,
-        });
-        const merged = Array.from(
-          new Set([...(data.earnedBadges as BadgeId[]), ...currentBadges]),
-        ) as BadgeId[];
-        const newOnes = getNewlyEarnedBadges(earnedBadges, merged);
+        const merged = data.earnedBadges as BadgeId[];
+        const newOnes = Array.isArray(data.newlyEarnedBadges)
+          ? (data.newlyEarnedBadges as BadgeId[])
+          : [];
         setEarnedBadges(merged);
         if (newOnes.length > 0) {
-          setBadgeModalQueue((prev) => [...prev, ...newOnes]);
+          setBadgeModalQueue((prev) => [...prev, ...newOnes.filter((b) => !prev.includes(b))]);
         }
         await persistWritingSnapshot(writingData, totalScore, merged);
       }
@@ -1288,7 +1281,7 @@ export default function WeekBookPage() {
   return (
     <div className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden">
       <div className={mainGridClass}>
-        <div className="order-1 flex min-h-0 w-full min-w-0 flex-col gap-2.5 overflow-hidden md:h-full md:min-h-0">
+        <div className="order-1 flex min-h-0 w-full min-w-0 flex-col gap-2.5 overflow-hidden md:gap-1 lg:gap-2.5 md:h-full md:min-h-0">
           <OridWeekHero
             className="w-full"
             weekNum={weekNum}
@@ -1302,6 +1295,7 @@ export default function WeekBookPage() {
             showAdminControls={oridCanForceNew}
             onRestart={restartWeek}
             restartDisabled={loading}
+            compact={showSynthesisColumn}
           />
 
           <div className="kid-shell flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden max-md:min-h-[40vh]">
@@ -1311,7 +1305,7 @@ export default function WeekBookPage() {
               </div>
             ) : null}
 
-            <div className="flex min-h-0 w-full flex-1 flex-col p-2">
+            <div className="flex min-h-0 w-full flex-1 flex-col p-2 md:p-1.5 lg:p-2">
               <div
                 className={[
                   "relative flex min-h-0 w-full flex-1 flex-col rounded-2xl border-2 border-t-4 bg-white shadow-sm transition-all",
@@ -1319,7 +1313,7 @@ export default function WeekBookPage() {
                   activeTheme.cardFocus,
                 ].join(" ")}
               >
-                <div className="relative z-20 flex shrink-0 items-start justify-between gap-2 overflow-visible px-2.5 pb-1 pt-2 sm:px-3">
+                <div className="relative z-20 flex shrink-0 items-start justify-between gap-2 overflow-visible px-2.5 pb-1 pt-2 sm:px-3 md:px-2 md:pb-0.5 md:pt-1.5 lg:px-3 lg:pb-1 lg:pt-2">
                   <div className="min-w-0 flex-1 pr-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="inline-flex shrink-0 items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900/80 ring-1 ring-amber-200">
@@ -1346,41 +1340,31 @@ export default function WeekBookPage() {
                   {/* 徽章在左、按鈕在右，同一橫列 */}
                   <div className="flex shrink-0 flex-row items-center gap-2 overflow-visible">
                     <BadgeDisplay earnedBadges={earnedBadges} size={32} />
-                    {showStageFeedbackButtons ? (
-                      isControl ? (
-                        <button
-                          type="button"
-                          className={[activeTheme.btnClass, "shrink-0"].join(" ")}
-                          disabled={!sessionId}
-                          onClick={() => void runPromptUsage()}
-                        >
-                          查看寫作提示
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          className={[activeTheme.btnClass, "shrink-0"].join(" ")}
-                          disabled={!sessionId || fbLoading}
-                          onClick={() => runFeedback(activeStage)}
-                        >
-                          {fbLoading ? "…" : "取得回饋"}
-                        </button>
-                      )
+                    {showStageFeedbackButtons && !isControl ? (
+                      <button
+                        type="button"
+                        className={[activeTheme.btnClass, "shrink-0"].join(" ")}
+                        disabled={!sessionId || fbLoading}
+                        onClick={() => runFeedback(activeStage)}
+                      >
+                        {fbLoading ? "…" : "取得回饋"}
+                      </button>
                     ) : null}
                   </div>
                 </div>
 
-                <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden px-2 pt-0 sm:px-2.5">
+                <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden px-2 pt-0 sm:px-2.5 md:px-2 md:pt-0">
                   {weekNum === 1 ? (
-                    <div className="mb-1 shrink-0 text-[10px] text-amber-900/60 sm:text-[11px]">
+                    <div className="mb-1 shrink-0 text-[10px] text-amber-900/60 sm:text-[11px] md:hidden lg:block lg:text-[11px]">
                       {activeMissionMeta.helperHint}
                     </div>
                   ) : null}
 
-                  <div className="flex min-h-0 flex-1 gap-1.5">
+                  <div className={["flex min-h-0 flex-1", isControl ? "" : "gap-1.5"].join(" ")}>
                     <textarea
                       className={[
                         "min-h-[12rem] min-w-0 flex-1 resize-none overflow-y-auto rounded-xl border border-amber-100 bg-[#fffcf7] p-2.5 text-[15px] leading-relaxed outline-none placeholder:text-amber-900/35 focus:ring-2 read-only:bg-amber-50/40 md:min-h-0",
+                        showSynthesisColumn ? "md:text-[13px] md:leading-snug lg:text-[15px] lg:leading-relaxed" : "",
                         activeTheme.inputFocus,
                       ].join(" ")}
                       placeholder={STAGE_WRITING_HINT[activeStage]}
@@ -1400,38 +1384,41 @@ export default function WeekBookPage() {
                               }))
                       }
                     />
-                    <div
-                      className={[
-                        "flex w-[34%] min-w-[6rem] shrink-0 flex-col overflow-y-auto rounded-xl border p-1.5 text-[11px] leading-snug sm:w-[32%] sm:min-w-[7rem] sm:p-2 sm:text-xs md:w-[30%] md:max-w-none lg:w-[28%]",
-                        activeTheme.hintPanel,
-                      ].join(" ")}
-                    >
-                      <div className={["mb-1 flex shrink-0 items-center gap-1 font-semibold", activeTheme.hintTitle].join(" ")}>
-                        {weekNum === 1 ? <PersimmonBullet size={16} /> : null}
-                        {activeAiExample ? "小幫手建議：" : "可以這樣開頭："}
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        {activeAiExample ? (
-                          <div className="flex gap-1 break-words font-medium text-amber-950/85">
-                            {weekNum === 1 ? <PersimmonBullet size={14} className="mt-0.5" /> : null}
-                            <span>{activeAiExample}</span>
-                          </div>
-                        ) : (
-                          STAGE_SCAFFOLD_LINES[activeStage].map((line) => (
-                            <div key={line} className="flex gap-1 break-words">
-                              <PersimmonBullet size={14} className="mt-0.5" />
-                              <span>{line}</span>
+                    {!isControl ? (
+                      <div
+                        className={[
+                          "orid-writing-hint-panel flex w-[34%] min-w-[6rem] shrink-0 flex-col overflow-y-auto rounded-xl border p-1.5 text-[11px] leading-snug sm:w-[32%] sm:min-w-[7rem] sm:p-2 sm:text-xs md:w-[30%] md:max-w-none lg:w-[28%]",
+                          showSynthesisColumn ? "hidden min-[1100px]:flex" : "",
+                          activeTheme.hintPanel,
+                        ].join(" ")}
+                      >
+                        <div className={["mb-1 flex shrink-0 items-center gap-1 font-semibold", activeTheme.hintTitle].join(" ")}>
+                          {weekNum === 1 ? <PersimmonBullet size={16} /> : null}
+                          {activeAiExample ? "小幫手建議：" : "可以這樣開頭："}
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          {activeAiExample ? (
+                            <div className="flex gap-1 break-words font-medium text-amber-950/85">
+                              {weekNum === 1 ? <PersimmonBullet size={14} className="mt-0.5" /> : null}
+                              <span>{activeAiExample}</span>
                             </div>
-                          ))
-                        )}
+                          ) : (
+                            STAGE_SCAFFOLD_LINES[activeStage].map((line) => (
+                              <div key={line} className="flex gap-1 break-words">
+                                <PersimmonBullet size={14} className="mt-0.5" />
+                                <span>{line}</span>
+                              </div>
+                            ))
+                          )}
+                        </div>
                       </div>
-                    </div>
+                    ) : null}
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className="shrink-0 border-t border-amber-100 px-3 pb-2.5 pt-2">
+            <div className="shrink-0 border-t border-amber-100 px-3 pb-2 pt-2 md:px-2 md:pb-1.5 md:pt-1.5 lg:px-3 lg:pb-2.5">
               <div className="flex flex-col gap-2">
                 {isEvenWeek(weekNum) && w2Phase === "orid_review" ? (
                   <button
@@ -1443,26 +1430,14 @@ export default function WeekBookPage() {
                     ⏭️ 進入整合寫作
                   </button>
                 ) : (
-                  <div className="flex flex-col gap-2 sm:flex-row">
-                    {isOddWeek(weekNum) ? (
-                      <button
-                        type="button"
-                        className="kid-btn-secondary w-full sm:flex-1"
-                        disabled={!sessionId || writingSubmitting}
-                        onClick={() => saveWriting("draft")}
-                      >
-                        {writingSubmitting ? "儲存中…" : "📝 儲存草稿"}
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="kid-btn-primary w-full sm:flex-[1.4]"
-                      disabled={!sessionId || !readingId || writingSubmitting}
-                      onClick={() => saveWriting("submit")}
-                    >
-                      {writingSubmitting ? "儲存中…" : "🌰 儲存並提交我的寫作"}
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    className="kid-btn-primary w-full"
+                    disabled={!sessionId || !readingId || writingSubmitting}
+                    onClick={() => saveWriting("submit")}
+                  >
+                    {writingSubmitting ? "儲存中…" : "🌰 儲存我的寫作"}
+                  </button>
                 )}
               </div>
               {fbError && <div className="mt-1.5 whitespace-pre-wrap text-xs text-red-600 sm:text-sm">{fbError}</div>}
@@ -1474,13 +1449,13 @@ export default function WeekBookPage() {
         </div>
 
         {showSynthesisColumn ? (
-          <div className="kid-shell order-2 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[30vh] md:order-3 md:col-span-2 xl:order-2 xl:col-span-1 xl:h-full">
-            <div className="kid-section-header-partner">
-              <span className="text-sm font-bold text-amber-950">整合寫作</span>
+          <div className="kid-shell order-2 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[30vh] md:order-2 md:col-span-1 md:col-start-2 md:row-start-1 md:h-full">
+            <div className="kid-section-header-partner px-2 py-2 md:px-2.5 md:py-2 lg:px-4 lg:py-3">
+              <span className="text-xs font-bold text-amber-950 md:text-sm">整合寫作</span>
             </div>
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2">
               <textarea
-                className="min-h-0 w-full flex-1 resize-none rounded-xl border border-amber-100 bg-[#fffcf7] p-3 text-base leading-relaxed outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-300/30"
+                className="min-h-0 w-full flex-1 resize-none rounded-xl border border-amber-100 bg-[#fffcf7] p-2.5 text-base leading-relaxed outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-300/30 md:p-3 md:text-sm lg:text-base"
                 placeholder="把上週的 O、R、I、D 接起來，寫成一篇完整反思短文……"
                 value={writingData.synthesis_draft ?? ""}
                 onChange={(e) =>
@@ -1505,8 +1480,8 @@ export default function WeekBookPage() {
         <div className={aiPartnerShellClass}>
           {showSynthesisColumn ? (
             <>
-              <div className="kid-section-header-partner shrink-0">
-                <div className="text-sm font-bold text-amber-950 sm:text-base">
+              <div className="kid-section-header-partner shrink-0 px-2 py-2 md:px-2.5 md:py-2 lg:px-4 lg:py-3">
+                <div className="text-xs font-bold text-amber-950 md:text-sm lg:text-base">
                   {isControl ? "寫作提示小幫手" : "AI 小幫手的回饋夥伴"}
                 </div>
               </div>

@@ -1,19 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Home, LogOut } from "lucide-react";
 import { logout } from "@/components/actions/logout-action";
 import { DilabLogo } from "@/components/orid/DilabLogo";
+import { LeaveWritingConfirmModal } from "@/components/orid/LeaveWritingConfirmModal";
 
 const SHELL_CLASS = "mx-auto w-full max-w-[min(100vw-1.5rem,1920px)]";
 
+type LeaveIntent = "home" | "logout";
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const lockWeekWritingLayout = pathname?.startsWith("/dashboard/books/week/") ?? false;
   const isDashboardHome = pathname === "/dashboard";
   const [greeting, setGreeting] = useState<string | null>(null);
+  const [leaveIntent, setLeaveIntent] = useState<LeaveIntent | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -36,6 +41,30 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     };
   }, []);
 
+  function requestLeave(intent: LeaveIntent) {
+    if (lockWeekWritingLayout) {
+      setLeaveIntent(intent);
+      return;
+    }
+    if (intent === "home") {
+      router.push("/dashboard");
+      return;
+    }
+    void logout();
+  }
+
+  function confirmLeave() {
+    const intent = leaveIntent;
+    setLeaveIntent(null);
+    if (intent === "home") {
+      router.push("/dashboard");
+      return;
+    }
+    if (intent === "logout") {
+      void logout();
+    }
+  }
+
   return (
     <div
       className={`flex flex-col ${
@@ -49,21 +78,50 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <header className="sticky top-0 z-30 shrink-0 border-b-2 border-amber-400/40 bg-[#f0e6d5]/95 shadow-sm backdrop-blur-md">
         <div className={`${SHELL_CLASS} flex h-14 items-center justify-between gap-4 px-4 sm:px-6`}>
           <div className="flex min-w-0 items-center gap-4 sm:gap-6">
-            <Link href="/dashboard" className="flex min-w-0 shrink items-center gap-2.5">
-              <DilabLogo height={28} className="hidden sm:block" />
-              <DilabLogo height={24} className="sm:hidden" />
-              <span className="truncate text-sm font-bold text-amber-950 sm:text-base">AI–ORID 反思寫作</span>
-            </Link>
-            <nav className="hidden items-center gap-1 lg:flex">
-              <Link
-                href="/dashboard"
-                className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition ${
-                  pathname === "/dashboard" ? "orid-nav-link-active" : "orid-nav-link"
-                }`}
+            {lockWeekWritingLayout ? (
+              <button
+                type="button"
+                onClick={() => requestLeave("home")}
+                className="flex min-w-0 shrink items-center gap-2.5 text-left"
               >
-                <Home className="h-4 w-4" />
-                首頁
+                <DilabLogo height={28} className="hidden sm:block" />
+                <DilabLogo height={24} className="sm:hidden" />
+                <span className="truncate text-sm font-bold text-amber-950 sm:text-base">
+                  AI–ORID 反思寫作
+                </span>
+              </button>
+            ) : (
+              <Link href="/dashboard" className="flex min-w-0 shrink items-center gap-2.5">
+                <DilabLogo height={28} className="hidden sm:block" />
+                <DilabLogo height={24} className="sm:hidden" />
+                <span className="truncate text-sm font-bold text-amber-950 sm:text-base">
+                  AI–ORID 反思寫作
+                </span>
               </Link>
+            )}
+            <nav className="hidden items-center gap-1 lg:flex">
+              {lockWeekWritingLayout ? (
+                <button
+                  type="button"
+                  onClick={() => requestLeave("home")}
+                  className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition ${
+                    pathname === "/dashboard" ? "orid-nav-link-active" : "orid-nav-link"
+                  }`}
+                >
+                  <Home className="h-4 w-4" />
+                  首頁
+                </button>
+              ) : (
+                <Link
+                  href="/dashboard"
+                  className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition ${
+                    pathname === "/dashboard" ? "orid-nav-link-active" : "orid-nav-link"
+                  }`}
+                >
+                  <Home className="h-4 w-4" />
+                  首頁
+                </Link>
+              )}
             </nav>
           </div>
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
@@ -73,7 +131,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </span>
             ) : null}
             <button
-              onClick={() => logout()}
+              type="button"
+              onClick={() => requestLeave("logout")}
               className="flex items-center gap-1.5 rounded-lg border border-transparent px-3 py-1.5 text-sm text-amber-900/75 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600"
             >
               <LogOut className="h-4 w-4" />
@@ -84,12 +143,22 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </header>
 
       <main
-        className={`${SHELL_CLASS} flex flex-1 flex-col overflow-y-auto px-4 py-3 sm:px-6 sm:py-4 ${
-          lockWeekWritingLayout ? "min-h-0 overflow-hidden" : "min-h-0"
+        className={`${SHELL_CLASS} flex flex-1 flex-col overflow-y-auto ${
+          lockWeekWritingLayout
+            ? "min-h-0 overflow-hidden px-2 py-2 md:px-2 lg:px-6 lg:py-4"
+            : "min-h-0 px-4 py-3 sm:px-6 sm:py-4"
         }`}
       >
         {children}
       </main>
+
+      {leaveIntent ? (
+        <LeaveWritingConfirmModal
+          intent={leaveIntent}
+          onStay={() => setLeaveIntent(null)}
+          onLeave={confirmLeave}
+        />
+      ) : null}
     </div>
   );
 }
