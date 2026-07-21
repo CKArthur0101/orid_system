@@ -448,6 +448,9 @@ export default function WeekBookPage() {
   const [focusStage, setFocusStage] = useState<StageKey>("O");
   const [fbLoading, setFbLoading] = useState(false);
   const [fbError, setFbError] = useState<string | null>(null);
+  /** Even-week synthesis: hide left ORID review panel to widen writing + partner. */
+  const [oridPanelCollapsed, setOridPanelCollapsed] = useState(false);
+  const [copyFlash, setCopyFlash] = useState<string | null>(null);
 
   // Synthesis chat tabs (week 2 synthesis phase only)
   type ChatTab = "synthesis" | "week1";
@@ -663,6 +666,31 @@ export default function WeekBookPage() {
   const showStageFeedbackButtons = isOddWeek(weekNum);
   const showSynthesisColumn = isEvenWeek(weekNum) && w2Phase === "synthesis";
   const oridReadOnly = isEvenWeek(weekNum);
+  const showOridLeftPanel = !showSynthesisColumn || !oridPanelCollapsed;
+
+  useEffect(() => {
+    if (!showSynthesisColumn) {
+      setOridPanelCollapsed(false);
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(`orid-synth-orid-collapsed:w${weekNum}`);
+      setOridPanelCollapsed(raw === "1");
+    } catch {
+      setOridPanelCollapsed(false);
+    }
+  }, [showSynthesisColumn, weekNum]);
+
+  function setOridPanelCollapsedPersist(next: boolean) {
+    setOridPanelCollapsed(next);
+    if (!showSynthesisColumn) return;
+    try {
+      window.localStorage.setItem(`orid-synth-orid-collapsed:w${weekNum}`, next ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }
+
   const missionProgress = useMemo(() => {
     const data = isEvenWeek(weekNum) ? (priorWeekData ?? createEmptyWriting(priorOddWeek(weekNum))) : writingData;
     return STAGES.map(({ key }) => ({
@@ -680,11 +708,15 @@ export default function WeekBookPage() {
   );
 
   const mainGridClass = showSynthesisColumn
-    ? "orid-synthesis-grid grid min-h-0 w-full flex-1 grid-cols-1 gap-2 overflow-hidden max-md:gap-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,1fr)] md:gap-2 lg:gap-3"
+    ? oridPanelCollapsed
+      ? "orid-synthesis-grid grid min-h-0 w-full flex-1 grid-cols-1 gap-2 overflow-hidden max-md:gap-2.5 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] md:gap-2 lg:gap-3"
+      : "orid-synthesis-grid grid min-h-0 w-full flex-1 grid-cols-1 gap-2 overflow-hidden max-md:gap-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,1fr)] md:gap-2 lg:gap-3"
     : "grid min-h-0 w-full flex-1 grid-cols-1 gap-2.5 overflow-hidden md:grid-cols-[1fr_1fr] md:gap-3";
 
   const aiPartnerShellClass = showSynthesisColumn
-    ? "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[50vh] md:order-3 md:col-start-3 md:row-start-1 md:h-full"
+    ? oridPanelCollapsed
+      ? "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[50vh] md:order-2 md:col-start-2 md:row-start-1 md:h-full"
+      : "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[50vh] md:order-3 md:col-start-3 md:row-start-1 md:h-full"
     : "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[35vh] md:order-2 md:col-start-2 md:h-full md:row-start-1";
 
   const isControl = isControlConditionValue(condition);
@@ -1113,6 +1145,23 @@ export default function WeekBookPage() {
     }
   }
 
+  function appendStageToSynthesis(stage: StageKey) {
+    const chunk = String(oridDisplay.stages[stage]?.d1 ?? "").trim();
+    if (!chunk) {
+      setFbError(`第 ${stage} 段還沒有內容可複製。`);
+      setCopyFlash(null);
+      return;
+    }
+    setFbError(null);
+    setWritingData((prev) => {
+      const cur = String(prev.synthesis_draft ?? "").trimEnd();
+      const next = cur ? `${cur}\n${chunk}` : chunk;
+      return { ...prev, synthesis_draft: next };
+    });
+    setCopyFlash(`已把 ${stage} 接到整合寫作後面`);
+    window.setTimeout(() => setCopyFlash(null), 2200);
+  }
+
   async function runSynthesisFeedback() {
     if (!sessionId || !isEvenWeek(weekNum)) return;
 
@@ -1320,6 +1369,7 @@ export default function WeekBookPage() {
   return (
     <div className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden">
       <div className={mainGridClass}>
+        {showOridLeftPanel ? (
         <div className="order-1 flex min-h-0 w-full min-w-0 flex-col gap-2.5 overflow-hidden md:gap-1 lg:gap-2.5 md:h-full md:min-h-0">
           <OridWeekHero
             className="w-full"
@@ -1339,8 +1389,21 @@ export default function WeekBookPage() {
 
           <div className="kid-shell flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden max-md:min-h-[40vh]">
             {isEvenWeek(weekNum) ? (
-              <div className="shrink-0 border-b border-amber-100 px-3 py-1.5 text-right text-[10px] text-amber-900/70 sm:text-xs">
-                {w2Phase === "orid_review" ? `顯示第 ${priorOddWeek(weekNum)} 週已儲存內容（唯讀）` : `第 ${priorOddWeek(weekNum)} 週四段（唯讀）`}
+              <div className="flex shrink-0 items-center justify-between gap-2 border-b border-amber-100 px-3 py-1.5 text-[10px] text-amber-900/70 sm:text-xs">
+                <span className="min-w-0 truncate text-left">
+                  {w2Phase === "orid_review"
+                    ? `顯示第 ${priorOddWeek(weekNum)} 週已儲存內容（唯讀）`
+                    : `第 ${priorOddWeek(weekNum)} 週四段（唯讀）`}
+                </span>
+                {showSynthesisColumn ? (
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 font-medium text-amber-900/80 hover:bg-amber-100"
+                    onClick={() => setOridPanelCollapsedPersist(true)}
+                  >
+                    收起上週
+                  </button>
+                ) : null}
               </div>
             ) : null}
 
@@ -1376,6 +1439,16 @@ export default function WeekBookPage() {
                   {/* 徽章在左、按鈕在右，同一橫列 */}
                   <div className="flex shrink-0 flex-row items-center gap-2 overflow-visible">
                     <BadgeDisplay earnedBadges={earnedBadges} size={32} />
+                    {showSynthesisColumn ? (
+                      <button
+                        type="button"
+                        className="inline-flex shrink-0 items-center justify-center rounded-full border-2 border-amber-500 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-950 shadow-sm hover:bg-amber-100 sm:px-3.5 sm:text-sm"
+                        title="接到整合寫作框後面"
+                        onClick={() => appendStageToSynthesis(activeStage)}
+                      >
+                        複製
+                      </button>
+                    ) : null}
                     {showStageFeedbackButtons && !isControl ? (
                       <button
                         type="button"
@@ -1487,18 +1560,48 @@ export default function WeekBookPage() {
                 )}
               </div>
               {fbError && <div className="mt-1.5 whitespace-pre-wrap text-xs text-red-600 sm:text-sm">{fbError}</div>}
+              {copyFlash && <div className="mt-1.5 text-xs font-medium text-emerald-700 sm:text-sm">{copyFlash}</div>}
               {encourageMsg && <div className="mt-1.5 text-xs font-medium text-amber-800 sm:text-sm">{encourageMsg}</div>}
               {saveMsg && <div className="mt-1.5 text-xs font-medium text-emerald-600 sm:text-sm">{saveMsg}</div>}
               {writingError && <div className="mt-1.5 whitespace-pre-wrap text-xs text-red-600 sm:text-sm">{writingError}</div>}
             </div>
           </div>
         </div>
+        ) : null}
 
         {showSynthesisColumn ? (
-          <div className="kid-shell order-2 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[30vh] md:order-2 md:col-span-1 md:col-start-2 md:row-start-1 md:h-full">
-            <div className="kid-section-header-partner px-2 py-2 md:px-2.5 md:py-2 lg:px-4 lg:py-3">
+          <div
+            className={[
+              "kid-shell order-2 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[30vh] md:order-2 md:col-span-1 md:row-start-1 md:h-full",
+              oridPanelCollapsed ? "md:col-start-1" : "md:col-start-2",
+            ].join(" ")}
+          >
+            <div className="kid-section-header-partner flex items-center justify-between gap-2 px-2 py-2 md:px-2.5 md:py-2 lg:px-4 lg:py-3">
               <span className="text-xs font-bold text-amber-950 md:text-sm">整合寫作</span>
+              <button
+                type="button"
+                className="shrink-0 rounded-full border border-amber-200 bg-white/80 px-2.5 py-0.5 text-[10px] font-medium text-amber-900/80 hover:bg-amber-50 sm:text-xs"
+                onClick={() => setOridPanelCollapsedPersist(!oridPanelCollapsed)}
+              >
+                {oridPanelCollapsed ? "展開上週" : "收起上週"}
+              </button>
             </div>
+            {oridPanelCollapsed ? (
+              <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-amber-100 px-2 py-1.5">
+                <span className="text-[10px] text-amber-900/65 sm:text-xs">接到後面：</span>
+                {(["O", "R", "I", "D"] as StageKey[]).map((sk) => (
+                  <button
+                    key={sk}
+                    type="button"
+                    className="rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 text-[11px] font-bold text-amber-950 hover:bg-amber-100"
+                    title={`把 ${sk} 接到整合寫作後面`}
+                    onClick={() => appendStageToSynthesis(sk)}
+                  >
+                    複製 {sk}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2">
               <textarea
                 className="min-h-0 w-full flex-1 resize-none rounded-xl border border-amber-100 bg-[#fffcf7] p-2.5 text-base leading-relaxed outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-300/30 md:p-3 md:text-sm lg:text-base"
@@ -1511,6 +1614,12 @@ export default function WeekBookPage() {
                   }))
                 }
               />
+              {copyFlash && oridPanelCollapsed ? (
+                <div className="text-xs font-medium text-emerald-700">{copyFlash}</div>
+              ) : null}
+              {fbError && oridPanelCollapsed ? (
+                <div className="whitespace-pre-wrap text-xs text-red-600">{fbError}</div>
+              ) : null}
               <button
                 type="button"
                 className="kid-btn-primary shrink-0"
