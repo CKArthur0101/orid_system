@@ -1,12 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" fill="none">
-  <!-- Gold badge ring with glow -->
   <circle cx="40" cy="40" r="36" fill="#FFFBEB" stroke="#F59E0B" stroke-width="3"/>
   <circle cx="40" cy="40" r="30" fill="none" stroke="#FCD34D" stroke-width="1.5"/>
-  <!-- Small stars -->
-  <text x="20" y="22" font-size="8" fill="#F59E0B" font-family="sans-serif"></text>
-  <text x="52" y="22" font-size="8" fill="#F59E0B" font-family="sans-serif"></text>
-  <text x="36" y="16" font-size="7" fill="#FCD34D" font-family="sans-serif"></text>
-  <!-- Pinecone body  gold tones -->
+  <polygon points="18,18 19.5,21.5 23,21.5 20.2,23.7 21.2,27 18,25 14.8,27 15.8,23.7 13,21.5 16.5,21.5" fill="#F59E0B"/>
+  <polygon points="62,18 63.5,21.5 67,21.5 64.2,23.7 65.2,27 62,25 58.8,27 59.8,23.7 57,21.5 60.5,21.5" fill="#F59E0B"/>
+  <polygon points="40,12 41.2,14.6 44,14.6 41.8,16.3 42.5,19 40,17.5 37.5,19 38.2,16.3 36,14.6 38.8,14.6" fill="#FCD34D"/>
   <ellipse cx="40" cy="47" rx="14" ry="17" fill="#D97706"/>
   <ellipse cx="40" cy="38" rx="8" ry="5" fill="#F59E0B"/>
   <ellipse cx="33" cy="43" rx="7" ry="4.5" fill="#F59E0B"/>
@@ -14,10 +11,7 @@
   <ellipse cx="36" cy="50" rx="7" ry="4.5" fill="#F59E0B"/>
   <ellipse cx="44" cy="50" rx="7" ry="4.5" fill="#F59E0B"/>
   <ellipse cx="40" cy="56" rx="8" ry="5" fill="#F59E0B"/>
-  <!-- Stalk -->
   <rect x="38" y="29" width="4" height="8" rx="2" fill="#92400E"/>
-  <!-- Gold sheen -->
-  <ellipse cx="33" cy="35" rx="6" ry="3.5" fill="white" opacity="0.4" transform="rotate(-20 33 35)"/>
-  <!-- "90" label -->
-  <text x="40" y="23" text-anchor="middle" font-size="9" font-weight="bold" fill="#92400E" font-family="sans-serif">90</text>
+  <ellipse cx="33" cy="35" rx="6" ry="3.5" fill="#FFFFFF" fill-opacity="0.4" transform="rotate(-20 33 35)"/>
+  <text x="40" y="24" text-anchor="middle" font-size="9" font-weight="bold" fill="#92400E" font-family="sans-serif">Au</text>
 </svg>

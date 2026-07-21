@@ -88,16 +88,28 @@ class TestClampTotalScore:
 class TestCalculateOridSelScore:
     def test_all_level4_gives_90(self):
         orid = {"O1": 4, "R1": 4, "I1": 4, "D1": 4}
-        sel = {"SEL_EA": 4, "SEL_PT_R": 4, "SEL_VR": 4, "SEL_PT_I": 4, "SEL_RA": 4}
+        sel = {"SEL_SA": 4, "SEL_SM": 4, "SEL_SOA": 4, "SEL_RS": 4, "SEL_RD": 4}
         result = calculate_orid_sel_score(orid, sel)
         assert result["totalScore"] == 90
         assert result["oridSubtotal"] == pytest.approx(40.0)
         assert result["selSubtotal"] == pytest.approx(50.0)
         assert result["missing"] == []
 
+    def test_legacy_sel_aliases_normalize(self):
+        orid = {"O1": 4, "R1": 4, "I1": 4, "D1": 4}
+        # Legacy: EA→SA, PT_R/PT_I→SOA (max), RA→RD; VR ignored; SM/RS still missing
+        sel = {"SEL_EA": 4, "SEL_PT_R": 3, "SEL_VR": 4, "SEL_PT_I": 4, "SEL_RA": 4}
+        result = calculate_orid_sel_score(orid, sel)
+        assert result["oridSubtotal"] == pytest.approx(40.0)
+        # SA=10, SOA=10 (max of 6/10), RD=10; SM/RS missing → 30
+        assert result["selSubtotal"] == pytest.approx(30.0)
+        assert result["totalScore"] == 70
+        assert "SEL_SM" in result["missing"]
+        assert "SEL_RS" in result["missing"]
+
     def test_all_level1_gives_minimum(self):
         orid = {"O1": 1, "R1": 1, "I1": 1, "D1": 1}
-        sel = {"SEL_EA": 1, "SEL_PT_R": 1, "SEL_VR": 1, "SEL_PT_I": 1, "SEL_RA": 1}
+        sel = {"SEL_SA": 1, "SEL_SM": 1, "SEL_SOA": 1, "SEL_RS": 1, "SEL_RD": 1}
         result = calculate_orid_sel_score(orid, sel)
         # triangular: 4 * 1 + 5 * 1 = 9
         assert result["totalScore"] == 9
@@ -107,21 +119,21 @@ class TestCalculateOridSelScore:
     def test_missing_criteria_reported(self):
         result = calculate_orid_sel_score({}, {})
         assert "O1" in result["missing"]
-        assert "SEL_EA" in result["missing"]
+        assert "SEL_SA" in result["missing"]
         assert result["totalScore"] == 0
 
     def test_partial_scores(self):
         orid = {"O1": 3, "R1": 2}  # I1, D1 missing
-        sel = {"SEL_EA": 3, "SEL_VR": 4}
+        sel = {"SEL_SA": 3, "SEL_RD": 4}
         result = calculate_orid_sel_score(orid, sel)
-        # triangular: ORID: 6 + 3 + 0 + 0 = 9; SEL: 6 + 0 + 10 + 0 + 0 = 16; Total: 25
+        # triangular: ORID: 6 + 3 + 0 + 0 = 9; SEL: SA=6 + RD=10 = 16; Total: 25
         assert result["totalScore"] == 25
         assert "I1" in result["missing"]
         assert "D1" in result["missing"]
 
     def test_score_never_exceeds_90(self):
         orid = {"O1": 4, "R1": 4, "I1": 4, "D1": 4}
-        sel = {"SEL_EA": 4, "SEL_PT_R": 4, "SEL_VR": 4, "SEL_PT_I": 4, "SEL_RA": 4}
+        sel = {"SEL_SA": 4, "SEL_SM": 4, "SEL_SOA": 4, "SEL_RS": 4, "SEL_RD": 4}
         result = calculate_orid_sel_score(orid, sel)
         assert result["totalScore"] <= 90
 

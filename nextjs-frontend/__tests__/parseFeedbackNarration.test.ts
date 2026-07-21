@@ -14,6 +14,7 @@ describe("parseFeedbackNarration", () => {
     ].join("\n");
 
     expect(parseFeedbackNarration(text)).toEqual({
+      kind: "revision",
       praise: "你有寫出主角做了什麼事。",
       rethink: "再補一句當時發生在哪裡。",
       example: "我看到＿＿＿在＿＿＿做了＿＿＿。",
@@ -33,6 +34,7 @@ describe("parseFeedbackNarration", () => {
     ].join("\n");
 
     expect(parseFeedbackNarration(text)).toEqual({
+      kind: "revision",
       praise: "你有寫到「用柿子蒂打陀螺」。",
       rethink: "再補上是誰帶著玩。",
       example: "在你寫的「一開始……」後面，加一句藏進倉庫。",
@@ -52,9 +54,12 @@ describe("parseFeedbackNarration", () => {
     ].join("\n");
 
     const parsed = parseFeedbackNarration(text);
-    expect(parsed?.praise).toBe("你有寫出感受。");
-    expect(parsed?.rethink).toBe("可以再說明原因。");
-    expect(parsed?.example).toBe("我覺得＿＿＿，因為＿＿＿。");
+    expect(parsed?.kind).toBe("revision");
+    if (parsed?.kind === "revision") {
+      expect(parsed.praise).toBe("你有寫出感受。");
+      expect(parsed.rethink).toBe("可以再說明原因。");
+      expect(parsed.example).toBe("我覺得＿＿＿，因為＿＿＿。");
+    }
   });
 
   it("returns null when not feedback narration", () => {
@@ -74,8 +79,11 @@ describe("parseFeedbackNarration", () => {
     ].join("\n");
 
     const parsed = parseFeedbackNarration(text);
-    expect(parsed?.rethink).toContain("內容還有點短");
-    expect(parsed?.rethink).not.toMatch(/」的起頭$/);
-    expect(parsed?.example).toContain("柿子");
+    expect(parsed?.kind).toBe("revision");
+    if (parsed?.kind === "revision") {
+      expect(parsed.rethink).toContain("內容還有點短");
+      expect(parsed.rethink).not.toMatch(/」的起頭$/);
+      expect(parsed.example).toContain("柿子");
+    }
   });
 });

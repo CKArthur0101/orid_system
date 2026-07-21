@@ -7,7 +7,6 @@ import { getWeekBookMeta } from "@/lib/orid-system-art";
 import { getBookWeekArt } from "@/lib/orid-book-art";
 
 interface WeekProgress {
-  totalScore: number | null;
   earnedBadges: string[];
 }
 
@@ -65,7 +64,6 @@ export function DashboardWeekGrid() {
               title={title}
               coverThumb={coverThumb}
               locked={locked}
-              totalScore={progress?.totalScore}
               earnedBadges={progress?.earnedBadges}
             />
           </li>

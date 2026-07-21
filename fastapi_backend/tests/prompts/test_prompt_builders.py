@@ -8,7 +8,7 @@ from app.prompts.builders.writing_assist import build_writing_d1_prompts, build_
 from app.prompts.builders.writing_feedback import build_genai_feedback_prompts
 from app.content.rubrics import WEEK1_ORID_RUBRIC, WEEK1_SEL_RUBRIC
 from app.prompts.policy.control_feedback import format_control_feedback_reply
-from app.prompts.policy.feedback_focus import apply_o_key_event_gaps, normalize_feedback_focus
+from app.prompts.policy.feedback_focus import apply_o_key_event_gaps, normalize_feedback_focus, o_draft_meets_pass_bar
 from app.prompts.policy.turn_destination import (
     CONTROL_O_META_MISSING,
     GENAI_META_MISSING_FALLBACK,
@@ -213,17 +213,32 @@ def test_genai_feedback_builder_changes_contract_by_stage():
 
 def test_week1_formal_orid_and_sel_rubrics_are_available():
     assert WEEK1_ORID_RUBRIC["schema"] == "writing_rubric_v1"
+    assert WEEK1_ORID_RUBRIC["version"] == 4
     assert WEEK1_ORID_RUBRIC["by_stage"]["O"][0]["name"] == "客觀事實"
     assert WEEK1_ORID_RUBRIC["by_stage"]["O"][0]["levels"][2]["desc"] == (
-        "能正確寫出故事人物與至少一件重要事件，內容大致清楚。"
+        "人物正確；至少寫到開頭衝突，並再寫一段中間或結尾的重要情節，大致清楚、無明顯事實錯誤。"
     )
     assert WEEK1_ORID_RUBRIC["by_stage"]["D"][0]["levels"][3]["desc"] == (
-        "能說明具體情境、對象、做法，並能連回故事帶給自己的啟發。"
+        "能說明情境、對象、做法，並連回故事帶給自己的啟發。"
     )
 
     assert WEEK1_SEL_RUBRIC["schema"] == "sel_rubric_v1"
+    assert WEEK1_SEL_RUBRIC["version"] == 2
     assert WEEK1_SEL_RUBRIC["by_stage"]["O"] == []
-    assert [item["id"] for item in WEEK1_SEL_RUBRIC["by_stage"]["R"]] == ["SEL_EA", "SEL_PT"]
+    assert [item["id"] for item in WEEK1_SEL_RUBRIC["by_stage"]["R"]] == [
+        "SEL_SA",
+        "SEL_SOA",
+        "SEL_SM",
+    ]
+    assert [item["id"] for item in WEEK1_SEL_RUBRIC["by_stage"]["I"]] == [
+        "SEL_SOA",
+        "SEL_RS",
+    ]
+    assert [item["id"] for item in WEEK1_SEL_RUBRIC["by_stage"]["D"]] == [
+        "SEL_RD",
+        "SEL_SM",
+        "SEL_RS",
+    ]
 
 
 def test_genai_feedback_prompt_uses_orid_as_primary_and_sel_as_auxiliary():
@@ -411,11 +426,49 @@ def test_strip_markdown_for_student_chat_removes_bold_markers():
     assert "**" not in strip_markdown_for_student_chat("選一個**大事件**來寫")
 
 
-def test_apply_o_key_event_gaps_replaces_generic_o_when_events_missing():
-    long_o = (
-        "一開始阿松爺爺把柿子都藏起來，然後只給哎唷奶奶柿子蒂，隔天，"
-        "哎唷奶奶和小朋友用柿子蒂打陀螺，玩得很開心。"
+def test_o_draft_meets_pass_bar():
+    # Opening + mid + late → pass
+    assert o_draft_meets_pass_bar(
+        "阿松爺爺家的柿子很甜，可是他一直自己吃，不想分給別人。"
+        "哎唷奶奶搬來後，他只給她柿子蒂。後來他把柿子藏進倉庫，最後還把樹砍掉，只剩樹樁。"
     )
+    # Feeling only → fail
+    assert not o_draft_meets_pass_bar("我覺得這個故事很溫暖。")
+    # Only one beat → fail
+    assert not o_draft_meets_pass_bar("阿松爺爺把柿子藏起來。")
+    # Early+mid only (no climax) → fail; student still needs 砍樹／樹樁等
+    assert not o_draft_meets_pass_bar(
+        "故事裡我看到阿松爺爺不分享柿子，然後只給奶奶柿子蒂，後來他把柿子都採下來藏進倉庫。"
+    )
+
+
+def test_apply_o_key_event_gaps_skips_when_pass_bar_met():
+    """Already level-3-worthy O drafts must not keep getting more plot homework."""
+    pass_o = (
+        "阿松爺爺家的柿子很甜，可是他一直自己吃，不想分給別人。"
+        "哎唷奶奶搬來後，他只給她柿子蒂。後來他把柿子藏進倉庫，最後還把樹砍掉，只剩樹樁。"
+    )
+    key_events = [
+        "阿松爺爺家的柿子很甜，但他一直想把柿子獨占起來，不想分給別人。",
+        "阿松爺爺在大家面前吃柿子、炫耀柿子有多好，旁人只能羨慕地看著。",
+        "阿松爺爺擔心大家來要柿子蒂，急忙把柿子樹上的柿子都採下來藏到屋後倉庫。",
+        "阿松爺爺為了不讓大家再拿到，急忙砍樹，最後發現只剩樹樁。",
+    ]
+    m, s = apply_o_key_event_gaps(
+        stage="O",
+        strength="high",
+        student_text=pass_o,
+        key_events=key_events,
+        missing=["你已經抓到重點事件了：下一步試著寫出故事裡還沒提到的一段"],
+        suggestions=["先挑書裡一件你稿子上還沒寫到的事"],
+    )
+    assert m[0].startswith("你已經抓到重點事件了")
+    assert "書裡還有這些情節" not in m[0]
+
+
+def test_apply_o_key_event_gaps_replaces_generic_o_when_events_missing():
+    # Thin O: character + only one beat → still below pass bar, gaps may fill in
+    long_o = "一開始阿松爺爺把柿子都藏起來，玩得很開心。"
     key_events = [
         "阿松爺爺家的柿子很甜，但他一直想把柿子獨占起來，不想分給別人。",
         "阿松爺爺在大家面前吃柿子、炫耀柿子有多好，旁人只能羨慕地看著。",
@@ -433,7 +486,7 @@ def test_apply_o_key_event_gaps_replaces_generic_o_when_events_missing():
         suggestions=["先挑書裡一件你稿子上還沒寫到的事，用三句話寫出誰、做了什麼、後來怎麼了"],
     )
     blob = m[0] + s[0]
-    assert "倉庫" in blob or "柿子葉" in blob or "樹枝" in blob or "砍" in blob or "獨占" in blob
+    assert "倉庫" in blob or "柿子葉" in blob or "樹枝" in blob or "砍" in blob or "獨占" in blob or "柿子蒂" in blob
     assert "中間衝突" not in m[0]
 
 

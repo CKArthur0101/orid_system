@@ -2,7 +2,7 @@
 
 Scoring:
   ORID: 4 criteria (O1, R1, I1, D1) × 10 pts each = 40 pts max
-  SEL:  5 criteria (SEL_EA, SEL_PT/R, SEL_VR, SEL_PT/I, SEL_RA) × 10 pts each = 50 pts max
+  SEL:  5 CASEL criteria (SEL_SA, SEL_SM, SEL_SOA, SEL_RS, SEL_RD) × 10 pts each = 50 pts max
   Total: 90 pts max
 
 Each criterion uses level 1–4 with triangular cumulative scoring
@@ -22,7 +22,17 @@ from typing import Optional
 
 # Criterion IDs used in scoring (order matters for stable output)
 ORID_CRITERION_IDS = ["O1", "R1", "I1", "D1"]
-SEL_CRITERION_IDS = ["SEL_EA", "SEL_PT_R", "SEL_VR", "SEL_PT_I", "SEL_RA"]
+SEL_CRITERION_IDS = ["SEL_SA", "SEL_SM", "SEL_SOA", "SEL_RS", "SEL_RD"]
+
+# Legacy IDs from older rubrics → current CASEL ids (for research replay)
+_SEL_ID_ALIASES: dict[str, str] = {
+    "SEL_EA": "SEL_SA",
+    "SEL_PT": "SEL_SOA",
+    "SEL_PT_R": "SEL_SOA",
+    "SEL_PT_I": "SEL_SOA",
+    "SEL_RA": "SEL_RD",
+    # SEL_VR retired into I1; ignore for SEL scoring
+}
 
 POINTS_PER_CRITERION = 10.0
 ORID_MAX = len(ORID_CRITERION_IDS) * POINTS_PER_CRITERION   # 40
@@ -103,8 +113,8 @@ def calculate_orid_sel_score(
         orid_levels: dict mapping criterion_id → raw level value.
                      Expected keys: O1, R1, I1, D1
         sel_levels:  dict mapping criterion_id → raw level value.
-                     Expected keys: SEL_EA, SEL_PT_R, SEL_VR, SEL_PT_I, SEL_RA
-                     (SEL_PT is shared but split by stage _R and _I)
+                     Expected keys: SEL_SA, SEL_SM, SEL_SOA, SEL_RS, SEL_RD
+                     (legacy SEL_EA/PT/RA aliases are normalized)
 
     Returns:
         {
@@ -121,6 +131,13 @@ def calculate_orid_sel_score(
     sel_breakdown: dict[str, float] = {}
     missing: list[str] = []
 
+    # Normalize legacy SEL ids (SEL_EA → SEL_SA, etc.) before scoring
+    normalized_sel: dict[str, object] = {}
+    for raw_key, raw_val in (sel_levels or {}).items():
+        sid = normalize_sel_criterion_id(str(raw_key))
+        if sid:
+            _merge_level_prefer_higher(normalized_sel, sid, raw_val)
+
     for cid in ORID_CRITERION_IDS:
         raw = orid_levels.get(cid)
         level = parse_level(raw)
@@ -129,7 +146,7 @@ def calculate_orid_sel_score(
         orid_breakdown[cid] = score_criterion(level)
 
     for cid in SEL_CRITERION_IDS:
-        raw = sel_levels.get(cid)
+        raw = normalized_sel.get(cid)
         level = parse_level(raw)
         if level is None:
             missing.append(cid)
@@ -159,18 +176,36 @@ def clamp_total_score(score: float) -> int:
 STAGE_TO_ORID_CRITERION = {"O": "O1", "R": "R1", "I": "I1", "D": "D1"}
 
 
-def normalize_sel_criterion_id(criterion_id: str, stage: str) -> Optional[str]:
-    """Map rubric_focus / SEL id to scoring key (SEL_PT → SEL_PT_R or SEL_PT_I)."""
+def normalize_sel_criterion_id(criterion_id: str, stage: str = "") -> Optional[str]:
+    """Map rubric / legacy SEL id to a scoring key (CASEL five).
+
+    ``stage`` is kept for API compatibility; social awareness is no longer split
+    into separate R/I score slots — R and I both map to SEL_SOA (keep max later).
+    """
+    del stage  # unused; retained for call-site compatibility
     cid = (criterion_id or "").strip().upper()
-    if cid == "SEL_PT":
-        if stage.upper() == "R":
-            return "SEL_PT_R"
-        if stage.upper() == "I":
-            return "SEL_PT_I"
+    if cid in _SEL_ID_ALIASES:
+        mapped = _SEL_ID_ALIASES[cid]
+        return mapped if mapped in SEL_CRITERION_IDS else None
+    if cid == "SEL_VR":
         return None
     if cid in SEL_CRITERION_IDS:
         return cid
     return None
+
+
+def _merge_level_prefer_higher(
+    store: dict[str, object],
+    key: str,
+    raw: object,
+) -> None:
+    """Write level into store; if key exists, keep the higher parsed level."""
+    new_lv = parse_level(raw)
+    if new_lv is None:
+        return
+    old_lv = parse_level(store.get(key))
+    if old_lv is None or new_lv >= old_lv:
+        store[key] = raw
 
 
 def primary_orid_level_from_rubric_meta(
@@ -233,7 +268,7 @@ def apply_single_level_estimate(
         for k, v in (meta or {}).items():
             sel_id = normalize_sel_criterion_id(str(k), stage_u)
             if sel_id:
-                sel_levels[sel_id] = v
+                _merge_level_prefer_higher(sel_levels, sel_id, v)
         return
 
     level = parse_level(rubric_level_estimate)
@@ -243,7 +278,7 @@ def apply_single_level_estimate(
     sel_id = normalize_sel_criterion_id(focus, stage_u)
     if sel_id or focus.startswith("SEL"):
         if sel_id:
-            sel_levels[sel_id] = level
+            _merge_level_prefer_higher(sel_levels, sel_id, level)
         return
 
     orid_id = focus if focus in ORID_CRITERION_IDS else STAGE_TO_ORID_CRITERION.get(stage_u)

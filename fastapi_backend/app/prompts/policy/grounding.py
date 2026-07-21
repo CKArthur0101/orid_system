@@ -53,6 +53,11 @@ _ACTION_EVENT_KEYWORDS = [
     "咬",
 ]
 _ACTION_EVENT_VERB_RE = r"(?:打|揍|毆|踢|砍|殺|欺負|霸凌|吃|咬)"
+# Verb + nearby object that is already in the book → treat as paraphrase, not fabrication.
+_BOOK_ACTION_PARAPHRASE_ALLOW: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("砍", ("樹", "柿子樹", "樹樁", "樹椿", "光光", "砍掉", "砍光")),
+    ("吃", ("柿子", "大口", "面前", "甜柿")),
+)
 _LATIN_HALLUC_ALLOWLIST = frozenset(
     {
         "orid",
@@ -254,6 +259,43 @@ def strip_story_framing_for_grounding(text: str) -> str:
     return t
 
 
+def _action_span_supported_by_book(span: str, verb: str, reference_blob: str) -> bool:
+    """True when the action span is literally in the book or a known in-book paraphrase."""
+    s = normalize_match_text(span)
+    if not s or not reference_blob:
+        return False
+    if s in reference_blob:
+        return True
+    # Expanding windows around the verb: 「砍樹」「大口吃」等原文片段
+    m = re.search(re.escape(verb), s)
+    if m:
+        i = m.start()
+        vlen = len(verb)
+        for left in range(0, 5):
+            for right in range(0, 5):
+                frag = s[max(0, i - left) : min(len(s), i + vlen + right)]
+                if len(frag) >= 2 and frag in reference_blob:
+                    return True
+    # Semantic paraphrase allowlist (e.g. 樹都砍光光 ≈ 砍樹)
+    for allow_verb, cues in _BOOK_ACTION_PARAPHRASE_ALLOW:
+        if verb != allow_verb:
+            continue
+        if allow_verb not in reference_blob:
+            continue
+        if any(c in s for c in cues) and any(
+            c in reference_blob for c in cues if c not in ("光光", "砍掉", "砍光", "大口", "面前")
+        ):
+            return True
+        # 砍 + 樹* : book has 砍 and 樹
+        if allow_verb == "砍" and ("樹" in s) and ("樹" in reference_blob):
+            return True
+        if allow_verb == "吃" and ("柿子" in s or "大口" in s) and (
+            "柿子" in reference_blob or "大口吃" in reference_blob or "吃" in reference_blob
+        ):
+            return True
+    return False
+
+
 def _has_unsupported_event_keyword(text_norm: str, reference_blob: str) -> bool:
     if not text_norm or not reference_blob:
         return False
@@ -272,12 +314,13 @@ def _has_unsupported_action_event_claim(text_norm: str, reference_blob: str) -> 
         s = normalize_match_text(sp)
         if len(s) < 3:
             continue
-        if s in reference_blob:
+        m = re.search(_ACTION_EVENT_VERB_RE, s)
+        if not m:
+            continue
+        verb = m.group(0)
+        if _action_span_supported_by_book(s, verb, reference_blob):
             continue
         if any(k in s for k in _ACTION_EVENT_KEYWORDS):
-            m = re.search(_ACTION_EVENT_VERB_RE, s)
-            if not m:
-                continue
             i = m.start()
             left = s[max(0, i - 2) : i + 1]
             right = s[i : min(len(s), i + 3)]
@@ -297,10 +340,13 @@ def extract_unsupported_action_phrase(
     spans = re.findall(rf"[一-龥]{{0,4}}{_ACTION_EVENT_VERB_RE}[一-龥]{{0,4}}", text_norm)
     for sp in spans:
         s = normalize_match_text(sp)
-        if len(s) < 3 or s in reference_blob:
+        if len(s) < 3:
             continue
         m = re.search(_ACTION_EVENT_VERB_RE, s)
         if not m:
+            continue
+        verb = m.group(0)
+        if _action_span_supported_by_book(s, verb, reference_blob):
             continue
         i = m.start()
         left = s[max(0, i - 2) : i + 1]
@@ -324,8 +370,14 @@ def extract_wrong_concrete_noun(
         if not m:
             continue
         noun = m.group(1)
-        if noun and noun not in reference_blob and noun not in _COMMON_STORY_ANCHORS:
-            return noun
+        if not noun or noun in reference_blob or noun in _COMMON_STORY_ANCHORS:
+            continue
+        # Avoid swallowing following verbs/clauses: 吃看到奶奶
+        if noun.startswith(("看", "到", "了", "完", "得", "著", "过", "過")):
+            continue
+        if any(v in noun for v in ("打", "砍", "殺", "踢", "揍")):
+            continue
+        return noun
     return ""
 
 
@@ -557,3 +609,67 @@ def looks_likely_ungrounded_in_book(
         return False
 
     return True
+
+
+_ABSENCE_CLAIM_MARKERS = (
+    "書裡沒有",
+    "書中沒有",
+    "沒有提到",
+    "沒提到",
+    "不在書裡",
+    "書裡沒提到",
+)
+# Canonically present gifts/objects in week-1 story (never "not in book")
+_WEEK1_CANONICAL_GIVEABLES = (
+    "柿子蒂",
+    "樹枝",
+    "葉子",
+    "枯葉",
+    "種子",
+)
+
+
+def _book_reference_mentions(book_pack: Optional[dict[str, Any]], term: str) -> bool:
+    if not isinstance(book_pack, dict) or not term:
+        return False
+    blob = extract_story_reference_blob(book_pack)
+    return term in (blob or "")
+
+
+def scrub_false_book_absence_claims(
+    *,
+    missing: list[str],
+    suggestions: list[str],
+    book_pack: Optional[dict[str, Any]],
+) -> tuple[list[str], list[str]]:
+    """Drop / rewrite feedback that falsely says canonical book items are absent.
+
+    Example false claim: 「書裡沒有提到爺爺分享樹枝和柿子蒂」— both items are in-book.
+    """
+    if not missing:
+        return missing, suggestions
+    m0 = (missing[0] or "").strip()
+    if not m0:
+        return missing, suggestions
+    if not any(tok in m0 for tok in _ABSENCE_CLAIM_MARKERS):
+        return missing, suggestions
+
+    hit_terms = [
+        t for t in _WEEK1_CANONICAL_GIVEABLES if t in m0 and _book_reference_mentions(book_pack, t)
+    ]
+    if hit_terms:
+        soft = (
+            "書裡確實有阿松爺爺把柿子蒂、葉子或樹枝給哎唷奶奶和小朋友；"
+            "你可以再說清楚：甜柿子當時還多半藏著，他先給出去的比較像蒂／葉子／樹枝。"
+        )
+        sug = "試著補一句：他給了柿子蒂或樹枝之後，甜柿子怎麼了？（例如藏進倉庫）"
+        return [soft], [sug]
+
+    # False denial of tree-cutting paraphrases (砍光光 / 樹都砍掉 ≈ 書裡的砍樹)
+    cut_paraphrase_cues = ("砍光", "砍掉", "砍樹", "樹都砍", "把自己的樹", "把樹砍", "樹砍")
+    if any(c in m0 for c in cut_paraphrase_cues) and _book_reference_mentions(
+        book_pack, "砍"
+    ) and _book_reference_mentions(book_pack, "樹"):
+        return [], suggestions
+
+    return missing, suggestions

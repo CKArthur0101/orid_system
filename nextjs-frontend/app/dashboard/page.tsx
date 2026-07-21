@@ -1,14 +1,11 @@
 import Image from "next/image";
 import { DilabLogo } from "@/components/orid/DilabLogo";
-import { ContinueWritingBanner } from "@/components/orid/ContinueWritingBanner";
 import { DashboardWeekGrid } from "@/components/orid/DashboardWeekGrid";
 import { DASHBOARD_ART } from "@/lib/orid-system-art";
 
 export default function DashboardPage() {
   return (
     <div className="orid-dashboard-page flex flex-1 flex-col gap-4 pb-6">
-      <ContinueWritingBanner />
-
       <div className="kid-shell flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:gap-4 sm:px-5 sm:py-4">
         <DilabLogo height={40} className="self-start sm:shrink-0" />
         <div>

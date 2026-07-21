@@ -1,13 +1,14 @@
 """Tests for orid_badges service."""
 from __future__ import annotations
 
-import pytest
 from app.services.orid_badges import (
     BADGE_ORDER,
     _score_from_writing_obj,
     calculate_earned_badges,
     get_new_badges,
     should_show_badge_modal,
+    stages_passed_from_orid_levels,
+    stages_passed_from_writing_obj,
 )
 
 
@@ -16,7 +17,7 @@ class TestCalculateEarnedBadges:
         result = calculate_earned_badges(
             has_writing_content=False,
             has_used_feedback_or_prompt=False,
-            total_score=None,
+            stages_passed=None,
         )
         assert result == []
 
@@ -24,7 +25,7 @@ class TestCalculateEarnedBadges:
         result = calculate_earned_badges(
             has_writing_content=True,
             has_used_feedback_or_prompt=True,
-            total_score=None,
+            stages_passed=None,
         )
         assert "badge_start" in result
 
@@ -32,36 +33,72 @@ class TestCalculateEarnedBadges:
         result = calculate_earned_badges(
             has_writing_content=True,
             has_used_feedback_or_prompt=False,
-            total_score=None,
+            stages_passed=None,
         )
         assert "badge_start" not in result
 
-    def test_score_30_gives_bronze(self):
+    def test_o_passed_gives_bronze(self):
         result = calculate_earned_badges(
             has_writing_content=True,
             has_used_feedback_or_prompt=True,
-            total_score=30,
+            stages_passed=["O"],
         )
         assert "badge_30" in result
         assert "badge_60" not in result
 
-    def test_score_90_gives_all_score_badges(self):
+    def test_ori_passed_gives_silver(self):
         result = calculate_earned_badges(
             has_writing_content=True,
             has_used_feedback_or_prompt=True,
-            total_score=90,
+            stages_passed=["O", "R", "I"],
+        )
+        assert "badge_30" in result
+        assert "badge_60" in result
+        assert "badge_90" not in result
+
+    def test_all_stages_gives_gold(self):
+        result = calculate_earned_badges(
+            has_writing_content=True,
+            has_used_feedback_or_prompt=True,
+            stages_passed=["O", "R", "I", "D"],
         )
         assert "badge_30" in result
         assert "badge_60" in result
         assert "badge_90" in result
 
-    def test_badges_not_earned_for_score_below_threshold(self):
+    def test_score_alone_does_not_unlock(self):
         result = calculate_earned_badges(
             has_writing_content=False,
             has_used_feedback_or_prompt=False,
-            total_score=29,
+            stages_passed=None,
+            total_score=90,
         )
-        assert "badge_30" not in result
+        assert result == []
+
+
+class TestStagesPassedHelpers:
+    def test_from_writing_ok(self):
+        obj = {
+            "stages": {
+                "O": {"feedback": {"d1": {"ok": True}}},
+                "R": {"feedback": {"d1": {"ok": False}}},
+                "I": {"d1": "text"},
+            }
+        }
+        assert stages_passed_from_writing_obj(obj, mode="ok") == {"O"}
+
+    def test_from_writing_content(self):
+        obj = {
+            "stages": {
+                "O": {"d1": "事實"},
+                "R": {"d1": "", "d2": "  "},
+                "I": {"d2": "想法"},
+            }
+        }
+        assert stages_passed_from_writing_obj(obj, mode="content") == {"O", "I"}
+
+    def test_from_orid_levels(self):
+        assert stages_passed_from_orid_levels({"O1": 3, "R1": 2, "I1": 4}) == {"O", "I"}
 
 
 class TestGetNewBadges:
@@ -110,5 +147,5 @@ class TestScoreFromWritingObj:
             }
         }
         snap, total = _score_from_writing_obj(obj)
-        assert total == 5
-        assert snap["totalScore"] == 5
+        assert total == 3
+        assert snap["totalScore"] == 3

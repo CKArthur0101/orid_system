@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Iterable, Optional
 from uuid import UUID
 
 from sqlalchemy import func, select, update
@@ -13,49 +13,63 @@ from app.models import OridBadgeEvent
 from app.services.orid_rubric_scoring import (
     calculate_orid_sel_score,
     collect_levels_from_writing_obj,
+    parse_level,
 )
 from app.services.orid_writing_store import ensure_orid_writing_obj
 
 # ---------------------------------------------------------------------------
 # Badge configuration
+# IDs kept as badge_30/60/90 for DB / frontend asset compatibility.
+# Unlock rules are stage-progress based (not total score).
 # ---------------------------------------------------------------------------
 
 BADGE_CONFIG: dict[str, dict] = {
     "badge_start": {
         "id": "badge_start",
         "name": "下筆徽章",
-        "description": "開始寫作，並使用一次回饋或提示，就可以獲得。",
-        "earned_description": "你已經開始寫下自己的想法，也使用了寫作引導，繼續完成今天的反思任務吧！",
+        "description": "先在格子裡寫一些內容，並按一次「取得回饋」或看一次寫作提示，就可以獲得。",
+        "earned_description": "已獲得：你已經開始寫，也用過引導了！",
         "modal_title": "恭喜獲得下筆徽章！",
-        "modal_text": "你已經開始寫下自己的想法，也使用了寫作引導，繼續完成今天的反思任務吧！",
+        "modal_text": "你已經開始寫下自己的想法，也使用了寫作引導。接下來把故事裡「誰做了什麼」寫清楚吧！",
     },
     "badge_30": {
         "id": "badge_30",
         "name": "松果銅徽章",
-        "description": "總分達到 30/90，就可以獲得。",
-        "earned_description": "你已經完成基本的反思內容，接下來可以試著寫得更具體。",
+        "description": (
+            "在「觀察」格把故事裡誰、做了什麼寫清楚（不要只寫感想）。"
+            "等到這格出現「✓ 已完成」或完成卡，就可以獲得。"
+        ),
+        "earned_description": "已獲得：你已經把故事裡的人物和事件說清楚了！",
         "modal_title": "恭喜獲得松果銅徽章！",
-        "modal_text": "你已經完成基本的反思內容，接下來可以試著寫得更具體。",
+        "modal_text": "你已經把故事裡的人物和事件說清楚了。接下來可以寫寫看：你有什麼感受？為什麼？",
     },
     "badge_60": {
         "id": "badge_60",
         "name": "松果銀徽章",
-        "description": "總分達到 60/90，就可以獲得。",
-        "earned_description": "你的反思越來越完整了，可以再加強想法之間的連結。",
+        "description": (
+            "「觀察」「感受」「體會」三格都要寫到位：事件清楚、有感受與原因、有從故事學到的道理。"
+            "三格都出現「✓ 已完成」就可以獲得。"
+        ),
+        "earned_description": "已獲得：你已經寫出事件、感受與體會了！",
         "modal_title": "恭喜獲得松果銀徽章！",
-        "modal_text": "你的反思越來越完整了，可以再加強想法之間的連結。",
+        "modal_text": "你已經寫出事件、感受，也說出從故事學到的道理。接下來可以寫一個生活裡做得到的小行動。",
     },
     "badge_90": {
         "id": "badge_90",
         "name": "松果金徽章",
-        "description": "總分達到 90/90，就可以獲得。",
-        "earned_description": "太棒了！你的反思內容很完整，也能連結感受、體會與行動。",
+        "description": (
+            "四格都完成：觀察（誰做了什麼）、感受（心情與原因）、體會（學到什麼）、行動（下次要怎麼做）。"
+            "都出現「✓ 已完成」就可以獲得。"
+        ),
+        "earned_description": "已獲得：你已經走完一整趟反思寫作！",
         "modal_title": "恭喜獲得松果金徽章！",
-        "modal_text": "太棒了！你的反思內容很完整，也能連結感受、體會與行動。",
+        "modal_text": "太棒了！你已經把觀察、感受、體會和行動都寫完了。",
     },
 }
 
 BADGE_ORDER = ["badge_start", "badge_30", "badge_60", "badge_90"]
+
+_STAGE_KEYS = ("O", "R", "I", "D")
 
 
 # ---------------------------------------------------------------------------
@@ -63,25 +77,85 @@ BADGE_ORDER = ["badge_start", "badge_30", "badge_60", "badge_90"]
 # ---------------------------------------------------------------------------
 
 
+def normalize_stage_set(stages: Optional[Iterable[str]]) -> set[str]:
+    out: set[str] = set()
+    for s in stages or []:
+        u = str(s or "").strip().upper()
+        if u in _STAGE_KEYS:
+            out.add(u)
+    return out
+
+
+def stages_passed_from_writing_obj(writing_obj: dict | None, *, mode: str = "ok") -> set[str]:
+    """Derive completed stages from orid_writing_v1 JSON.
+
+    mode="ok": experimental — stage counts if any draft feedback.ok is true
+    mode="content": control — stage counts if d1/d2 has non-empty text
+    """
+    passed: set[str] = set()
+    if not isinstance(writing_obj, dict):
+        return passed
+    stages = writing_obj.get("stages")
+    if not isinstance(stages, dict):
+        return passed
+
+    for key in _STAGE_KEYS:
+        stage_obj = stages.get(key)
+        if not isinstance(stage_obj, dict):
+            continue
+        if mode == "content":
+            text = f"{stage_obj.get('d1') or ''}{stage_obj.get('d2') or ''}".strip()
+            if text:
+                passed.add(key)
+            continue
+        feedback = stage_obj.get("feedback")
+        if not isinstance(feedback, dict):
+            continue
+        for fb in feedback.values():
+            if isinstance(fb, dict) and bool(fb.get("ok")):
+                passed.add(key)
+                break
+    return passed
+
+
+def stages_passed_from_orid_levels(orid_levels: dict[str, object] | None) -> set[str]:
+    """Stages whose primary ORID criterion is level ≥ 3."""
+    mapping = {"O1": "O", "R1": "R", "I1": "I", "D1": "D"}
+    passed: set[str] = set()
+    for cid, stage in mapping.items():
+        lv = parse_level((orid_levels or {}).get(cid))
+        if lv is not None and lv >= 3:
+            passed.add(stage)
+    return passed
+
+
 def calculate_earned_badges(
     *,
     has_writing_content: bool,
     has_used_feedback_or_prompt: bool,
-    total_score: Optional[int],
+    stages_passed: Optional[Iterable[str]] = None,
+    total_score: Optional[int] = None,  # retained for API compat; ignored for unlock
 ) -> list[str]:
-    """Return list of badge IDs earned given current state."""
+    """Return badge IDs earned from start action + ORID stage progress.
+
+    Badge IDs remain badge_30/60/90 for storage/UI assets, but unlock by:
+      badge_30 (銅): O passed
+      badge_60 (銀): O+R+I passed
+      badge_90 (金): O+R+I+D passed
+    """
+    del total_score  # score no longer drives badges
     earned: list[str] = []
 
     if has_writing_content and has_used_feedback_or_prompt:
         earned.append("badge_start")
 
-    if total_score is not None:
-        if total_score >= 30:
-            earned.append("badge_30")
-        if total_score >= 60:
-            earned.append("badge_60")
-        if total_score >= 90:
-            earned.append("badge_90")
+    passed = normalize_stage_set(stages_passed)
+    if "O" in passed:
+        earned.append("badge_30")
+    if {"O", "R", "I"}.issubset(passed):
+        earned.append("badge_60")
+    if {"O", "R", "I", "D"}.issubset(passed):
+        earned.append("badge_90")
 
     return earned
 

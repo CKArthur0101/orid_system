@@ -45,6 +45,29 @@ def test_obviously_offtopic_catches_ktv_and_sports_tokens():
     assert grounding.looks_obviously_offtopic("去唱KTV", book_pack) is True
     assert grounding.looks_obviously_offtopic("WNBA", book_pack) is True
 
+
+def test_cut_tree_paraphrase_砍光光_not_ungrounded():
+    """「把自己的樹都砍光光」≈ 書裡「砍樹」，不得判成捏造情節。"""
+    from app.routes.orid import BOOK_PACK_BY_WEEK
+
+    book_pack = BOOK_PACK_BY_WEEK[1]
+    draft = (
+        "故事中，阿松爺爺家的柿子很甜，但他都不分享柿子，故意在大家面前大口吃，"
+        "看到奶奶來要他還急忙把柿子全藏進倉庫，後來只給哎唷奶奶柿子蒂、葉子等東西，"
+        "但最後看到奶奶把他給的東西變得很有趣，最後意猶未盡到把自己的樹都砍光光。"
+    )
+    assert grounding.looks_likely_ungrounded_in_book(draft, book_pack, "O") is False
+    assert grounding.looks_likely_factual_mismatch(draft, book_pack) is False
+    assert grounding.extract_unsupported_action_phrase(draft, book_pack) == ""
+
+    m, s = grounding.scrub_false_book_absence_claims(
+        missing=["「把自己的樹都砍光光」這句不在書裡；書裡是砍樹。"],
+        suggestions=["改成書裡說法"],
+        book_pack=book_pack,
+    )
+    assert m == []
+
+
 def test_ungrounded_in_book_detects_fabricated_scene():
     book_pack = {
         "book_title": "阿松爺爺的柿子樹",
@@ -264,6 +287,80 @@ def test_grounding_checker_does_not_false_positive_on_correct_book_paraphrase():
     fabricated = "阿松爺爺一開始獨占所有柿子，然後爺爺去殺奶奶。"
     assert grounding.looks_likely_ungrounded_in_book(fabricated, book_pack, "O") is True
 
+    # Sharing stems/branches is in-book; do not keep false "not mentioned" claims.
+    m, s = grounding.scrub_false_book_absence_claims(
+        missing=["書裡沒有提到爺爺分享樹枝和柿子蒂。其實，爺爺是故意大口吃。"],
+        suggestions=["改成大口吃的情節"],
+        book_pack=book_pack,
+    )
+    assert "書裡沒有" not in m[0]
+    assert "柿子蒂" in m[0] or "樹枝" in m[0]
+    assert "藏" in s[0] or "倉庫" in s[0] or "柿子" in s[0]
+
+
+def test_rewrite_grounding_append_suggestions_replaces_not_appends():
+    from app.prompts.policy.feedback_focus import rewrite_grounding_append_suggestions
+
+    m, s, ex = rewrite_grounding_append_suggestions(
+        stage="O",
+        missing=["故事裡其實沒有阿松爺爺送花這件事。書裡說的是阿松爺爺的柿子很甜。"],
+        suggestions=[
+            "你可以在『阿松爺爺送了奶奶一朵花』後面加上他對柿子的處理，像是故意大口吃。"
+        ],
+        example="在『送花』後面加上＿＿＿。",
+    )
+    assert "後面加" not in s[0]
+    assert "改掉" in s[0] or "改寫" in s[0]
+    assert ex is None
+
+
+def test_scrub_praise_does_not_celebrate_fabricated_flower():
+    from app.prompts.policy.feedback_focus import scrub_praise_for_grounding_issue
+
+    book_pack = {
+        "characters": [
+            {"name": "阿松爺爺"},
+            {"name": "哎唷奶奶"},
+        ]
+    }
+    draft = "故事中，阿松爺爺送了奶奶一朵花"
+    bad_praise = (
+        "你有寫到「阿松爺爺」和「奶奶」，而且還把「送了奶奶一朵花」寫進來，"
+        "讓人知道這段是在說誰。"
+    )
+    missing = [
+        "這裡要把「一朵花」改成書裡真的發生的事，因為故事裡阿松爺爺是跟柿子有關，不是送花。"
+    ]
+    praise = scrub_praise_for_grounding_issue(
+        stage="O",
+        praise=bad_praise,
+        missing=missing,
+        student_text=draft,
+        book_pack=book_pack,
+    )
+    assert "一朵花" not in praise
+    assert "送了奶奶" not in praise
+    assert "阿松爺爺" in praise or "人物" in praise
+    assert "對回書裡" in praise or "真的發生" in praise
+
+
+def test_control_feedback_reply_grounding_praise_skips_wrong_event_quote():
+    missing = [
+        "你寫的「送了奶奶一朵花」好像不是書裡發生的事，書裡出現的是「柿子」。"
+    ]
+    reply = format_control_feedback_reply(
+        ok=False,
+        missing=missing,
+        suggestions=["請先把那一句改掉，改寫成書裡真的發生的事：誰做了什麼？"],
+        stage="O",
+        book_anchor="阿松爺爺家的柿子很甜",
+        example=None,
+        praise="你有寫到「送了奶奶一朵花」，讓人知道這段是在說誰。",
+        student_draft="故事中，阿松爺爺送了奶奶一朵花",
+    )
+    praise_section = reply.split("你可以再加強：")[0]
+    assert "送了奶奶一朵花" not in praise_section
+    assert "一朵花" not in praise_section
 
 def test_r_stage_paraphrase_only_looking_not_flagged():
     """
@@ -409,6 +506,84 @@ def test_scaffold_guard_allows_blank_scaffold():
     example = "我覺得＿＿＿，因為＿＿＿。"
 
     assert scaffold_feedback_example("R", example) == example
+
+
+def test_maybe_demote_o_thin_pass_blocks_short_early_mid():
+    draft = "故事中，阿松爺爺不分享柿子，只給奶奶柿子蒂之類的"
+    ok, missing, sug, ex, meta = orid._maybe_demote_o_thin_pass(
+        stage="O",
+        student_text=draft,
+        ok=True,
+        missing=[],
+        suggestions=[],
+        example=None,
+        rubric_meta={"rubric_focus": "O1", "rubric_level_estimate": {"O1": "3 達標"}},
+    )
+    assert ok is False
+    assert meta.get("rubric_level_demoted") is True
+    assert "砍樹" in missing[0] or "偏短" in missing[0] or "結尾" in missing[0] or "轉折" in missing[0]
+    assert sug and len(sug[0]) > 4
+
+
+def test_maybe_demote_rid_one_liners():
+    from app.prompts.policy.feedback_focus import (
+        d_draft_meets_pass_bar,
+        i_draft_meets_pass_bar,
+        r_draft_meets_pass_bar,
+    )
+
+    r_thin = "我覺得很生氣，因為他都故意不分享柿子"
+    i_thin = "這個故事讓我學到我應該大方一點，不要像阿松爺爺這樣小氣。"
+    d_thin = "以後如果我遇到別人需要幫忙，我會去幫忙。"
+
+    assert r_draft_meets_pass_bar(r_thin) is False
+    assert i_draft_meets_pass_bar(i_thin) is False
+    assert d_draft_meets_pass_bar(d_thin) is False
+
+    for stage, draft, key in (
+        ("R", r_thin, "R1"),
+        ("I", i_thin, "I1"),
+        ("D", d_thin, "D1"),
+    ):
+        ok, missing, sug, ex, meta = orid._maybe_demote_o_thin_pass(
+            stage=stage,
+            student_text=draft,
+            ok=True,
+            missing=[],
+            suggestions=[],
+            example=None,
+            rubric_meta={"rubric_focus": key, "rubric_level_estimate": {key: "3 達標"}},
+        )
+        assert ok is False, stage
+        assert meta.get("rubric_level_demoted") is True, stage
+        assert missing and sug
+
+    r_ok = (
+        "我覺得阿松爺爺很讓人生氣，因為他故意在大家面前大口吃甜柿子，"
+        "還把柿子藏進倉庫，不願意分享。"
+    )
+    i_ok = (
+        "我學到分享比獨占更好，因為阿松爺爺後來砍了樹只剩樹樁才後悔，"
+        "最後大家一起撒種子才比較開心。"
+    )
+    d_ok = (
+        "下次如果同學想借我的文具，我會先問清楚他要做什麼，"
+        "再決定怎麼一起用，不會自己獨占。"
+    )
+    assert r_draft_meets_pass_bar(r_ok) is True
+    assert i_draft_meets_pass_bar(i_ok) is True
+    assert d_draft_meets_pass_bar(d_ok) is True
+    for stage, draft, key in (("R", r_ok, "R1"), ("I", i_ok, "I1"), ("D", d_ok, "D1")):
+        ok, *_rest = orid._maybe_demote_o_thin_pass(
+            stage=stage,
+            student_text=draft,
+            ok=True,
+            missing=[],
+            suggestions=[],
+            example=None,
+            rubric_meta={"rubric_focus": key, "rubric_level_estimate": {key: "3 達標"}},
+        )
+        assert ok is True, stage
 
 
 def test_orid_rubric_level_controls_ok_without_sel_override():

@@ -227,6 +227,335 @@ def detect_feedback_strength(stage: str, student_text: str) -> str:
     return s if s in {"low", "mid", "high"} else "mid"
 
 
+# O1 pass bar: need beginning conflict + mid/late development (not a thin 2-beat summary)
+_O_PASS_CHARACTER_MARKERS: tuple[str, ...] = (
+    "阿松爺爺",
+    "阿松",
+    "哎唷奶奶",
+    "哎唷",
+)
+# Arc A: opening selfishness / not sharing
+_O_PASS_ARC_EARLY: tuple[str, ...] = (
+    "獨占",
+    "自己吃",
+    "不想分",
+    "不分享",
+    "大口吃",
+    "流口水",
+    "炫耀",
+)
+# Arc B: middle hiding / stems / leaves / branches
+_O_PASS_ARC_MID: tuple[str, ...] = (
+    "柿子蒂",
+    "陀螺",
+    "藏",
+    "倉庫",
+    "葉子",
+    "樹枝",
+    "採下",
+)
+# Arc C: climax / turning point
+_O_PASS_ARC_LATE: tuple[str, ...] = (
+    "砍",
+    "樹樁",
+    "樹椿",
+    "種子",
+    "撒種",
+    "後悔",
+    "哭",
+)
+
+
+def o_draft_meets_pass_bar(student_text: str) -> bool:
+    """True when O draft is ready to auto-pass (strong coverage).
+
+    Requires character + markers from **all three** story arcs
+    (early conflict → mid hiding/stems → late climax/turn), enough length,
+    and at least 4 marker hits. Exact book wording is not required.
+
+    Thin early+mid summaries must NOT auto-pass; AI/prompt still guide
+    the student to add the missing arc.
+    """
+    t = (student_text or "").strip()
+    if len(t) < 60:
+        return False
+    if not any(m in t for m in _O_PASS_CHARACTER_MARKERS):
+        return False
+
+    early, mid, late = o_draft_arc_flags(t)
+    arcs_hit = sum(1 for x in (early, mid, late) if x)
+    total_hits = 0
+    for arc in (_O_PASS_ARC_EARLY, _O_PASS_ARC_MID, _O_PASS_ARC_LATE):
+        total_hits += sum(1 for m in arc if m in t)
+    return arcs_hit >= 3 and total_hits >= 4
+
+
+def o_draft_arc_flags(student_text: str) -> tuple[bool, bool, bool]:
+    """Return (has_early, has_mid, has_late) marker hits for O coverage coaching."""
+    t = (student_text or "").strip()
+    return (
+        any(m in t for m in _O_PASS_ARC_EARLY),
+        any(m in t for m in _O_PASS_ARC_MID),
+        any(m in t for m in _O_PASS_ARC_LATE),
+    )
+
+
+_R_FEELING_MARKERS: tuple[str, ...] = (
+    "生氣",
+    "難過",
+    "開心",
+    "害怕",
+    "擔心",
+    "感動",
+    "失望",
+    "驚訝",
+    "心疼",
+    "不舒服",
+    "嫉妒",
+    "安心",
+    "後悔",
+    "不爽",
+    "委屈",
+    "溫暖",
+    "覺得",
+)
+_R_REASON_MARKERS: tuple[str, ...] = ("因為", "讓我", "看得", "想到這")
+_R_SCENE_MARKERS: tuple[str, ...] = (
+    "看到",
+    "那一幕",
+    "那時候",
+    "一開始",
+    "後來",
+    "最後",
+    "故意",
+    "面前",
+    "大口",
+    "藏",
+    "倉庫",
+    "柿子蒂",
+    "砍",
+    "樹樁",
+    "獨占",
+)
+
+
+def r_draft_meets_pass_bar(student_text: str) -> bool:
+    """R pass: feeling + reason + concrete story beat; one thin sentence must not pass."""
+    t = (student_text or "").strip()
+    compact = re.sub(r"\s+", "", t)
+    if len(compact) < 42:
+        return False
+    if not any(m in t for m in _R_FEELING_MARKERS):
+        return False
+    if not any(m in t for m in _R_REASON_MARKERS):
+        return False
+    # Need a concrete scene cue (not only 「不分享」)
+    rich_story = any(m in t for m in _R_SCENE_MARKERS) or any(
+        m in t for m in _O_PASS_ARC_MID + _O_PASS_ARC_LATE
+    )
+    if not rich_story:
+        return False
+    if not any(m in t for m in _O_PASS_CHARACTER_MARKERS + ("爺爺", "奶奶", "柿子")):
+        return False
+    return True
+
+
+_I_LESSON_MARKERS: tuple[str, ...] = (
+    "學到",
+    "明白",
+    "提醒",
+    "道理",
+    "啟發",
+    "讓我知道",
+    "我懂",
+    "原來",
+)
+_I_GENERIC_ONLY: tuple[str, ...] = ("大方", "小氣", "善良", "分享很好", "要分享", "不要自私")
+
+
+def i_draft_meets_pass_bar(student_text: str) -> bool:
+    """I pass: lesson + story-supported why; ban one-line moral slogans."""
+    t = (student_text or "").strip()
+    compact = re.sub(r"\s+", "", t)
+    if len(compact) < 42:
+        return False
+    if not any(m in t for m in _I_LESSON_MARKERS):
+        return False
+    has_story = any(m in t for m in _O_PASS_CHARACTER_MARKERS + ("爺爺", "奶奶", "柿子")) and (
+        any(m in t for m in _O_PASS_ARC_EARLY + _O_PASS_ARC_MID + _O_PASS_ARC_LATE)
+        or any(m in t for m in ("因為", "所以", "從", "看到", "後來", "最後"))
+    )
+    if not has_story:
+        return False
+    # Pure 「要大方／不要小氣」 without richer story beat → not enough
+    only_generic = any(g in t for g in _I_GENERIC_ONLY) and not any(
+        m in t for m in _O_PASS_ARC_MID + _O_PASS_ARC_LATE + ("大口", "獨占", "藏", "後悔", "種子")
+    )
+    if only_generic and len(compact) < 65:
+        return False
+    return True
+
+
+_D_ACTION_MARKERS: tuple[str, ...] = ("我會", "我要", "下次", "打算", "先", "再")
+_D_SITUATION_MARKERS: tuple[str, ...] = ("如果", "遇到", "當", "時候", "對", "跟", "和")
+_D_CONCRETE_MARKERS: tuple[str, ...] = (
+    "同學",
+    "家人",
+    "朋友",
+    "先問",
+    "一起",
+    "輪流",
+    "排隊",
+    "零食",
+    "玩具",
+    "東西",
+    "分給",
+    "借給",
+    "說對不起",
+    "深呼吸",
+    "等一下",
+    "一步",
+    "再",
+)
+_D_GENERIC_ACTION: tuple[str, ...] = ("幫忙", "幫助", "變好", "改進", "努力", "更好", "加油")
+
+
+def d_draft_meets_pass_bar(student_text: str) -> bool:
+    """D pass: concrete when/who/how; ban bare 「我會去幫忙」."""
+    t = (student_text or "").strip()
+    compact = re.sub(r"\s+", "", t)
+    if len(compact) < 40:
+        return False
+    if not any(m in t for m in _D_ACTION_MARKERS):
+        return False
+    if not any(m in t for m in _D_SITUATION_MARKERS):
+        return False
+    has_concrete = any(m in t for m in _D_CONCRETE_MARKERS) or (
+        "先" in t and "再" in t
+    )
+    if not has_concrete:
+        # Generic-only help slogans
+        if any(g in t for g in _D_GENERIC_ACTION) and len(compact) < 65:
+            return False
+        return False
+    # Still block ultra-generic even with 如果/遇到
+    if (
+        any(g in t for g in ("幫忙", "幫助"))
+        and not any(m in t for m in _D_CONCRETE_MARKERS if m not in ("再",))
+        and "先" not in t
+        and len(compact) < 60
+    ):
+        return False
+    return True
+
+
+def stage_draft_meets_pass_bar(stage: str, student_text: str) -> bool:
+    s = (stage or "O").strip().upper()
+    if s == "O":
+        return o_draft_meets_pass_bar(student_text)
+    if s == "R":
+        return r_draft_meets_pass_bar(student_text)
+    if s == "I":
+        return i_draft_meets_pass_bar(student_text)
+    if s == "D":
+        return d_draft_meets_pass_bar(student_text)
+    return False
+
+
+def thin_stage_coaching(stage: str, student_text: str) -> tuple[str, str]:
+    """One missing + suggestion when draft is below the stage pass bar."""
+    s = (stage or "O").strip().upper()
+    t = (student_text or "").strip()
+    compact = re.sub(r"\s+", "", t)
+
+    if s == "O":
+        has_early, has_mid, has_late = o_draft_arc_flags(t)
+        if has_early and has_mid and not has_late:
+            return (
+                "你前面寫到不分享和柿子蒂了，故事後面還有砍樹、後悔或撒種子這些重要轉折，請再補一段。",
+                "阿松爺爺後來對柿子樹做了什麼？結果怎樣？",
+            )
+        if has_early and has_late and not has_mid:
+            return (
+                "開頭和結尾有了，中間還缺一段（例如只給柿子蒂、藏進倉庫），請再補清楚。",
+                "哎唷奶奶來了之後，阿松爺爺中間還做了什麼？",
+            )
+        if has_mid and has_late and not has_early:
+            return (
+                "中間和後面有了，開頭衝突（不分享／獨占柿子）再寫一句會更完整。",
+                "故事一開始，阿松爺爺對柿子是怎麼做的？",
+            )
+        if len(t) < 60:
+            return (
+                "目前還偏短，請把開頭、中間、結尾各寫一點，O 才算把故事說清楚。",
+                "可以先寫：一開始……，後來……，最後……。",
+            )
+        return (
+            "請把故事的開頭、中間、結尾都寫到一點，O 才算達標。",
+            "哪一段還沒寫？開頭衝突、中間發展，還是結尾轉折？",
+        )
+
+    if s == "R":
+        has_feeling = any(m in t for m in _R_FEELING_MARKERS)
+        has_reason = any(m in t for m in _R_REASON_MARKERS)
+        has_scene = any(m in t for m in _R_SCENE_MARKERS) or any(
+            m in t for m in _O_PASS_ARC_MID + _O_PASS_ARC_LATE
+        )
+        if has_feeling and has_reason and not has_scene:
+            return (
+                "你有感受和「因為」了，再補「書裡哪一幕」會更清楚，例如大口吃、藏倉庫或砍樹。",
+                "哪一幕讓你最有這種感覺？看到誰做了什麼？",
+            )
+        if has_feeling and not has_reason:
+            return (
+                "你有寫出感受了，請再補「因為書裡哪一件事」。",
+                "試著寫：我覺得……，因為故事裡……。",
+            )
+        if len(compact) < 42:
+            return (
+                "目前還偏短，請把感受、原因，以及書裡那一幕都寫清楚一點。",
+                "可以寫：我覺得……，因為我看到……。",
+            )
+        return (
+            "請把感受、原因和書裡具體那一幕都寫出來，R 才算達標。",
+            "哪一幕讓你有這個感覺？再多寫一句畫面。",
+        )
+
+    if s == "I":
+        has_lesson = any(m in t for m in _I_LESSON_MARKERS)
+        if has_lesson and not any(m in t for m in _O_PASS_ARC_MID + _O_PASS_ARC_LATE + ("大口", "獨占", "藏", "後悔")):
+            return (
+                "你有寫到學到什麼了，再補「故事裡哪一段讓你這樣想」，不要只說要大方／不要小氣。",
+                "故事裡哪一件事讓你明白這個道理？",
+            )
+        if len(compact) < 42:
+            return (
+                "目前還偏短，請寫出學到的道理，並連回書裡一件具體的事。",
+                "可以寫：我學到……，因為故事裡……。",
+            )
+        return (
+            "請把「學到什麼」和「故事哪一段支持你」都寫清楚，I 才算達標。",
+            "從阿松爺爺哪一件事，你看出這個道理？",
+        )
+
+    # D
+    if any(g in t for g in ("幫忙", "幫助")) and not any(
+        m in t for m in _D_CONCRETE_MARKERS if m not in ("再",)
+    ):
+        return (
+            "「去幫忙」方向對了，再寫清楚：什麼時候、幫誰、先做哪一步。",
+            "可以寫：下次在……的時候，我會先……，再……。",
+        )
+    if len(compact) < 40:
+        return (
+            "目前還偏短，請寫出一個生活裡真的做得到的小行動，並說何時／對誰。",
+            "可以寫：如果遇到……，我會先……。",
+        )
+    return (
+        "請把行動寫得更具體：什麼情況、對誰、先做哪一步，D 才算達標。",
+        "在什麼情況下你會這樣做？第一步是什麼？",
+    )
+
 def _child_friendly_text(text: str) -> str:
     t = (text or "").strip()
     if not t:
@@ -342,6 +671,9 @@ _O_GENERIC_PHRASES = (
 _GROUNDING_MISSING_CUES = (
     "不在書裡",
     "書裡沒有",
+    "故事裡沒有",
+    "故事裡其實沒有",
+    "其實沒有",
     "不是書裡",
     "好像不是書裡",
     "不像書裡",
@@ -354,6 +686,10 @@ _GROUNDING_MISSING_CUES = (
     "書裡比較像是",
     "不是「",
     "這個詞好像不在",
+    "書裡真的",
+    "對回書裡",
+    "改成書裡",
+    "書裡實際",
 )
 
 
@@ -363,6 +699,158 @@ def missing_looks_book_grounding_priority(missing: list[str] | str) -> bool:
     else:
         m = (missing or "").strip()
     return any(k in m for k in _GROUNDING_MISSING_CUES)
+
+
+def _book_character_names_in_draft(student_text: str, book_pack: dict | None) -> list[str]:
+    """Return character labels from the draft that match the book (prefer what student wrote)."""
+    t = (student_text or "").strip()
+    if not t or not isinstance(book_pack, dict):
+        return []
+    found: list[str] = []
+    for item in book_pack.get("characters") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        if name in t:
+            found.append(name)
+            continue
+        # Alias: student wrote 奶奶 / 爺爺 but book lists full name
+        if name.endswith("爺爺") and "爺爺" in t:
+            label = "爺爺"
+            if label not in found and not any("爺爺" in n for n in found):
+                found.append(label)
+        elif name.endswith("奶奶") and "奶奶" in t:
+            label = "奶奶"
+            if label not in found and not any("奶奶" in n for n in found):
+                found.append(label)
+    out: list[str] = []
+    for n in found:
+        if n not in out:
+            out.append(n)
+    return out[:2]
+
+
+def build_grounding_safe_praise(
+    *,
+    stage: str,
+    student_text: str = "",
+    book_pack: dict | None = None,
+) -> str:
+    """Praise only book-aligned effort / names — never celebrate fabricated plot as 'done'."""
+    s = (stage or "O").strip().upper()
+    names = _book_character_names_in_draft(student_text, book_pack)
+    name_bit = ""
+    if names:
+        quoted = "、".join(f"「{n}」" for n in names)
+        name_bit = f"你有寫到{quoted}，人物方向有抓到；"
+
+    if s == "O":
+        if name_bit:
+            return f"{name_bit}事件要再對回書裡真的發生的事。"
+        return "你有試著寫出人物和事件，這是 O 段需要的方向；只是情節要再對回書裡。"
+    if s == "R":
+        if name_bit:
+            return f"{name_bit}感受可以留，但原因要接回書裡真的發生的事。"
+        return "你有試著寫出自己的感受，這很好；只是原因要再連回書裡真的發生的事。"
+    if s == "I":
+        if name_bit:
+            return f"{name_bit}想法可以留，但道理要接回書裡真的發生的事。"
+        return "你有試著寫出想法，這很好；只是道理要再接回書裡真的發生的事。"
+    if s == "D":
+        return "你有試著寫出下一步，這很好；只是行動要再接回這本書提醒你的地方。"
+    return "你有試著寫，我已經看到了；只是內容要再對回書裡。"
+
+
+def scrub_praise_for_grounding_issue(
+    *,
+    stage: str,
+    praise: str | None,
+    missing: list[str] | str,
+    student_text: str = "",
+    book_pack: dict | None = None,
+) -> str:
+    """
+    When missing is about book mismatch, do not keep praise that quotes / affirms the wrong event.
+    """
+    if not missing_looks_book_grounding_priority(missing):
+        return (praise or "").strip()
+    return build_grounding_safe_praise(
+        stage=stage,
+        student_text=student_text,
+        book_pack=book_pack,
+    )
+
+
+def scrub_anchor_quote_for_grounding(
+    *,
+    quote: object,
+    missing: list[str] | str,
+    student_text: str = "",
+    book_pack: dict | None = None,
+) -> str | None:
+    """If anchor quote embeds fabricated plot, fall back to a book character name only."""
+    if not missing_looks_book_grounding_priority(missing):
+        q = str(quote or "").strip()
+        return q or None
+    names = _book_character_names_in_draft(student_text, book_pack)
+    if names:
+        return names[0]
+    # Keep short name-like quote only if it does not look like an event clause
+    q = str(quote or "").strip()
+    if q and len(q) <= 6 and "送" not in q and "花" not in q:
+        return q
+    return None
+
+
+_APPEND_AFTER_WRONG_CUES = (
+    "後面加",
+    "後面加上",
+    "後面補",
+    "之後加",
+    "之後加上",
+    "之後補",
+    "後面再加",
+    "後面再補",
+)
+
+
+def rewrite_grounding_append_suggestions(
+    *,
+    stage: str,
+    missing: list[str],
+    suggestions: list[str],
+    example: str | None = None,
+) -> tuple[list[str], list[str], str | None]:
+    """When missing flags fabricated content, ban 'append after wrong sentence' coaching."""
+    if not missing_looks_book_grounding_priority(missing):
+        return missing, suggestions, example
+
+    s0 = (suggestions[0] if suggestions else "").strip()
+    looks_append = bool(s0) and (
+        any(c in s0 for c in _APPEND_AFTER_WRONG_CUES)
+        or bool(re.search(r"在[『「].{1,40}[』」].{0,12}(後面|之後)", s0))
+    )
+    if looks_append or not s0:
+        stage_u = (stage or "O").strip().upper()
+        replace_map = {
+            "O": "請先把那一句改掉，改寫成書裡真的發生的事：誰做了什麼？",
+            "R": "請先把不符合書裡的那一句改掉，再寫你的感受和原因。",
+            "I": "請先把不符合書裡的那一句改掉，再寫你從故事學到的道理。",
+            "D": "請先對回這本書想提醒你的事，再寫你下次要怎麼做。",
+        }
+        suggestions = [replace_map.get(stage_u, replace_map["O"])]
+
+    # Example must not scaffold onto the fabricated clause
+    ex = (example or "").strip() if example is not None else ""
+    if ex and (
+        any(c in ex for c in _APPEND_AFTER_WRONG_CUES)
+        or bool(re.search(r"在[『「].{1,40}[』」].{0,12}(後面|之後)", ex))
+    ):
+        example = None
+
+    return missing, suggestions, example
 
 
 def _o_missing_looks_grounding_priority(missing: list[str]) -> bool:
@@ -407,6 +895,9 @@ def apply_o_key_event_gaps(
     if (stage or "").strip().upper() != "O" or (strength or "").strip().lower() != "high":
         return missing, suggestions
     if _o_missing_looks_grounding_priority(missing):
+        return missing, suggestions
+    # Already at O1 達標 bar → do not keep demanding more key-event coverage
+    if o_draft_meets_pass_bar(student_text):
         return missing, suggestions
     if not isinstance(key_events, list) or not key_events:
         return missing, suggestions

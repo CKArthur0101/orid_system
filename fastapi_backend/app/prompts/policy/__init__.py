@@ -1,6 +1,11 @@
 from .checker_fallbacks import clamp_checker_output, quick_unsafe_check
 from .control_feedback import format_control_feedback_reply, format_control_free_text_reply
-from .feedback_focus import detect_feedback_strength, normalize_feedback_focus
+from .feedback_focus import (
+    detect_feedback_strength,
+    normalize_feedback_focus,
+    o_draft_meets_pass_bar,
+)
+from .genai_completed_feedback import format_genai_completed_feedback_reply
 from .grounding import (
     looks_obviously_offtopic,
     looks_likely_factual_mismatch,
@@ -15,6 +20,7 @@ __all__ = [
     "quick_unsafe_check",
     "format_control_feedback_reply",
     "format_control_free_text_reply",
+    "format_genai_completed_feedback_reply",
     "detect_feedback_strength",
     "normalize_feedback_focus",
     "looks_obviously_offtopic",

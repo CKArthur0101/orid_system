@@ -228,7 +228,7 @@ class OridBadgeEvent(Base):
     week = Column(Integer, nullable=False)
     task_type = Column(String(32), nullable=True)    # orid_stage / synthesis
     condition = Column(String(32), nullable=True)    # genai / control
-    badge_id = Column(String(32), nullable=False)    # badge_start / badge_30 / badge_60 / badge_90
+    badge_id = Column(String(32), nullable=False)    # badge_start / badge_30(銅O) / badge_60(銀ORI) / badge_90(金ORID)
     total_score = Column(Integer, nullable=True)
     word_count = Column(Integer, nullable=True)
     feedback_count = Column(Integer, nullable=True, default=0)

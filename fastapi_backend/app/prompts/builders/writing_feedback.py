@@ -189,9 +189,9 @@ _O_STUCK_HINT_PHRASES: tuple[str, ...] = (
 
 _STAGE_RUBRIC_LEVEL_KEYS: dict[str, str] = {
     "O": '"O1": "X 層級"',
-    "R": '"R1": "X 層級", "SEL_EA": "X 層級", "SEL_PT": "X 層級"',
-    "I": '"I1": "X 層級", "SEL_VR": "X 層級", "SEL_PT": "X 層級"',
-    "D": '"D1": "X 層級", "SEL_RA": "X 層級"',
+    "R": '"R1": "X 層級", "SEL_SA": "X 層級", "SEL_SOA": "X 層級", "SEL_SM": "X 層級"',
+    "I": '"I1": "X 層級", "SEL_SOA": "X 層級", "SEL_RS": "X 層級"',
+    "D": '"D1": "X 層級", "SEL_RD": "X 層級", "SEL_SM": "X 層級", "SEL_RS": "X 層級"',
 }
 
 
@@ -205,13 +205,14 @@ def _rasf_json_format_block(stage: str) -> str:
   層級用語：「1 起步」「2 接近」「3 達標」「4 精進」（有把握才填，不確定可填 null）
   SEL 向度只估層級，**不要**另寫 missing；missing 只對 ORID 主向度（一刀）。
 - student_anchor_quote（必填，除非草稿空白）：從學生原文**原封不動**摘 4～20 個連續字（人名、事件、感受詞、行動詞），供後續引導錨定；禁止改寫或捏造。
-- draft_next_step（必填，除非草稿空白）：用白話寫**在學生哪一句前/後加什麼**才能升到下一階（預設目標 3 達標）；禁止給整段新例文。
+- draft_next_step：**僅在 ok=false（等級 1 或 2）時填寫**；用白話寫在學生哪一句前/後加什麼才能升到 3 達標；禁止給整段新例文。**等級 3 或 4 時填 null。**
 - missing / suggestions 引導規則（RASF 核心）：
-  先估 ORID 主向度目前是第幾階，再只描述「從目前階 → min(下一階, 3 達標)」還差的一個缺口。
-  missing **必須**引用 student_anchor_quote（或同句中的學生用詞），用「你已經有○○，再補△△會更完整」語意。
-  suggestions：**一個問句**，引導學生在 anchor 那句前/後自己補一句；不要列多步驟。
-  example：多數填 null；若必填，只能是**接在 anchor 上的半句填空**（保留＿＿＿），禁止「故事的主角是……」這類從零開始的通用例句。
-  **禁止**在第一輪就要求學生直接跳到 4 精進（除非 ORID 主向度已是 3 達標，才可引導精進）。
+  先估 ORID 主向度目前是第幾階。
+  **等級 3（達標）或 4（精進）→ ok=true；missing=[]；suggestions=[]；example=null；draft_next_step=null。不得再要求補細節、精進或下一階。**
+  等級 1 或 2 → ok=false；再只描述「從目前階 → 3 達標」還差的一個缺口。
+  missing（等級 1/2 才填）**必須**引用 student_anchor_quote（或同句中的學生用詞），用「你已經有○○，再補△△會更完整」語意。
+  suggestions（等級 1/2 才填）：**一個問句**，引導學生在 anchor 那句前/後自己補一句；不要列多步驟。
+  example（等級 1/2 且必要才填）：只能是**接在 anchor 上的半句填空**（保留＿＿＿），禁止「故事的主角是……」這類從零開始的通用例句。
   SEL 的缺口不得成為 missing 的主題；SEL 最多用來把 ORID 那一刀的問句問得更具體。""".strip()
 
 
@@ -300,7 +301,8 @@ def build_genai_feedback_prompts(
 ====================
 三、JSON 欄位與品質
 ====================
-- praise：**必須**看得出你有讀學生原文，盡量點到裡面的人/事/詞（若完全空白再用鼓勵下筆，禁止空泛罐頭讚美）。
+- praise：**必須**看得出你有讀學生原文，盡量點到裡面**正確**的人/事/詞（若完全空白再用鼓勵下筆，禁止空泛罐頭讚美）。
+  若草稿含書裡沒有的情節：praise 只肯定書裡有的人名或寫作方向，**不要**把錯誤情節當成就。
 - missing：不多於 1 條，對準本段**一個**主問題（一刀）；依 RASF 規則只談「下一階 gap」。
 - suggestions：不多於 1 條；用 **1 個問句**或「下一步只補……」引導學生自己改，不要列多步驟，也不要把答案寫完。
 - example：只給句型開頭、填空式提示或半句支架（例如「我覺得＿＿＿，因為＿＿＿。」）；不要填入完整角色、情節與答案讓學生可直接複製。
@@ -352,7 +354,7 @@ suggestions 可用問句帶到書裡一幕；example 仍只能是填空或半句
 {text}
 ---
 
-{o_summary_priority}{o_plot_anchor + chr(10) + chr(10) if o_plot_anchor else ""}請輸出 JSON。missing 與 suggestions 各至多 1 個字串；必須填 student_anchor_quote 與 draft_next_step（除非草稿空白）；suggestions 用 1 個問句引導在 anchor 句前/後補寫；example 多數 null，若填只能接 anchor 的半句填空。improved 多數 null。
+{o_summary_priority}{o_plot_anchor + chr(10) + chr(10) if o_plot_anchor else ""}請輸出 JSON。missing 與 suggestions 各至多 1 個字串。若 rubric 等級 3 或 4（ok=true）：missing=[]、suggestions=[]、example=null、draft_next_step=null，不再要求任何修改。若等級 1 或 2（ok=false）：必須填 student_anchor_quote 與 draft_next_step（除非草稿空白）；suggestions 用 1 個問句引導在 anchor 句前/後補寫；example 多數 null，若填只能接 anchor 的半句填空。improved 多數 null。
 """.strip()
 
     return system_prompt, user_prompt

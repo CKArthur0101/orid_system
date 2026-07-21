@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from app.prompts.policy.feedback_focus import normalize_feedback_focus, missing_looks_book_grounding_priority
+from app.prompts.policy.feedback_focus import (
+    build_grounding_safe_praise,
+    normalize_feedback_focus,
+    missing_looks_book_grounding_priority,
+)
 from app.prompts.policy.scaffold_guard import scaffold_feedback_example, scaffold_for_stage
 from app.prompts.policy.turn_destination import (
     personalized_control_praise_line,
@@ -109,14 +113,12 @@ def format_control_feedback_reply(
             nudge = f"如果生活裡遇到像「{anchor}」那種情況，你第一步會怎麼做？"
 
     pr = (praise or "").strip()
-    if "對齊教材" in m0:
-        grounding_praise_map = {
-            "O": "你有試著寫出人物和事情，這個方向是對的；我們再把內容對回書裡就更好了。",
-            "R": "你有試著寫出感受，這個方向是對的；我們再把原因接回書裡真的發生的事。",
-            "I": "你有試著寫出自己的想法，這個方向是對的；我們再把理由接回書裡真的發生的事。",
-            "D": "你有試著寫出自己的行動，這個方向是對的；我們再想想這和書裡哪件事有關。",
-        }
-        line1 = grounding_praise_map.get(s_up, "你有試著寫，我已經看到了；只是內容要再對回書裡。")
+    if missing_looks_book_grounding_priority(m0) or "對齊教材" in m0:
+        line1 = build_grounding_safe_praise(
+            stage=stage,
+            student_text=student_draft or "",
+            book_pack=None,
+        )
     elif _is_generic_praise(pr) and (student_draft or "").strip():
         line1 = _praise_line_from_draft(student_draft, stage)
     elif pr and not _is_generic_praise(pr):

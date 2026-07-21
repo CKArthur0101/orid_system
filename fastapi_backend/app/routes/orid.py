@@ -73,6 +73,8 @@ from app.services.orid_badges import (
     get_earned_badges_from_db,
     load_session_progress,
     record_badge_events,
+    stages_passed_from_orid_levels,
+    stages_passed_from_writing_obj,
     update_session_score_snapshot,
 )
 from app.prompts.policy.student_input_bucket import (
@@ -82,14 +84,24 @@ from app.prompts.policy.student_input_bucket import (
 )
 from app.prompts.policy.feedback_focus import (
     apply_o_key_event_gaps,
+    build_grounding_safe_praise,
     detect_feedback_strength,
+    missing_looks_book_grounding_priority,
     normalize_feedback_focus,
+    o_draft_arc_flags,
+    o_draft_meets_pass_bar,
+    rewrite_grounding_append_suggestions,
+    scrub_anchor_quote_for_grounding,
+    scrub_praise_for_grounding_issue,
+    stage_draft_meets_pass_bar,
+    thin_stage_coaching,
 )
 from app.prompts.policy.rasf_narration_context import build_rasf_narration_context
 from app.prompts.policy.control_feedback import (
     format_control_feedback_reply,
     format_control_free_text_reply,
 )
+from app.prompts.policy.genai_completed_feedback import format_genai_completed_feedback_reply
 from app.prompts.policy.scaffold_guard import (
     scaffold_feedback_example,
     scaffold_feedback_suggestions,
@@ -112,6 +124,7 @@ from app.prompts.policy.grounding import (
     looks_obviously_offtopic,
     looks_likely_factual_mismatch,
     looks_likely_ungrounded_in_book,
+    scrub_false_book_absence_claims,
 )
 from app.prompts.parsers.json_payloads import (
     extract_json_object,
@@ -129,7 +142,8 @@ from app.services.orid_writing_store import (
 # OpenAI settings (from env)
 # ----------------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.1-chat-latest")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
+OPENAI_REASONING_EFFORT = (os.getenv("OPENAI_REASONING_EFFORT") or "low").strip() or "low"
 
 OPENAI_MAX_COMPLETION_TOKENS = int(
     os.getenv("OPENAI_MAX_COMPLETION_TOKENS")
@@ -149,6 +163,14 @@ OPENAI_ENABLED = bool((OPENAI_API_KEY or "").strip())
 client: Optional[AsyncOpenAI] = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_ENABLED else None
 
 
+def _openai_call_kwargs(**extra: Any) -> Dict[str, Any]:
+    """Base chat-completions kwargs: model + reasoning_effort (+ optional extras)."""
+    kwargs: Dict[str, Any] = {"model": OPENAI_MODEL, **extra}
+    if OPENAI_REASONING_EFFORT:
+        kwargs["reasoning_effort"] = OPENAI_REASONING_EFFORT
+    return kwargs
+
+
 async def _chat_completion(
     messages: List[Dict[str, str]],
     *,
@@ -162,7 +184,7 @@ async def _chat_completion(
             detail="OPENAI_API_KEY 未設定，LLM 功能暫不可用（但登入/Docs 應可正常）。",
         )
 
-    kwargs: Dict[str, Any] = {"model": OPENAI_MODEL, "messages": messages}
+    kwargs: Dict[str, Any] = _openai_call_kwargs(messages=messages)
     if max_completion_tokens is not None:
         kwargs["max_completion_tokens"] = max_completion_tokens
     if temperature is not None:
@@ -191,6 +213,10 @@ async def _chat_completion(
             return _content(resp)
         if "response_format" in msg and "unsupported" in msg:
             kwargs.pop("response_format", None)
+            resp = await client.chat.completions.create(**kwargs)
+            return _content(resp)
+        if "reasoning_effort" in msg and "unsupported" in msg:
+            kwargs.pop("reasoning_effort", None)
             resp = await client.chat.completions.create(**kwargs)
             return _content(resp)
         raise
@@ -1632,6 +1658,9 @@ def _is_grounding_specific_message(text: str) -> bool:
         "對齊教材",
         "不在書裡",
         "書裡沒有",
+        "故事裡沒有",
+        "故事裡其實沒有",
+        "其實沒有",
         "不是書裡",
         "好像不是書裡",
         "沒有這件事",
@@ -1645,6 +1674,10 @@ def _is_grounding_specific_message(text: str) -> bool:
         "書裡出現的是",
         "不是「",
         "這個詞好像不在",
+        "書裡真的",
+        "對回書裡",
+        "改成書裡",
+        "書裡實際",
     )
     return any(c in t for c in cues)
 
@@ -1827,18 +1860,16 @@ def _has_feedback_book_grounding_issue(missing: list[str]) -> bool:
     return any(_is_grounding_specific_message(m or "") for m in (missing or []))
 
 
-def _book_grounding_praise(stage: str) -> str:
-    s = (stage or "O").strip().upper()
-    if s == "O":
-        return "你有試著寫出人物和事件，這是 O 段需要的方向；只是情節要再對回書裡。"
-    if s == "R":
-        return "你有試著寫出自己的感受，這很好；只是原因要再連回書裡真的發生的事。"
-    if s == "I":
-        return "你有試著寫出想法，這很好；只是道理要再接回書裡真的發生的事。"
-    if s == "D":
-        return "你有試著寫出下一步，這很好；只是行動要再接回這本書提醒你的地方。"
-    return "你有試著寫，我已經看到了；只是內容要再對回書裡。"
-
+def _book_grounding_praise(
+    stage: str,
+    student_text: str = "",
+    book_pack: Optional[dict[str, Any]] = None,
+) -> str:
+    return build_grounding_safe_praise(
+        stage=stage,
+        student_text=student_text,
+        book_pack=book_pack,
+    )
 
 
 
@@ -2108,6 +2139,86 @@ def _apply_orid_rubric_ok_rule(
     return bool(ok)
 
 
+def _maybe_promote_o_pass(
+    *,
+    stage: str,
+    student_text: str,
+    ok: bool,
+    missing: list[str],
+    suggestions: list[str],
+    example: Optional[str],
+    rubric_meta: dict[str, Any],
+) -> tuple[bool, list[str], list[str], Optional[str], dict[str, Any]]:
+    """If O draft already meets level-3 bar, force pass (stop wording-polish loops)."""
+    stage_u = (stage or "").strip().upper()
+    if stage_u != "O":
+        return ok, missing, suggestions, example, rubric_meta
+    if _has_feedback_book_grounding_issue(missing):
+        return ok, missing, suggestions, example, rubric_meta
+    if not o_draft_meets_pass_bar(student_text):
+        return ok, missing, suggestions, example, rubric_meta
+
+    out = dict(rubric_meta or {})
+    out["rubric_focus"] = "O1"
+    rl = out.get("rubric_level_estimate")
+    current = primary_orid_level_from_rubric_meta(out, stage="O")
+    if current is None or current < 3:
+        if isinstance(rl, dict):
+            rl = dict(rl)
+            rl["O1"] = "3 達標"
+            out["rubric_level_estimate"] = rl
+        else:
+            out["rubric_level_estimate"] = {"O1": "3 達標"}
+        out["rubric_level_promoted"] = True
+    return True, [], [], None, out
+
+
+def _o_thin_pass_coaching(student_text: str) -> tuple[str, str]:
+    """Backward-compatible wrapper; prefer thin_stage_coaching('O', ...). """
+    return thin_stage_coaching("O", student_text)
+
+
+def _maybe_demote_o_thin_pass(
+    *,
+    stage: str,
+    student_text: str,
+    ok: bool,
+    missing: list[str],
+    suggestions: list[str],
+    example: Optional[str],
+    rubric_meta: dict[str, Any],
+) -> tuple[bool, list[str], list[str], Optional[str], dict[str, Any]]:
+    """Block false passes when O/R/I/D draft is still too thin (one-liner level)."""
+    stage_u = (stage or "").strip().upper()
+    if stage_u not in ("O", "R", "I", "D") or not ok:
+        return ok, missing, suggestions, example, rubric_meta
+    if stage_draft_meets_pass_bar(stage_u, student_text):
+        return ok, missing, suggestions, example, rubric_meta
+
+    focus_id = {"O": "O1", "R": "R1", "I": "I1", "D": "D1"}[stage_u]
+    out = dict(rubric_meta or {})
+    out["rubric_focus"] = focus_id
+    rl = out.get("rubric_level_estimate")
+    current = primary_orid_level_from_rubric_meta(out, stage=stage_u)
+    if current is None or current >= 3:
+        if isinstance(rl, dict):
+            rl = dict(rl)
+            rl[focus_id] = "2 接近"
+            out["rubric_level_estimate"] = rl
+        else:
+            out["rubric_level_estimate"] = {focus_id: "2 接近"}
+        out["rubric_level_demoted"] = True
+
+    miss, sug = thin_stage_coaching(stage_u, student_text)
+    new_missing = list(missing[:1]) if missing else [miss]
+    new_sug = list(suggestions[:1]) if suggestions else [sug]
+    if not new_missing:
+        new_missing = [miss]
+    if not new_sug:
+        new_sug = [sug]
+    return False, new_missing, new_sug, example, out
+
+
 def _feedback_from_obj(
     *,
     stage: str,
@@ -2164,7 +2275,10 @@ def _looks_valid_feedback_narration(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return False
-    # Keep narration stable: must contain all three required sections.
+    # Accept genai complete card (deterministic headings).
+    if "你已經做到" in t and "本階段完成" in t:
+        return True
+    # Accept revision card (narration three-section format).
     if not ("你已經做到" in t and "你可以再加強" in t):
         return False
     return "試著補一句" in t or "試試看" in t
@@ -2304,14 +2418,13 @@ async def _genai_feedback(
         ok2, miss2, sug2, ex2, pr2 = _control_feedback(stage, text)
         return ok2, miss2, sug2, ex2, None, pr2, {}
 
-    kwargs = {
-        "model": OPENAI_MODEL,
-        "messages": [
+    kwargs = _openai_call_kwargs(
+        messages=[
             {"role": "system", "content": sys},
             {"role": "user", "content": user_msg},
         ],
-        "response_format": GenAIFeedbackOutput,
-    }
+        response_format=GenAIFeedbackOutput,
+    )
     kwargs["max_completion_tokens"] = ORID_FEEDBACK_MAX_COMPLETION_TOKENS
     if OPENAI_TEMPERATURE is not None:
         kwargs["temperature"] = OPENAI_TEMPERATURE
@@ -2327,6 +2440,9 @@ async def _genai_feedback(
                 resp = await client.beta.chat.completions.parse(**kwargs)
             elif "max_completion_tokens" in msg and "unsupported" in msg:
                 kwargs.pop("max_completion_tokens", None)
+                resp = await client.beta.chat.completions.parse(**kwargs)
+            elif "reasoning_effort" in msg and "unsupported" in msg:
+                kwargs.pop("reasoning_effort", None)
                 resp = await client.beta.chat.completions.parse(**kwargs)
             elif "response_format" in msg and "unsupported" in msg:
                 kwargs.pop("response_format", None)
@@ -2764,13 +2880,30 @@ async def record_prompt_usage(
     existing_prompt_views = int(existing_count_res.scalar() or 0)
     new_prompt_total = existing_prompt_views + data.prompt_view_count
 
-    # Badge evaluation
+    # Badge evaluation (control: stage progress by saved content)
     has_content = bool(word_count and word_count > 0)
+    stages_passed: set[str] = set()
+    try:
+        writing_raw = await _fetch_latest_writing_content_for_week(
+            db, user.id, session.id, week
+        )
+        if writing_raw:
+            writing_obj = ensure_orid_writing_obj(
+                raw_content=writing_raw,
+                week=week,
+                empty_factory=_ensure_orid_writing_v1,
+            )
+            stages_passed = stages_passed_from_writing_obj(writing_obj, mode="content")
+    except Exception:
+        logger.warning("prompt-usage stage progress lookup failed", exc_info=True)
+    if has_content and stage in ("O", "R", "I", "D"):
+        stages_passed.add(stage)
+
     prev_badges = await get_earned_badges_from_db(db, user_id=user.id, session_id=session.id, week=week)
     current_badges = calculate_earned_badges(
         has_writing_content=has_content,
         has_used_feedback_or_prompt=True,
-        total_score=None,
+        stages_passed=stages_passed,
     )
     new_badges = get_new_badges(prev_badges, current_badges)
     if new_badges:
@@ -2951,6 +3084,17 @@ async def writing_coach_chat(
             input_bucket=input_bucket,
             grounding_check=grounding_check,
         )
+        fb_missing, fb_sug = scrub_false_book_absence_claims(
+            missing=fb_missing,
+            suggestions=fb_sug,
+            book_pack=book_pack,
+        )
+        fb_missing, fb_sug, fb_ex = rewrite_grounding_append_suggestions(
+            stage=stage_ctx,
+            missing=fb_missing,
+            suggestions=fb_sug,
+            example=fb_ex,
+        )
         fb_missing, fb_sug = normalize_feedback_focus(
             stage=stage_ctx,
             missing=fb_missing,
@@ -2968,6 +3112,22 @@ async def writing_coach_chat(
         grounding_issue = _has_feedback_book_grounding_issue(fb_missing)
         if grounding_issue and fb_ex and "故事的主角" in str(fb_ex):
             fb_ex = None
+        if grounding_issue or missing_looks_book_grounding_priority(fb_missing):
+            fb_praise = scrub_praise_for_grounding_issue(
+                stage=stage_ctx,
+                praise=fb_praise,
+                missing=fb_missing,
+                student_text=body,
+                book_pack=book_pack,
+            )
+            if isinstance(fb_rubric, dict):
+                fb_rubric = dict(fb_rubric)
+                fb_rubric["student_anchor_quote"] = scrub_anchor_quote_for_grounding(
+                    quote=fb_rubric.get("student_anchor_quote"),
+                    missing=fb_missing,
+                    student_text=body,
+                    book_pack=book_pack,
+                )
 
         fb_sug = scaffold_feedback_suggestions(stage_ctx, fb_sug)
         fb_ex = scaffold_feedback_example(stage_ctx, fb_ex)
@@ -2979,8 +3139,73 @@ async def writing_coach_chat(
             rubric_meta=fb_rubric,
         )
         fb_ok = _apply_orid_rubric_ok_rule(bool(fb_ok), fb_rubric, fb_missing, stage=stage_ctx)
+        fb_ok, fb_missing, fb_sug, fb_ex, fb_rubric = _maybe_promote_o_pass(
+            stage=stage_ctx,
+            student_text=body,
+            ok=bool(fb_ok),
+            missing=fb_missing,
+            suggestions=fb_sug,
+            example=fb_ex,
+            rubric_meta=fb_rubric,
+        )
+        fb_ok, fb_missing, fb_sug, fb_ex, fb_rubric = _maybe_demote_o_thin_pass(
+            stage=stage_ctx,
+            student_text=body,
+            ok=bool(fb_ok),
+            missing=fb_missing,
+            suggestions=fb_sug,
+            example=fb_ex,
+            rubric_meta=fb_rubric,
+        )
 
-        if is_control_condition(condition, default=DEFAULT_ORID_CONDITION) or client is None:
+        # ── Experimental-group completion path (genai, fb_ok=True) ──────────
+        # Hard constraint: only runs when genai_path is True.
+        # Control-group paths MUST NOT enter here.
+        if genai_path and fb_ok:
+            # 1) Persist full research snapshot BEFORE clearing student-facing fields
+            research_snapshot: dict[str, Any] = {
+                "missing": list(fb_missing),
+                "suggestions": list(fb_sug),
+                "example": fb_ex,
+                "improved": fb_imp,
+                "rubric_focus": fb_rubric.get("rubric_focus"),
+                "rubric_level_estimate": fb_rubric.get("rubric_level_estimate"),
+                "student_anchor_quote": fb_rubric.get("student_anchor_quote"),
+                "draft_next_step": fb_rubric.get("draft_next_step"),
+            }
+            await _try_dual_write_feedback(
+                db,
+                session_id=session.id,
+                user_id=user.id,
+                stage=stage_ctx,
+                draft=draft_key,
+                student_text=body,
+                feedback_strength=feedback_strength,
+                condition=condition,
+                source=source,
+                ok=True,
+                praise=fb_praise,
+                missing=fb_missing,
+                suggestions=fb_sug,
+                example=fb_ex,
+            )
+            await _maybe_advance_stage(db, session.id, stage_ctx)
+            # 2) Clear student-facing modification fields
+            fb_missing = []
+            fb_sug = []
+            fb_ex = None
+            fb_imp = None
+            # 3) Store research data in coach_meta
+            coach_meta["student_feedback_kind"] = "complete"
+            coach_meta["research_feedback"] = research_snapshot
+            # 4) Deterministic completion reply — no narration LLM called
+            ai_reply = format_genai_completed_feedback_reply(
+                stage=stage_ctx,
+                praise=fb_praise,
+            )
+
+        # ── Control group or no-client fallback ─────────────────────────────
+        elif is_control_condition(condition, default=DEFAULT_ORID_CONDITION) or client is None:
             ai_reply = format_control_feedback_reply(
                 ok=bool(fb_ok),
                 missing=fb_missing,
@@ -2991,7 +3216,30 @@ async def writing_coach_chat(
                 praise=fb_praise,
                 student_draft=body,
             )
+            await _try_dual_write_feedback(
+                db,
+                session_id=session.id,
+                user_id=user.id,
+                stage=stage_ctx,
+                draft=draft_key,
+                student_text=body,
+                feedback_strength=feedback_strength,
+                condition=condition,
+                source=source,
+                ok=bool(fb_ok),
+                praise=fb_praise,
+                missing=fb_missing,
+                suggestions=fb_sug,
+                example=fb_ex,
+            )
+            if fb_ok:
+                await _maybe_advance_stage(db, session.id, stage_ctx)
+
+        # ── Experimental-group revision path (genai, fb_ok=False) ───────────
         else:
+            # Trim to single missing / single next step before narration
+            fb_missing = fb_missing[:1]
+            fb_sug = fb_sug[:1]
             summary = json.dumps(
                 {
                     "ok": fb_ok,
@@ -3071,25 +3319,23 @@ async def writing_coach_chat(
                     praise=fb_praise,
                     student_draft=body,
                 )
-
-        await _try_dual_write_feedback(
-            db,
-            session_id=session.id,
-            user_id=user.id,
-            stage=stage_ctx,
-            draft=draft_key,
-            student_text=body,
-            feedback_strength=feedback_strength,
-            condition=condition,
-            source=source,
-            ok=bool(fb_ok),
-            praise=fb_praise,
-            missing=fb_missing,
-            suggestions=fb_sug,
-            example=fb_ex,
-        )
-        if fb_ok:
-            await _maybe_advance_stage(db, session.id, stage_ctx)
+            await _try_dual_write_feedback(
+                db,
+                session_id=session.id,
+                user_id=user.id,
+                stage=stage_ctx,
+                draft=draft_key,
+                student_text=body,
+                feedback_strength=feedback_strength,
+                condition=condition,
+                source=source,
+                ok=bool(fb_ok),
+                praise=fb_praise,
+                missing=fb_missing,
+                suggestions=fb_sug,
+                example=fb_ex,
+            )
+            # fb_ok is False in this branch; _maybe_advance_stage not called
     elif source == "synthesis_feedback":
         week1_raw = await _fetch_latest_writing_content_for_week(db, user.id, session.id, 1)
         week1_slots = _orid_stage_d1_from_writing_content(week1_raw)
@@ -3180,104 +3426,137 @@ async def writing_coach_chat(
         },
     )
 
-    # ---- Scoring + badge computation ----
+    # ---- Scoring + badge computation (must not fail the chat reply) ----
     score_result: dict[str, Any] = {}
     badge_meta: dict[str, Any] = {}
     rubric_levels_snapshot: dict[str, int] = {}
     if source == "feedback_button":
-        week_num = getattr(session, "book_unit", None)
         try:
-            week_num = int(week_num or 1)
-        except (ValueError, TypeError):
-            week_num = 1
+            week_num = getattr(session, "book_unit", None)
+            try:
+                week_num = int(week_num or 1)
+            except (ValueError, TypeError):
+                week_num = 1
 
-        orid_levels: dict[str, Any] = {}
-        sel_levels: dict[str, Any] = {}
-        try:
-            saved_raw = await _fetch_latest_writing_content_for_week(
-                db, user.id, session.id, week_num
+            orid_levels: dict[str, Any] = {}
+            sel_levels: dict[str, Any] = {}
+            saved_raw: Optional[str] = None
+            saved_obj: Optional[dict[str, Any]] = None
+            try:
+                saved_raw = await _fetch_latest_writing_content_for_week(
+                    db, user.id, session.id, week_num
+                )
+                if saved_raw:
+                    saved_obj = ensure_orid_writing_obj(
+                        raw_content=saved_raw,
+                        week=week_num,
+                        empty_factory=_ensure_orid_writing_v1,
+                    )
+                    orid_levels, sel_levels = collect_levels_from_writing_obj(saved_obj)
+            except Exception:
+                logger.warning("collect saved rubric levels failed", exc_info=True)
+
+            rubric_level_estimate = (fb_rubric or {}).get("rubric_level_estimate")
+            rubric_focus = (fb_rubric or {}).get("rubric_focus")
+            if rubric_level_estimate is not None and (
+                isinstance(rubric_level_estimate, dict) or str(rubric_level_estimate).strip()
+            ):
+                apply_single_level_estimate(
+                    stage=stage_ctx,
+                    rubric_focus=rubric_focus,
+                    rubric_level_estimate=rubric_level_estimate,
+                    orid_levels=orid_levels,
+                    sel_levels=sel_levels,
+                )
+            score_result = calculate_orid_sel_score(orid_levels, sel_levels)
+
+            # Build rubric_levels snapshot: integer 1–4 per criterion (for frontend/research)
+            rubric_levels_snapshot: dict[str, int] = {}
+            for cid in ORID_CRITERION_IDS:
+                lv = parse_level(orid_levels.get(cid))
+                if lv is not None:
+                    rubric_levels_snapshot[cid] = lv
+            for cid in SEL_CRITERION_IDS:
+                lv = parse_level(sel_levels.get(cid))
+                if lv is not None:
+                    rubric_levels_snapshot[cid] = lv
+
+            # Badge evaluation — stage progress (not total-score thresholds)
+            has_content = bool((body or "").strip())
+            total_score_int = score_result.get("totalScore") if score_result else None
+            stage_u = (stage_ctx or "O").strip().upper()
+            is_control = is_control_condition(condition, default=DEFAULT_ORID_CONDITION)
+            stages_passed: set[str] = set()
+            if saved_obj is not None:
+                try:
+                    stages_passed = stages_passed_from_writing_obj(
+                        saved_obj,
+                        mode="content" if is_control else "ok",
+                    )
+                except Exception:
+                    logger.warning("stages_passed_from_writing_obj failed", exc_info=True)
+
+            if is_control:
+                if has_content and stage_u in ("O", "R", "I", "D"):
+                    stages_passed.add(stage_u)
+            else:
+                stages_passed |= stages_passed_from_orid_levels(orid_levels)
+                if fb_ok and stage_u in ("O", "R", "I", "D"):
+                    stages_passed.add(stage_u)
+
+            prev_badges = await get_earned_badges_from_db(db, user_id=user.id, session_id=session.id, week=week_num)
+            current_badges = calculate_earned_badges(
+                has_writing_content=has_content,
+                has_used_feedback_or_prompt=True,
+                stages_passed=stages_passed,
+                total_score=total_score_int,
             )
-            if saved_raw:
-                saved_obj = ensure_orid_writing_obj(
-                    raw_content=saved_raw,
-                    week=week_num,
-                    empty_factory=_ensure_orid_writing_v1,
+            new_badges = get_new_badges(prev_badges, current_badges)
+            try:
+                if new_badges:
+                    await record_badge_events(
+                        db,
+                        user_id=user.id,
+                        session_id=session.id,
+                        reading_id=session.reading_id,
+                        week=week_num,
+                        task_type="orid_stage",
+                        condition=condition,
+                        new_badge_ids=new_badges,
+                        total_score=total_score_int,
+                        word_count=len(body) if body else 0,
+                        feedback_count=1,
+                        prompt_view_count=0,
+                        used_feedback_or_prompt=True,
+                    )
+                if total_score_int is not None:
+                    await update_session_score_snapshot(
+                        db,
+                        user_id=user.id,
+                        session_id=session.id,
+                        week=week_num,
+                        total_score=total_score_int,
+                    )
+                if new_badges or total_score_int is not None:
+                    await db.commit()
+            except Exception:
+                logger.exception(
+                    "badge/score persistence failed",
+                    extra={"session_id": str(session.id)},
                 )
-                orid_levels, sel_levels = collect_levels_from_writing_obj(saved_obj)
-        except Exception:
-            logger.warning("collect saved rubric levels failed", exc_info=True)
+            badge_meta = {
+                "earnedBadges": list(set(prev_badges + current_badges)),
+                "newlyEarnedBadges": new_badges,
+            }
 
-        rubric_level_estimate = (fb_rubric or {}).get("rubric_level_estimate")
-        rubric_focus = (fb_rubric or {}).get("rubric_focus")
-        if rubric_level_estimate is not None and (
-            isinstance(rubric_level_estimate, dict) or str(rubric_level_estimate).strip()
-        ):
-            apply_single_level_estimate(
-                stage=stage_ctx,
-                rubric_focus=rubric_focus,
-                rubric_level_estimate=rubric_level_estimate,
-                orid_levels=orid_levels,
-                sel_levels=sel_levels,
-            )
-        score_result = calculate_orid_sel_score(orid_levels, sel_levels)
-
-        # Build rubric_levels snapshot: integer 1–4 per criterion (for frontend/research)
-        rubric_levels_snapshot: dict[str, int] = {}
-        for cid in ORID_CRITERION_IDS:
-            lv = parse_level(orid_levels.get(cid))
-            if lv is not None:
-                rubric_levels_snapshot[cid] = lv
-        for cid in SEL_CRITERION_IDS:
-            lv = parse_level(sel_levels.get(cid))
-            if lv is not None:
-                rubric_levels_snapshot[cid] = lv
-
-        # Badge evaluation — always run after feedback, even without rubric data
-        has_content = bool((body or "").strip())
-        total_score_int = score_result.get("totalScore") if score_result else None
-        prev_badges = await get_earned_badges_from_db(db, user_id=user.id, session_id=session.id, week=week_num)
-        current_badges = calculate_earned_badges(
-            has_writing_content=has_content,
-            has_used_feedback_or_prompt=True,
-            total_score=total_score_int,
-        )
-        new_badges = get_new_badges(prev_badges, current_badges)
-        try:
-            if new_badges:
-                await record_badge_events(
-                    db,
-                    user_id=user.id,
-                    session_id=session.id,
-                    reading_id=session.reading_id,
-                    week=week_num,
-                    task_type="orid_stage",
-                    condition=condition,
-                    new_badge_ids=new_badges,
-                    total_score=total_score_int,
-                    word_count=len(body) if body else 0,
-                    feedback_count=1,
-                    prompt_view_count=0,
-                    used_feedback_or_prompt=True,
-                )
-            if total_score_int is not None:
-                await update_session_score_snapshot(
-                    db,
-                    user_id=user.id,
-                    session_id=session.id,
-                    week=week_num,
-                    total_score=total_score_int,
-                )
-            if new_badges or total_score_int is not None:
-                await db.commit()
         except Exception:
             logger.exception(
-                "badge/score persistence failed",
-                extra={"session_id": str(session.id)},
+                "feedback scoring/badge block failed; returning chat reply without score meta",
+                extra={"session_id": str(session.id), "stage": stage_ctx},
             )
-        badge_meta = {
-            "earnedBadges": list(set(prev_badges + current_badges)),
-            "newlyEarnedBadges": new_badges,
-        }
+            score_result = {}
+            badge_meta = {}
+            rubric_levels_snapshot = {}
 
     coach_meta.update(
         {
@@ -3403,6 +3682,17 @@ async def writing_feedback(
         input_bucket=wf_input_bucket,
         grounding_check=grounding_check,
     )
+    missing, suggestions = scrub_false_book_absence_claims(
+        missing=missing,
+        suggestions=suggestions,
+        book_pack=book_pack,
+    )
+    missing, suggestions, example = rewrite_grounding_append_suggestions(
+        stage=data.stage,
+        missing=missing,
+        suggestions=suggestions,
+        example=example,
+    )
     missing, suggestions = normalize_feedback_focus(
         stage=data.stage,
         missing=missing,
@@ -3426,27 +3716,113 @@ async def writing_feedback(
     if _has_feedback_book_grounding_issue(missing):
         if example and "故事的主角" in str(example):
             example = None
+        praise = scrub_praise_for_grounding_issue(
+            stage=data.stage,
+            praise=praise,
+            missing=missing,
+            student_text=text,
+            book_pack=book_pack,
+        )
+        if isinstance(rubric_snap, dict):
+            rubric_snap = dict(rubric_snap)
+            rubric_snap["student_anchor_quote"] = scrub_anchor_quote_for_grounding(
+                quote=rubric_snap.get("student_anchor_quote"),
+                missing=missing,
+                student_text=text,
+                book_pack=book_pack,
+            )
 
     ok = _apply_orid_rubric_ok_rule(bool(ok), rubric_snap, missing, stage=data.stage)
-
-    await _try_dual_write_feedback(
-        db,
-        session_id=session.id,
-        user_id=user.id,
+    ok, missing, suggestions, example, rubric_snap = _maybe_promote_o_pass(
         stage=data.stage,
-        draft=data.draft,
         student_text=text,
-        feedback_strength=feedback_strength,
-        condition=condition,
-        source="writing_feedback_api",
-        ok=ok,
-        praise=praise,
+        ok=bool(ok),
         missing=missing,
         suggestions=suggestions,
         example=example,
+        rubric_meta=rubric_snap,
     )
-    if ok:
+    ok, missing, suggestions, example, rubric_snap = _maybe_demote_o_thin_pass(
+        stage=data.stage,
+        student_text=text,
+        ok=bool(ok),
+        missing=missing,
+        suggestions=suggestions,
+        example=example,
+        rubric_meta=rubric_snap,
+    )
+
+    wf_meta: dict[str, Any] = {
+        "condition": condition,
+        "feedback_strength": feedback_strength,
+        **rubric_snap,
+        "model": OPENAI_MODEL,
+        "max_completion_tokens": OPENAI_MAX_COMPLETION_TOKENS,
+        "saved_to_writing_id": None,
+        "prompts_ok": PROMPTS_OK,
+        "prompts_import_error": PROMPTS_IMPORT_ERROR,
+        "openai_enabled": OPENAI_ENABLED,
+        "checker_ok": CHECKER_OK,
+        "checker_import_error": CHECKER_IMPORT_ERROR,
+    }
+
+    # ── Experimental-group completion path (genai, ok=True) ─────────────────
+    if genai_path and ok:
+        wf_research: dict[str, Any] = {
+            "missing": list(missing),
+            "suggestions": list(suggestions),
+            "example": example,
+            "improved": improved,
+            "rubric_focus": rubric_snap.get("rubric_focus"),
+            "rubric_level_estimate": rubric_snap.get("rubric_level_estimate"),
+            "student_anchor_quote": rubric_snap.get("student_anchor_quote"),
+            "draft_next_step": rubric_snap.get("draft_next_step"),
+        }
+        await _try_dual_write_feedback(
+            db,
+            session_id=session.id,
+            user_id=user.id,
+            stage=data.stage,
+            draft=data.draft,
+            student_text=text,
+            feedback_strength=feedback_strength,
+            condition=condition,
+            source="writing_feedback_api",
+            ok=True,
+            praise=praise,
+            missing=missing,
+            suggestions=suggestions,
+            example=example,
+        )
         await _maybe_advance_stage(db, session.id, data.stage)
+        missing = []
+        suggestions = []
+        example = None
+        improved = None
+        wf_meta["student_feedback_kind"] = "complete"
+        wf_meta["research_feedback"] = wf_research
+    else:
+        # Trim to single missing / single next step for revision
+        missing = missing[:1]
+        suggestions = suggestions[:1]
+        await _try_dual_write_feedback(
+            db,
+            session_id=session.id,
+            user_id=user.id,
+            stage=data.stage,
+            draft=data.draft,
+            student_text=text,
+            feedback_strength=feedback_strength,
+            condition=condition,
+            source="writing_feedback_api",
+            ok=ok,
+            praise=praise,
+            missing=missing,
+            suggestions=suggestions,
+            example=example,
+        )
+        if ok:
+            await _maybe_advance_stage(db, session.id, data.stage)
 
     return WritingFeedbackResponse(
         stage=data.stage,
@@ -3457,19 +3833,7 @@ async def writing_feedback(
         suggestions=suggestions,
         example=example,
         improved=improved,
-        meta={
-            "condition": condition,
-            "feedback_strength": feedback_strength,
-            **rubric_snap,
-            "model": OPENAI_MODEL,
-            "max_completion_tokens": OPENAI_MAX_COMPLETION_TOKENS,
-            "saved_to_writing_id": None,
-            "prompts_ok": PROMPTS_OK,
-            "prompts_import_error": PROMPTS_IMPORT_ERROR,
-            "openai_enabled": OPENAI_ENABLED,
-            "checker_ok": CHECKER_OK,
-            "checker_import_error": CHECKER_IMPORT_ERROR,
-        },
+        meta=wf_meta,
     )
 
 

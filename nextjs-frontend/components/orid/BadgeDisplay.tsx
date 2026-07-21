@@ -28,10 +28,20 @@ function LockedBadgeCircle({ size }: { size: number }) {
 
 export function BadgeDisplay({ earnedBadges, size = 32, className }: BadgeDisplayProps) {
   const [openTooltip, setOpenTooltip] = useState<BadgeId | null>(null);
+  const [brokenIds, setBrokenIds] = useState<Set<BadgeId>>(new Set());
   const earnedSet = new Set(earnedBadges);
 
   function toggleTooltip(id: BadgeId) {
     setOpenTooltip((prev) => (prev === id ? null : id));
+  }
+
+  function markBroken(id: BadgeId) {
+    setBrokenIds((prev) => {
+      if (prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
   }
 
   return (
@@ -44,6 +54,7 @@ export function BadgeDisplay({ earnedBadges, size = 32, className }: BadgeDispla
         const config = BADGE_CONFIG[id];
         const earned = earnedSet.has(id);
         const isOpen = openTooltip === id;
+        const imgBroken = brokenIds.has(id);
 
         return (
           <div key={id} className="relative shrink-0" role="listitem">
@@ -64,7 +75,7 @@ export function BadgeDisplay({ earnedBadges, size = 32, className }: BadgeDispla
               onMouseLeave={() => setOpenTooltip(null)}
               onClick={() => toggleTooltip(id)}
             >
-              {earned ? (
+              {earned && !imgBroken ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={config.svgPath}
@@ -73,7 +84,15 @@ export function BadgeDisplay({ earnedBadges, size = 32, className }: BadgeDispla
                   height={size - 4}
                   className="rounded-full object-contain"
                   draggable={false}
+                  onError={() => markBroken(id)}
                 />
+              ) : earned ? (
+                <span
+                  className="text-[10px] font-bold text-amber-800"
+                  aria-hidden
+                >
+                  {id === "badge_start" ? "筆" : id === "badge_30" ? "銅" : id === "badge_60" ? "銀" : "金"}
+                </span>
               ) : (
                 <LockedBadgeCircle size={size} />
               )}
@@ -81,7 +100,7 @@ export function BadgeDisplay({ earnedBadges, size = 32, className }: BadgeDispla
 
             {isOpen && (
               <div
-                className="pointer-events-auto absolute right-0 top-full z-[200] mt-1.5 w-44 rounded-xl border border-amber-200 bg-white p-2.5 text-[11px] leading-snug shadow-xl sm:w-52"
+                className="pointer-events-auto absolute right-0 top-full z-[200] mt-1.5 w-56 rounded-xl border border-amber-200 bg-white p-2.5 text-[11px] leading-snug shadow-xl sm:w-64"
                 onMouseEnter={() => setOpenTooltip(id)}
                 onMouseLeave={() => setOpenTooltip(null)}
               >

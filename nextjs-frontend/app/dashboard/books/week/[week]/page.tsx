@@ -15,8 +15,14 @@ import { getBookWeekArt } from "@/lib/orid-book-art";
 import { buildCoachOpeningMessage } from "@/lib/orid/coach-opening";
 import { buildSynthesisOpeningMessage } from "@/lib/orid/synthesis-opening";
 import { isEvenWeek, isOddWeek, priorOddWeek } from "@/lib/orid/week-flow";
-import { type BadgeId, calculateEarnedBadges, getNewlyEarnedBadges } from "@/lib/orid/badgeRules";
-import { formatScore, type ScoreResult } from "@/lib/orid/rubricScoring";
+import {
+  type BadgeId,
+  calculateEarnedBadges,
+  getNewlyEarnedBadges,
+  stagesPassedFromWritingContent,
+  stagesPassedFromWritingOk,
+} from "@/lib/orid/badgeRules";
+import { type ScoreResult } from "@/lib/orid/rubricScoring";
 import {
   DRAFT_SAVE_ENCOURAGEMENT,
   STAGE_MISSION_META,
@@ -86,6 +92,20 @@ function isUuid(v?: string | null): v is string {
 
 function formatApiError(status: number, body: string, fallback: string) {
   if (status === 401) return "登入狀態失效，請重新登入後再試一次。";
+  if (status === 503) {
+    const trimmed503 = (body || "").trim();
+    if (trimmed503.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(trimmed503) as { detail?: unknown };
+        if (typeof parsed?.detail === "string" && parsed.detail.trim()) {
+          return parsed.detail.trim();
+        }
+      } catch {
+        /* fall through */
+      }
+    }
+    return "連線暫時中斷，請再按一次「取得回饋」。";
+  }
   const trimmed = (body || "").trim();
   if (trimmed.startsWith("{")) {
     try {
@@ -237,14 +257,18 @@ function createEmptyWriting(week: number): OridWritingV1 {
 
 function normalizeFeedbackObject(input: any): WritingFeedback | null {
   if (!input || typeof input !== "object") return null;
+  const isComplete = input.ok === true && input.meta?.student_feedback_kind === "complete";
   return {
     ok: !!input.ok,
     praise: input.praise != null && input.praise !== "" ? String(input.praise) : null,
-    missing: Array.isArray(input.missing) ? input.missing.map(String).filter(Boolean).slice(0, 3) : [],
+    // Keep at most 1 item; completion cards have empty arrays already from the backend,
+    // but guard here for any legacy data.
+    missing: Array.isArray(input.missing) ? input.missing.map(String).filter(Boolean).slice(0, 1) : [],
     suggestions: Array.isArray(input.suggestions)
-      ? input.suggestions.map(String).filter(Boolean).slice(0, 3)
+      ? input.suggestions.map(String).filter(Boolean).slice(0, 1)
       : [],
-    example: input.example ? String(input.example) : null,
+    // Clear example on completion cards so the writing-hint panel doesn't show stale revision hints.
+    example: isComplete ? null : (input.example ? String(input.example) : null),
     improved: input.improved ? String(input.improved) : null,
     meta: input.meta ?? null,
   };
@@ -1008,12 +1032,24 @@ export default function WeekBookPage() {
       const outDraft: DraftKey = normalizeDraftKey(data?.meta?.draft ?? data?.draft, draft);
 
       const normalizedCondition = String(data?.meta?.condition ?? condition).toLowerCase();
+      const isCompletionCard =
+        !!data?.feedback_ok && data?.meta?.student_feedback_kind === "complete";
       const fb: WritingFeedback = {
         ok: !!data?.feedback_ok,
         praise: data?.feedback_praise ?? null,
-        missing: Array.isArray(data?.feedback_missing) ? data.feedback_missing.map(String) : [],
-        suggestions: Array.isArray(data?.feedback_suggestions) ? data.feedback_suggestions.map(String) : [],
-        example: isControlConditionValue(normalizedCondition) ? null : (data?.feedback_example ?? null),
+        // Backend already trims to ≤1 for experimental group; keep slice(0,1) as safety net
+        missing: Array.isArray(data?.feedback_missing)
+          ? data.feedback_missing.map(String).slice(0, 1)
+          : [],
+        suggestions: Array.isArray(data?.feedback_suggestions)
+          ? data.feedback_suggestions.map(String).slice(0, 1)
+          : [],
+        // Control group: never show AI example.
+        // Experimental group completion card: clear example so the hint panel doesn't show revision hints.
+        example:
+          isControlConditionValue(normalizedCondition) || isCompletionCard
+            ? null
+            : (data?.feedback_example ?? null),
         improved: data?.feedback_improved ?? null,
         meta: data?.meta ?? null,
       };
@@ -1044,10 +1080,13 @@ export default function WeekBookPage() {
         ? (meta.earnedBadges as BadgeId[])
         : [];
       if (mergedBadges.length === 0) {
+        const stagesPassed = isControlConditionValue(normalizedCondition)
+          ? stagesPassedFromWritingContent(nextWriting)
+          : stagesPassedFromWritingOk(nextWriting);
         mergedBadges = calculateEarnedBadges({
           hasWritingContent: text.length > 0,
           hasUsedFeedbackOrPrompt: true,
-          totalScore: scoreFromMeta,
+          stagesPassed,
         });
       }
       const allBadges = Array.from(new Set([...earnedBadges, ...mergedBadges])) as BadgeId[];
@@ -1316,9 +1355,6 @@ export default function WeekBookPage() {
                 <div className="relative z-20 flex shrink-0 items-start justify-between gap-2 overflow-visible px-2.5 pb-1 pt-2 sm:px-3 md:px-2 md:pb-0.5 md:pt-1.5 lg:px-3 lg:pb-1 lg:pt-2">
                   <div className="min-w-0 flex-1 pr-2">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="inline-flex shrink-0 items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900/80 ring-1 ring-amber-200">
-                        {formatScore(totalScore)}
-                      </span>
                       <div className={`text-xs font-bold sm:text-sm ${activeTheme.titleColor}`}>
                         {weekNum === 1 ? activeCardMeta.title : STAGE_TITLES[activeStage]}
                       </div>
@@ -1343,11 +1379,21 @@ export default function WeekBookPage() {
                     {showStageFeedbackButtons && !isControl ? (
                       <button
                         type="button"
-                        className={[activeTheme.btnClass, "shrink-0"].join(" ")}
+                        className={[
+                          "inline-flex shrink-0 items-center justify-center rounded-full border-2 px-3.5 py-1.5 text-xs font-bold shadow-sm transition-all sm:px-4 sm:py-2 sm:text-sm",
+                          "disabled:cursor-not-allowed disabled:opacity-50",
+                          activeStage === "O"
+                            ? "border-sky-600 bg-sky-100 text-sky-950 hover:bg-sky-200"
+                            : activeStage === "R"
+                              ? "border-amber-600 bg-amber-100 text-amber-950 hover:bg-amber-200"
+                              : activeStage === "I"
+                                ? "border-emerald-600 bg-emerald-100 text-emerald-950 hover:bg-emerald-200"
+                                : "border-violet-600 bg-violet-100 text-violet-950 hover:bg-violet-200",
+                        ].join(" ")}
                         disabled={!sessionId || fbLoading}
                         onClick={() => runFeedback(activeStage)}
                       >
-                        {fbLoading ? "…" : "取得回饋"}
+                        {fbLoading ? "回饋中…" : "取得回饋"}
                       </button>
                     ) : null}
                   </div>
@@ -1487,61 +1533,34 @@ export default function WeekBookPage() {
               </div>
 
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#fffcf7]">
-                {/* Tab bar */}
-                <div className="flex shrink-0 border-b border-amber-100 bg-amber-50/60">
-                  {(["synthesis", "week1"] as const).map((tab) => (
-                    <button
-                      key={tab}
-                      type="button"
-                      onClick={() => setChatTab(tab)}
-                      className={[
-                        "min-h-[44px] flex-1 px-2 py-2.5 text-xs font-semibold transition-colors sm:text-sm",
-                        chatTab === tab
-                          ? "border-b-2 border-amber-500 text-amber-900"
-                          : "text-amber-700/60 hover:text-amber-800",
-                      ].join(" ")}
-                    >
-                      {tab === "synthesis" ? "整合寫作對話" : "上週對話"}
-                    </button>
-                  ))}
-                </div>
+                {/* Tab bar：控制組沒有對話，只保留整合寫作提示，不顯示分頁 */}
+                {!isControl ? (
+                  <div className="flex shrink-0 border-b border-amber-100 bg-amber-50/60">
+                    {(["synthesis", "week1"] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        type="button"
+                        onClick={() => setChatTab(tab)}
+                        className={[
+                          "min-h-[44px] flex-1 px-2 py-2.5 text-xs font-semibold transition-colors sm:text-sm",
+                          chatTab === tab
+                            ? "border-b-2 border-amber-500 text-amber-900"
+                            : "text-amber-700/60 hover:text-amber-800",
+                        ].join(" ")}
+                      >
+                        {tab === "synthesis" ? "整合寫作對話" : "上週對話"}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
 
-                {isControl && chatTab === "synthesis" ? (
+                {isControl ? (
                   <WritingPromptHelper
                     focusStage={focusStage}
                     onPromptViewed={() => void runPromptUsage()}
                     synthesisMode
                     openingText={synthesisOpeningText}
                   />
-                ) : isControl && chatTab === "week1" ? (
-                  <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-2 sm:p-3">
-                    {week1Messages.length === 0 ? (
-                      <div className="flex h-full min-h-[6rem] items-center justify-center px-2 text-center text-xs text-amber-900/50 sm:text-sm">
-                        {!historyLoaded ? "載入中…" : "目前沒有上週對話紀錄。"}
-                      </div>
-                    ) : (
-                      <div className="flex flex-col gap-3">
-                        {week1Messages.map((m, idx) => (
-                          <div
-                            key={`w1c-${idx}`}
-                            className={[
-                              "flex items-end gap-2",
-                              m.role === "student" ? "justify-end" : "justify-start",
-                            ].join(" ")}
-                          >
-                            {m.role === "ai" && (
-                              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white ring-2 ring-amber-100">
-                                <OridPartnerMascot size={32} />
-                              </div>
-                            )}
-                            <div className={m.role === "student" ? "kid-bubble-student max-w-[min(88%,16rem)]" : "kid-bubble-ai max-w-[min(88%,18rem)]"}>
-                              <div className="whitespace-pre-wrap leading-relaxed">{m.text}</div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
                 ) : (
                   <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-2 sm:p-3">
                     {chatTab === "synthesis" ? (

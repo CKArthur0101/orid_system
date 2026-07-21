@@ -9,7 +9,6 @@ interface WeekSelectionCardProps {
   title?: string;
   coverThumb?: string;
   locked?: boolean;
-  totalScore?: number | null;
   earnedBadges?: string[];
   stageStates?: Partial<Record<OridStageKey, StageState>>;
 }
@@ -19,13 +18,11 @@ function CardBody({
   title,
   coverThumb,
   locked,
-  totalScore,
   earnedBadges,
   stageStates,
 }: WeekSelectionCardProps) {
   const thumbSrc = coverThumb ?? SYSTEM_ILLUSTRATIONS.reading;
-  const hasProgress =
-    (totalScore != null && totalScore > 0) || (earnedBadges && earnedBadges.length > 0);
+  const hasBadges = Boolean(earnedBadges && earnedBadges.length > 0);
 
   return (
     <>
@@ -56,19 +53,10 @@ function CardBody({
 
         {!locked ? (
           <div className="flex flex-wrap items-center gap-2">
-            {hasProgress ? (
-              <>
-                {totalScore != null && totalScore > 0 ? (
-                  <span className="rounded-full border border-amber-400/40 bg-amber-100/80 px-2.5 py-0.5 text-xs font-bold text-amber-900">
-                    {totalScore} / 90
-                  </span>
-                ) : null}
-                {earnedBadges && earnedBadges.length > 0 ? (
-                  <span className="rounded-full border border-emerald-400/40 bg-emerald-100/80 px-2.5 py-0.5 text-xs font-bold text-emerald-800">
-                    🏅 × {earnedBadges.length}
-                  </span>
-                ) : null}
-              </>
+            {hasBadges ? (
+              <span className="rounded-full border border-emerald-400/40 bg-emerald-100/80 px-2.5 py-0.5 text-xs font-bold text-emerald-800">
+                🏅 × {earnedBadges!.length}
+              </span>
             ) : (
               <span className="rounded-full border border-amber-400/35 bg-amber-50/80 px-2.5 py-0.5 text-xs font-semibold text-amber-800">
                 已開放 →
