@@ -22,11 +22,37 @@ export function BookIllustration({
   const size = variant === "helper" ? 120 : layout === "hero" ? 320 : 200;
   const isHero = layout === "hero" && variant === "scene";
 
+  // Hero (寫作頁右上插圖)：去背透明，與登入裝飾同風格，不加白底卡片
+  if (isHero) {
+    return (
+      <div
+        className={[
+          "flex h-full w-full items-center justify-center overflow-visible bg-transparent",
+          className,
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
+        <Image
+          src={src}
+          alt={art.alt}
+          width={size}
+          height={size}
+          className={[
+            "h-full w-full object-contain object-center drop-shadow-sm",
+            imageClassName,
+          ]
+            .filter(Boolean)
+            .join(" ")}
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       className={[
-        "overflow-hidden rounded-2xl border border-amber-200/70 bg-white shadow-sm",
-        isHero ? "flex h-full w-full items-center justify-center p-1" : "p-1.5",
+        "overflow-hidden rounded-2xl border border-amber-200/70 bg-white/40 p-1.5 shadow-sm",
         className,
       ]
         .filter(Boolean)
@@ -37,12 +63,7 @@ export function BookIllustration({
         alt={art.alt}
         width={size}
         height={size}
-        className={[
-          isHero ? "h-[92%] w-[92%] object-contain object-center" : "h-auto w-full object-contain",
-          imageClassName,
-        ]
-          .filter(Boolean)
-          .join(" ")}
+        className={["h-auto w-full object-contain", imageClassName].filter(Boolean).join(" ")}
       />
     </div>
   );
@@ -61,20 +82,13 @@ export function BookHelperAvatar({
   if (!art) return null;
 
   return (
-    <div
-      className={[
-        "shrink-0 overflow-hidden rounded-2xl border border-amber-200/60 bg-white p-0.5 shadow-sm",
-        className,
-      ]
-        .filter(Boolean)
-        .join(" ")}
-    >
+    <div className={["shrink-0 overflow-visible bg-transparent", className].filter(Boolean).join(" ")}>
       <Image
         src={art.helper}
         alt="松果小夥伴"
         width={size}
         height={size}
-        className="object-contain"
+        className="object-contain drop-shadow-sm"
         style={{ width: size, height: size }}
       />
     </div>

@@ -114,4 +114,67 @@
       min-width: 0;
     }
   }
+
+  /* Login corner squirrels — gentle float (inner wrapper; outer keeps rotate) */
+  .orid-login-float-y {
+    animation: orid-float-y 5.2s ease-in-out infinite;
+  }
+  .orid-login-float-x {
+    animation: orid-float-x 6s ease-in-out infinite;
+  }
+  .orid-login-float-yx {
+    animation: orid-float-yx 5.6s ease-in-out infinite;
+  }
+  .orid-login-float-xy {
+    animation: orid-float-xy 6.4s ease-in-out infinite;
+  }
+}
+
+@keyframes orid-float-y {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-12px);
+  }
+}
+
+@keyframes orid-float-x {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(10px);
+  }
+}
+
+@keyframes orid-float-yx {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  50% {
+    transform: translate(7px, -10px);
+  }
+}
+
+@keyframes orid-float-xy {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  50% {
+    transform: translate(-8px, -9px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orid-login-float-y,
+  .orid-login-float-x,
+  .orid-login-float-yx,
+  .orid-login-float-xy {
+    animation: none;
+  }
 }
