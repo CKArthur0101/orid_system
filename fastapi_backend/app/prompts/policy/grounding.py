@@ -636,11 +636,65 @@ def _book_reference_mentions(book_pack: Optional[dict[str, Any]], term: str) -> 
     return term in (blob or "")
 
 
+_CUT_TREE_DRAFT_CUES = (
+    "砍光",
+    "砍掉",
+    "砍樹",
+    "樹都砍",
+    "樹都被砍",
+    "都被砍",
+    "砍了樹",
+    "把樹砍",
+    "樹砍",
+    "樹被砍",
+)
+
+
+def student_has_book_aligned_cut_tree_paraphrase(
+    student_text: str, book_pack: Optional[dict[str, Any]]
+) -> bool:
+    """True when the draft paraphrases the in-book tree-cutting climax (砍樹／樹樁)."""
+    t = normalize_match_text(student_text)
+    if not t or not isinstance(book_pack, dict):
+        return False
+    has_cut_cue = any(c in t for c in _CUT_TREE_DRAFT_CUES) or ("砍" in t and "樹" in t)
+    if not has_cut_cue:
+        return False
+    return _book_reference_mentions(book_pack, "砍") and _book_reference_mentions(book_pack, "樹")
+
+
+def _missing_denies_cut_tree_paraphrase(missing_line: str) -> bool:
+    """Feedback that treats a valid in-book 砍樹 paraphrase as a factual error."""
+    m = (missing_line or "").strip()
+    if not m:
+        return False
+    cut_in_missing = any(c in m for c in _CUT_TREE_DRAFT_CUES) or ("砍" in m and "樹" in m)
+    if not cut_in_missing:
+        return False
+    contrast_cues = (
+        "書裡其實",
+        "不是書裡",
+        "不在書裡",
+        "好像不是",
+        "不太對",
+        "不像是書",
+        "書裡沒有",
+        "沒有這件事",
+        "改成書裡",
+        "對回書裡",
+        "書裡後來",
+        "書裡是後來",
+        "書裡說的是",
+    )
+    return any(c in m for c in contrast_cues)
+
+
 def scrub_false_book_absence_claims(
     *,
     missing: list[str],
     suggestions: list[str],
     book_pack: Optional[dict[str, Any]],
+    student_text: str = "",
 ) -> tuple[list[str], list[str]]:
     """Drop / rewrite feedback that falsely says canonical book items are absent.
 
@@ -651,6 +705,27 @@ def scrub_false_book_absence_claims(
     m0 = (missing[0] or "").strip()
     if not m0:
         return missing, suggestions
+
+    # False denial of tree-cutting paraphrases — check before absence-marker gate.
+    if student_text and student_has_book_aligned_cut_tree_paraphrase(student_text, book_pack):
+        if _missing_denies_cut_tree_paraphrase(m0):
+            return [], suggestions
+    cut_paraphrase_cues = (
+        "砍光",
+        "砍掉",
+        "砍樹",
+        "樹都砍",
+        "樹都被砍",
+        "都被砍光",
+        "把自己的樹",
+        "把樹砍",
+        "樹砍",
+    )
+    if any(c in m0 for c in cut_paraphrase_cues) and _book_reference_mentions(
+        book_pack, "砍"
+    ) and _book_reference_mentions(book_pack, "樹"):
+        return [], suggestions
+
     if not any(tok in m0 for tok in _ABSENCE_CLAIM_MARKERS):
         return missing, suggestions
 
@@ -665,11 +740,56 @@ def scrub_false_book_absence_claims(
         sug = "試著補一句：他給了柿子蒂或樹枝之後，甜柿子怎麼了？（例如藏進倉庫）"
         return [soft], [sug]
 
-    # False denial of tree-cutting paraphrases (砍光光 / 樹都砍掉 ≈ 書裡的砍樹)
-    cut_paraphrase_cues = ("砍光", "砍掉", "砍樹", "樹都砍", "把自己的樹", "把樹砍", "樹砍")
-    if any(c in m0 for c in cut_paraphrase_cues) and _book_reference_mentions(
-        book_pack, "砍"
-    ) and _book_reference_mentions(book_pack, "樹"):
-        return [], suggestions
+    return missing, suggestions
 
+
+# Near-synonym clusters: student wording vs book wording must not be treated as factual error.
+_BOOK_SYNONYM_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("獨占", "獨佔", "自己吃", "不想分", "不分享"),
+    ("大口吃", "大口", "狼吞虎嚥"),
+    ("藏進倉庫", "藏到倉庫", "藏進", "藏到屋後", "藏起來"),
+    ("柿子蒂", "蒂"),
+)
+
+
+_SYNONYM_MISMATCH_CUES: tuple[str, ...] = (
+    "不太一樣",
+    "稍微不太一樣",
+    "跟書裡",
+    "書裡說的是",
+    "書裡比較像是",
+    "書裡實際",
+    "改成書裡",
+    "對回書裡",
+    "書裡真的",
+    "再對回",
+)
+
+
+def scrub_false_synonym_mismatch_claims(
+    *,
+    missing: list[str],
+    suggestions: list[str],
+    book_pack: Optional[dict[str, Any]],
+    student_text: str = "",
+) -> tuple[list[str], list[str]]:
+    """Drop feedback that nitpicks in-book near-synonyms as factual errors.
+
+    Example false claim: student「一直自己吃」vs book「一直獨占」— same selfishness beat.
+    """
+    if not missing or not student_text:
+        return missing, suggestions
+    m0 = (missing[0] or "").strip()
+    if not m0:
+        return missing, suggestions
+    if not any(c in m0 for c in _SYNONYM_MISMATCH_CUES):
+        return missing, suggestions
+
+    draft = normalize_match_text(student_text)
+    for group in _BOOK_SYNONYM_GROUPS:
+        draft_hits = [t for t in group if t in draft]
+        missing_hits = [t for t in group if t in m0]
+        book_hits = [t for t in group if _book_reference_mentions(book_pack, t)]
+        if draft_hits and book_hits and missing_hits:
+            return [], suggestions
     return missing, suggestions

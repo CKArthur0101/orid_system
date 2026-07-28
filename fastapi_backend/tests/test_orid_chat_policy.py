@@ -68,6 +68,65 @@ def test_cut_tree_paraphrase_砍光光_not_ungrounded():
     assert m == []
 
 
+def test_cut_tree_paraphrase_樹都被砍_scrub_contrast_ending():
+    """「樹都被砍光」≈ 書裡砍樹；不得以『書裡其實是吃柿子』否定。"""
+    from app.routes.orid import BOOK_PACK_BY_WEEK
+
+    book_pack = BOOK_PACK_BY_WEEK[1]
+    draft = (
+        "故事中，阿松爺爺一開始都不分享柿子，還把柿子藏進倉庫，"
+        "只給哎唷奶奶柿子蒂和葉子；最後回頭看發現自己的樹都被砍光了。"
+    )
+    assert grounding.student_has_book_aligned_cut_tree_paraphrase(draft, book_pack) is True
+
+    m, s = grounding.scrub_false_book_absence_claims(
+        missing=[
+            "最後寫的「樹都被砍光了」不太對，書裡其實是後來把藏起來的柿子拿出來請大家吃，再一起撒種子。"
+        ],
+        suggestions=["可以補上吃柿子和撒種子"],
+        book_pack=book_pack,
+        student_text=draft,
+    )
+    assert m == []
+
+
+def test_synonym_自己吃_vs_獨占_not_factual_error():
+    """R draft「自己吃」≈ book「獨占」；不得以『跟書裡不太一樣』擋通過。"""
+    from app.routes.orid import BOOK_PACK_BY_WEEK, _maybe_promote_o_pass
+    from app.prompts.policy.feedback_focus import r_draft_meets_pass_bar
+
+    book_pack = BOOK_PACK_BY_WEEK[1]
+    draft = (
+        "我覺得爺爺很小氣，因為阿松爺爺明明有甜柿子，卻一直自己吃，"
+        "還故意在大家面前大口吃，這樣讓我覺得心情很糟"
+    )
+    assert r_draft_meets_pass_bar(draft) is True
+
+    m, s = grounding.scrub_false_synonym_mismatch_claims(
+        missing=[
+            "「一直自己吃還故意在」這句跟書裡稍微不太一樣，"
+            "書裡說的是「一直獨占，故意在大家面前大口吃」。"
+        ],
+        suggestions=["靠近「我覺得爺爺很小氣」這句，把不對的地方改回書裡怎麼說。"],
+        book_pack=book_pack,
+        student_text=draft,
+    )
+    assert m == []
+
+    ok, missing, sug, ex, meta = _maybe_promote_o_pass(
+        stage="R",
+        student_text=draft,
+        ok=False,
+        missing=m,
+        suggestions=s,
+        example=None,
+        rubric_meta={"rubric_focus": "R1", "rubric_level_estimate": {"R1": "2 接近"}},
+    )
+    assert ok is True
+    assert missing == []
+    assert meta.get("rubric_level_promoted") is True
+
+
 def test_ungrounded_in_book_detects_fabricated_scene():
     book_pack = {
         "book_title": "阿松爺爺的柿子樹",
@@ -584,6 +643,89 @@ def test_maybe_demote_rid_one_liners():
             rubric_meta={"rubric_focus": key, "rubric_level_estimate": {key: "3 達標"}},
         )
         assert ok is True, stage
+
+
+def test_maybe_promote_rid_pass_bar_stops_ghost_wall():
+    """R/I/D drafts that already meet the rubric pass bar should auto-pass
+    even if the LLM under-rated them (same safety net as O)."""
+    from app.prompts.policy.feedback_focus import r_draft_meets_pass_bar
+
+    # Real classroom-style R draft that previously looped on 「再補大口吃」
+    r_draft = (
+        "我覺得爺爺很小氣，因為阿松爺爺明明有甜柿子，卻一直自己吃，"
+        "還故意在大家面前大口吃，這樣讓我覺得心情很糟"
+    )
+    assert r_draft_meets_pass_bar(r_draft) is True
+
+    r_ok, r_missing, r_sug, r_ex, r_meta = orid._maybe_promote_o_pass(
+        stage="R",
+        student_text=r_draft,
+        ok=False,
+        missing=["可以再多寫一點書裡那一幕，像是他「故意在大家面前大口吃甜柿子」這個畫面。"],
+        suggestions=["你可以接著寫：「因為他 _ _ _ ，所以我覺得 _ _ _ 。」"],
+        example="我覺得＿＿＿，因為＿＿＿。",
+        rubric_meta={"rubric_focus": "R1", "rubric_level_estimate": {"R1": "2 接近"}},
+    )
+    assert r_ok is True
+    assert r_missing == []
+    assert r_sug == []
+    assert r_ex is None
+    assert r_meta.get("rubric_level_promoted") is True
+    assert r_meta.get("rubric_level_estimate", {}).get("R1") == "3 達標"
+
+    # Thin R must NOT promote (still needs rubric-guided coaching)
+    r_thin = "我覺得很生氣，因為他都故意不分享柿子"
+    thin_ok, *_ = orid._maybe_promote_o_pass(
+        stage="R",
+        student_text=r_thin,
+        ok=False,
+        missing=["再補畫面"],
+        suggestions=["哪一幕？"],
+        example=None,
+        rubric_meta={"rubric_focus": "R1", "rubric_level_estimate": {"R1": "2 接近"}},
+    )
+    assert thin_ok is False
+
+    i_ok_draft = (
+        "我學到分享比獨占更好，因為阿松爺爺後來砍了樹只剩樹樁才後悔，"
+        "最後大家一起撒種子才比較開心。"
+    )
+    d_ok_draft = (
+        "下次如果同學想借我的文具，我會先問清楚他要做什麼，"
+        "再決定怎麼一起用，不會自己獨占。"
+    )
+    for stage, draft, key in (("I", i_ok_draft, "I1"), ("D", d_ok_draft, "D1")):
+        ok, missing, sug, ex, meta = orid._maybe_promote_o_pass(
+            stage=stage,
+            student_text=draft,
+            ok=False,
+            missing=["請再補一點"],
+            suggestions=["可以再具體一點"],
+            example=None,
+            rubric_meta={"rubric_focus": key, "rubric_level_estimate": {key: "2 接近"}},
+        )
+        assert ok is True, stage
+        assert missing == [] and sug == []
+        assert meta.get("rubric_level_promoted") is True
+
+
+def test_scrub_revision_prompts_already_in_draft_rewrites_loop():
+    from app.prompts.policy.feedback_focus import scrub_revision_prompts_already_in_draft
+
+    draft = (
+        "我覺得爺爺很小氣，因為阿松爺爺明明有甜柿子，卻一直自己吃，"
+        "還故意在大家面前大口吃，這樣讓我覺得心情很糟"
+    )
+    missing = ["這一段可以再多寫「故意在大家面前大口吃」這個畫面。"]
+    suggestions = ["把「故意在大家面前大口吃」再寫清楚一點。"]
+    new_m, new_s, new_ex = scrub_revision_prompts_already_in_draft(
+        "R", draft, missing, suggestions, "我覺得＿＿＿，因為＿＿＿。"
+    )
+    assert "故意在大家面前大口吃" not in new_m[0] or "不必" in new_m[0] or "已經" in new_m[0]
+    assert "故意在大家面前大口吃" not in new_s[0]
+    # Must not keep asking to fill the same blank template as the only tip
+    assert new_m[0] != missing[0]
+    assert new_s[0] != suggestions[0]
 
 
 def test_orid_rubric_level_controls_ok_without_sel_override():

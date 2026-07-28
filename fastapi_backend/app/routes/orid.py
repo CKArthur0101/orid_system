@@ -96,10 +96,10 @@ from app.prompts.policy.feedback_focus import (
     missing_looks_book_grounding_priority,
     normalize_feedback_focus,
     o_draft_arc_flags,
-    o_draft_meets_pass_bar,
     rewrite_grounding_append_suggestions,
     scrub_anchor_quote_for_grounding,
     scrub_praise_for_grounding_issue,
+    scrub_revision_prompts_already_in_draft,
     stage_draft_meets_pass_bar,
     thin_stage_coaching,
 )
@@ -132,6 +132,8 @@ from app.prompts.policy.grounding import (
     looks_likely_factual_mismatch,
     looks_likely_ungrounded_in_book,
     scrub_false_book_absence_claims,
+    scrub_false_synonym_mismatch_claims,
+    student_has_book_aligned_cut_tree_paraphrase,
 )
 from app.prompts.parsers.json_payloads import (
     extract_json_object,
@@ -1814,13 +1816,17 @@ async def _enforce_feedback_book_grounding(
                 reason=(check.reason or "教材摘錄未支持此說法").strip(),
             )
         if check.grounded is False:
-            # For R/I stages, don't downgrade on LLM-checker alone — the checker
+            # For O/R/I stages, don't downgrade on LLM-checker alone — the checker
             # can over-penalise semantic paraphrases. Require heuristic corroboration.
-            if stage_upper in ("R", "I"):
-                heuristic_ri_bad = looks_likely_factual_mismatch(
+            if stage_upper in ("O", "R", "I"):
+                if stage_upper == "O" and student_has_book_aligned_cut_tree_paraphrase(
+                    t, book_pack
+                ):
+                    return ok, missing, suggestions
+                heuristic_bad = looks_likely_factual_mismatch(
                     t, book_pack
                 ) or looks_likely_ungrounded_in_book(t, book_pack, stage=stage)
-                if not heuristic_ri_bad:
+                if not heuristic_bad:
                     return ok, missing, suggestions
             miss = list(missing)
             sug = list(suggestions)
@@ -2156,26 +2162,32 @@ def _maybe_promote_o_pass(
     example: Optional[str],
     rubric_meta: dict[str, Any],
 ) -> tuple[bool, list[str], list[str], Optional[str], dict[str, Any]]:
-    """If O draft already meets level-3 bar, force pass (stop wording-polish loops)."""
+    """If O/R/I/D draft already meets that stage's rubric pass bar, force pass.
+
+    Stops polish /「再補同一句」loops when the draft is already level-3-ready.
+    Does **not** weaken the bar: thin one-liners still fail `stage_draft_meets_pass_bar`
+    and stay not-ok. Book-grounding issues still block promotion.
+    """
     stage_u = (stage or "").strip().upper()
-    if stage_u != "O":
+    if stage_u not in ("O", "R", "I", "D"):
         return ok, missing, suggestions, example, rubric_meta
     if _has_feedback_book_grounding_issue(missing):
         return ok, missing, suggestions, example, rubric_meta
-    if not o_draft_meets_pass_bar(student_text):
+    if not stage_draft_meets_pass_bar(stage_u, student_text):
         return ok, missing, suggestions, example, rubric_meta
 
+    focus_id = {"O": "O1", "R": "R1", "I": "I1", "D": "D1"}[stage_u]
     out = dict(rubric_meta or {})
-    out["rubric_focus"] = "O1"
+    out["rubric_focus"] = focus_id
     rl = out.get("rubric_level_estimate")
-    current = primary_orid_level_from_rubric_meta(out, stage="O")
+    current = primary_orid_level_from_rubric_meta(out, stage=stage_u)
     if current is None or current < 3:
         if isinstance(rl, dict):
             rl = dict(rl)
-            rl["O1"] = "3 達標"
+            rl[focus_id] = "3 達標"
             out["rubric_level_estimate"] = rl
         else:
-            out["rubric_level_estimate"] = {"O1": "3 達標"}
+            out["rubric_level_estimate"] = {focus_id: "3 達標"}
         out["rubric_level_promoted"] = True
     return True, [], [], None, out
 
@@ -3099,6 +3111,13 @@ async def writing_coach_chat(
             missing=fb_missing,
             suggestions=fb_sug,
             book_pack=book_pack,
+            student_text=body,
+        )
+        fb_missing, fb_sug = scrub_false_synonym_mismatch_claims(
+            missing=fb_missing,
+            suggestions=fb_sug,
+            book_pack=book_pack,
+            student_text=body,
         )
         fb_missing, fb_sug, fb_ex = rewrite_grounding_append_suggestions(
             stage=stage_ctx,
@@ -3168,6 +3187,10 @@ async def writing_coach_chat(
             example=fb_ex,
             rubric_meta=fb_rubric,
         )
+        if not fb_ok:
+            fb_missing, fb_sug, fb_ex = scrub_revision_prompts_already_in_draft(
+                stage_ctx, body, fb_missing, fb_sug, fb_ex
+            )
 
         # ── Experimental-group completion path (genai, fb_ok=True) ──────────
         # Hard constraint: only runs when genai_path is True.
@@ -3720,6 +3743,13 @@ async def writing_feedback(
         missing=missing,
         suggestions=suggestions,
         book_pack=book_pack,
+        student_text=text,
+    )
+    missing, suggestions = scrub_false_synonym_mismatch_claims(
+        missing=missing,
+        suggestions=suggestions,
+        book_pack=book_pack,
+        student_text=text,
     )
     missing, suggestions, example = rewrite_grounding_append_suggestions(
         stage=data.stage,
@@ -3785,6 +3815,10 @@ async def writing_feedback(
         example=example,
         rubric_meta=rubric_snap,
     )
+    if not ok:
+        missing, suggestions, example = scrub_revision_prompts_already_in_draft(
+            data.stage, text, missing, suggestions, example
+        )
 
     wf_meta: dict[str, Any] = {
         "condition": condition,

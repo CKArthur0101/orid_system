@@ -318,6 +318,11 @@ _R_FEELING_MARKERS: tuple[str, ...] = (
     "委屈",
     "溫暖",
     "覺得",
+    "心情很糟",
+    "很糟",
+    "討厭",
+    "不喜歡",
+    "心裡怪怪",
 )
 _R_REASON_MARKERS: tuple[str, ...] = ("因為", "讓我", "看得", "想到這")
 _R_SCENE_MARKERS: tuple[str, ...] = (
@@ -960,3 +965,91 @@ def apply_o_key_event_gaps(
 
     return [_child_friendly_text(miss)], [_child_friendly_text(sug)]
 
+
+_QUOTE_SPAN_RE = re.compile(r"「([^」]{2,48})」")
+_COMMON_SCENE_CUES: tuple[str, ...] = (
+    "故意在大家面前大口吃",
+    "在大家面前大口吃",
+    "大口吃甜柿子",
+    "大口吃",
+    "藏進倉庫",
+    "藏到倉庫",
+    "柿子蒂",
+    "砍了樹",
+    "只剩樹樁",
+    "樹樁",
+    "撒種子",
+)
+
+
+def _compact_zh(text: str) -> str:
+    return re.sub(r"\s+", "", text or "")
+
+
+def _revision_text_covered_by_draft(message: str, draft_compact: str) -> bool:
+    """True when a revision prompt is asking for content already present in the draft."""
+    msg = message or ""
+    if not msg or not draft_compact:
+        return False
+    for span in _QUOTE_SPAN_RE.findall(msg):
+        compact_span = _compact_zh(span)
+        if len(compact_span) >= 4 and compact_span in draft_compact:
+            return True
+    for cue in _COMMON_SCENE_CUES:
+        if cue in msg and cue in draft_compact:
+            return True
+    return False
+
+
+def scrub_revision_prompts_already_in_draft(
+    stage: str,
+    student_text: str,
+    missing: list[str],
+    suggestions: list[str],
+    example: str | None = None,
+) -> tuple[list[str], list[str], str | None]:
+    """Rewrite missing/suggestions that re-ask for phrases already in the student draft.
+
+    Used when the draft is still below the stage pass bar (so we keep guiding),
+    but the model keeps pointing at a scene/feeling the student already wrote —
+    the classic 「鬼打牆」 loop. Grounding / book-mismatch missings are left alone.
+    """
+    if missing_looks_book_grounding_priority(missing):
+        return missing, suggestions, example
+
+    draft_compact = _compact_zh(student_text)
+    m0 = (missing[0] if missing else "").strip()
+    s0 = (suggestions[0] if suggestions else "").strip()
+    if not (
+        _revision_text_covered_by_draft(m0, draft_compact)
+        or _revision_text_covered_by_draft(s0, draft_compact)
+    ):
+        return missing, suggestions, example
+
+    stage_u = (stage or "O").strip().upper()
+    new_m, new_s = thin_stage_coaching(stage_u, student_text)
+    if (
+        _revision_text_covered_by_draft(new_m, draft_compact)
+        or _revision_text_covered_by_draft(new_s, draft_compact)
+        or stage_draft_meets_pass_bar(stage_u, student_text)
+    ):
+        # Pass-bar-ready drafts should usually be promoted by the route layer;
+        # if we still land here, nudge a *different* deepening angle without
+        # repeating the same quoted scene.
+        if stage_u == "R":
+            new_m = "你已經有感受、原因和書裡畫面了；若還想加強，用自己的話把「為什麼特別有這種感覺」再說半句就好，不必重寫同一句。"
+            new_s = "哪一個細節最讓你在意？用自己的話說一點就好。"
+        elif stage_u == "I":
+            new_m = "你已經有寫到學到什麼了；若還想加強，用自己的話說明「為什麼這段故事讓你這樣想」，不要重複同一句情節。"
+            new_s = "是哪一個轉折讓你最有感？再補半句理由就好。"
+        elif stage_u == "D":
+            new_m = "你已經有寫到具體行動了；若還想加強，再補「什麼時候／對誰」其中一點即可，不必重寫同一句。"
+            new_s = "這個行動會先發生在什麼場合？或先對誰做？"
+        else:
+            new_m = "請把還沒寫清楚的大事件再補一點，不要重複已經寫過的同一句。"
+            new_s = "哪一段（開頭／中間／結尾）還可以再具體一點？"
+
+    new_ex = example
+    if example and _revision_text_covered_by_draft(example, draft_compact):
+        new_ex = None
+    return [_child_friendly_text(new_m)], [_child_friendly_text(new_s)], new_ex
