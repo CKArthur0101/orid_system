@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { TeacherDashboardHeaderDecor } from "@/components/orid/TeacherDashboardDecor";
+import { ResearchAnalyticsPanel } from "@/components/teacher/ResearchAnalyticsPanel";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 type ClassInfo = {
@@ -199,7 +200,7 @@ export default function TeacherDashboardPage() {
   const [ptSaving, setPtSaving] = useState(false);
   const [writingRubric, setWritingRubric] = useState<WritingRubric>(null);
   const [rubricOpen, setRubricOpen] = useState(false);
-  const [mainTab, setMainTab] = useState<"overview" | "tracking">("overview");
+  const [mainTab, setMainTab] = useState<"overview" | "tracking" | "research">("overview");
   const [trackingRightTab, setTrackingRightTab] = useState<"data" | "records">("data");
   const [chatMessages, setChatMessages] = useState<OridChatLogRow[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
@@ -485,10 +486,10 @@ export default function TeacherDashboardPage() {
       ) : (
         <Tabs
           value={mainTab}
-          onValueChange={(v) => setMainTab(v as "overview" | "tracking")}
+          onValueChange={(v) => setMainTab(v as "overview" | "tracking" | "research")}
           className="relative z-10 space-y-6"
         >
-          <TabsList className="grid w-full max-w-md grid-cols-2 border border-amber-200/80 bg-amber-100/70 p-1">
+          <TabsList className="grid w-full max-w-lg grid-cols-3 border border-amber-200/80 bg-amber-100/70 p-1">
             <TabsTrigger
               value="overview"
               className="rounded-lg data-[state=active]:bg-gradient-to-r data-[state=active]:from-amber-800 data-[state=active]:to-orange-900 data-[state=active]:text-amber-50 data-[state=active]:shadow-sm"
@@ -500,6 +501,12 @@ export default function TeacherDashboardPage() {
               className="rounded-lg data-[state=active]:bg-gradient-to-r data-[state=active]:from-amber-800 data-[state=active]:to-orange-900 data-[state=active]:text-amber-50 data-[state=active]:shadow-sm"
             >
               個人追蹤
+            </TabsTrigger>
+            <TabsTrigger
+              value="research"
+              className="rounded-lg data-[state=active]:bg-gradient-to-r data-[state=active]:from-amber-800 data-[state=active]:to-orange-900 data-[state=active]:text-amber-50 data-[state=active]:shadow-sm"
+            >
+              研究分析
             </TabsTrigger>
           </TabsList>
 
@@ -1034,6 +1041,17 @@ export default function TeacherDashboardPage() {
             ) : (
               <div className="flex h-48 items-center justify-center text-amber-800/60">
                 請選擇一位學生
+              </div>
+            )}
+          </TabsContent>
+
+          {/* ===== TAB: 研究分析 ===== */}
+          <TabsContent value="research" className="space-y-6">
+            {classId ? (
+              <ResearchAnalyticsPanel classId={classId} />
+            ) : (
+              <div className="flex h-48 items-center justify-center text-amber-800/60">
+                請先選擇班級
               </div>
             )}
           </TabsContent>

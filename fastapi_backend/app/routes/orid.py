@@ -77,6 +77,13 @@ from app.services.orid_badges import (
     stages_passed_from_writing_obj,
     update_session_score_snapshot,
 )
+from app.services.orid_research_summary import (
+    bump_guide_use,
+    bump_save_and_maybe_revision,
+    mark_submitted,
+    sync_badges,
+    sync_scores,
+)
 from app.prompts.policy.student_input_bucket import (
     classify_student_input,
     skip_book_grounding_enforcement,
@@ -2922,9 +2929,13 @@ async def record_prompt_usage(
             prompt_view_count=new_prompt_total,
             used_feedback_or_prompt=True,
         )
-        await db.commit()
 
     all_earned = list(set(prev_badges + current_badges))
+    # Control group: viewing a fixed prompt/hint counts as one "guide use" per call.
+    await bump_guide_use(db, user_id=user.id, week=week, session_id=session.id, amount=data.prompt_view_count)
+    await sync_badges(db, user_id=user.id, week=week, session_id=session.id, badge_count=len(all_earned))
+    await db.commit()
+
     return PromptUsageResponse(
         prompt_view_count=new_prompt_total,
         earnedBadges=all_earned,
@@ -3379,6 +3390,7 @@ async def writing_coach_chat(
         coach_meta["feedback_round"] = syn_round
         if reading_ex:
             coach_meta["reading_excerpt_injected"] = True
+        await bump_guide_use(db, user_id=user.id, week=data.week, session_id=session.id, amount=1)
     else:
         if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
             ai_reply = format_control_free_text_reply(stage_ctx)
@@ -3431,6 +3443,11 @@ async def writing_coach_chat(
     badge_meta: dict[str, Any] = {}
     rubric_levels_snapshot: dict[str, int] = {}
     if source == "feedback_button":
+        # Research summary: "取得回饋" was used regardless of ok/not-ok outcome
+        # below — counts as one guiding-resource use for the experimental group.
+        # Committed independently so it persists even if scoring/badges below fail.
+        await bump_guide_use(db, user_id=user.id, week=data.week, session_id=session.id, amount=1)
+        await db.commit()
         try:
             week_num = getattr(session, "book_unit", None)
             try:
@@ -3537,8 +3554,25 @@ async def writing_coach_chat(
                         week=week_num,
                         total_score=total_score_int,
                     )
-                if new_badges or total_score_int is not None:
-                    await db.commit()
+                # Research summary keyed by the real academic week (1–6) from
+                # the request, not `week_num` (book_unit) used by the badge table above.
+                await sync_scores(
+                    db,
+                    user_id=user.id,
+                    week=data.week,
+                    session_id=session.id,
+                    orid_score=score_result.get("oridSubtotal") if score_result else None,
+                    sel_score=score_result.get("selSubtotal") if score_result else None,
+                    total_score=total_score_int,
+                )
+                await sync_badges(
+                    db,
+                    user_id=user.id,
+                    week=data.week,
+                    session_id=session.id,
+                    badge_count=len(set(prev_badges + current_badges)),
+                )
+                await db.commit()
             except Exception:
                 logger.exception(
                     "badge/score persistence failed",
@@ -3882,6 +3916,22 @@ async def create_writing(
 
     res = await db.execute(ins)
     w = res.scalar_one()
+
+    writing_obj = ensure_orid_writing_obj(
+        raw_content=content_str,
+        week=data.week,
+        empty_factory=_ensure_orid_writing_v1,
+    )
+    await bump_save_and_maybe_revision(
+        db,
+        user_id=user.id,
+        week=data.week,
+        session_id=data.session_id,
+        writing_obj=writing_obj,
+    )
+    if data.save_intent == "submit":
+        await mark_submitted(db, user_id=user.id, week=data.week, session_id=data.session_id)
+
     await db.commit()
     return w
 

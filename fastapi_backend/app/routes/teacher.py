@@ -25,6 +25,7 @@ from app.models import (
     OridFeedbackEvent,
     OridPostTestScore,
     OridBadgeEvent,
+    OridWeeklyResearchSummary,
 )
 from app.schemas import (
     OridMessageRead,
@@ -34,6 +35,12 @@ from app.schemas import (
     TeacherStudentSummary,
     PostTestScoreUpsert,
     PostTestScoreRead,
+    TeacherResearchOverview,
+    ResearchSummaryCards,
+    ResearchGroupComparisonRow,
+    ResearchWeeklyTrendPoint,
+    ResearchCompletionDistribution,
+    ResearchStudentRow,
 )
 from app.users import current_active_user
 
@@ -981,6 +988,256 @@ async def export_class_csv(
 
     output.seek(0)
     filename = f"class_{classroom.name}_week{week}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv; charset=utf-8-sig",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ── Research dashboard (ORID Teacher Research MVP) ──────────────────────────
+# Built on OridWeeklyResearchSummary (one row per student × week × session).
+# Separate from the monitoring overview/export above — does not replace them.
+
+def _avg(values: list[float]) -> float:
+    return round(sum(values) / len(values), 2) if values else 0.0
+
+
+def _avg_or_none(values: list[float]) -> float | None:
+    return round(sum(values) / len(values), 2) if values else None
+
+
+async def teacher_research_overview(
+    class_id: UUID,
+    week: int | None,
+    db: AsyncSession,
+    user: User,
+) -> TeacherResearchOverview:
+    class_ids = await _get_allowed_class_ids(db, user)
+    if class_id not in class_ids:
+        raise HTTPException(status_code=403, detail="Class not assigned")
+
+    class_row = await db.execute(select(ClassRoom).where(ClassRoom.id == class_id))
+    classroom = class_row.scalars().first()
+    if not classroom:
+        raise HTTPException(status_code=404, detail="Class not found")
+
+    student_res = await db.execute(
+        select(User)
+        .join(StudentClassMembership, StudentClassMembership.student_id == User.id)
+        .where(StudentClassMembership.class_id == class_id)
+        .order_by(User.email.asc())
+    )
+    students = student_res.scalars().all()
+    student_ids = [s.id for s in students]
+    student_by_id = {s.id: s for s in students}
+
+    if not students:
+        return TeacherResearchOverview(
+            class_id=classroom.id,
+            class_name=classroom.name,
+            week=week,
+            summary_cards=ResearchSummaryCards(
+                total_students=0, experimental_count=0, control_count=0,
+                submitted_count=0, submission_rate=0.0, avg_guide_use_count=0.0,
+                avg_total_score=None,
+            ),
+            group_comparison=[],
+            weekly_trends=[],
+            completion_distribution=ResearchCompletionDistribution(submitted=0, not_submitted=0),
+            student_rows=[],
+        )
+
+    experimental_count = sum(1 for s in students if (s.orid_condition or "experimental") != "control")
+    control_count = len(students) - experimental_count
+
+    # Rows in scope for cards / group comparison / completion / student table.
+    # `week=None` means "aggregated across weeks 1–6" (each student-week row is
+    # one data point) — weekly_trends below always spans all 6 weeks regardless.
+    scope_stmt = select(OridWeeklyResearchSummary).where(
+        OridWeeklyResearchSummary.user_id.in_(student_ids)
+    )
+    if week is not None:
+        scope_stmt = scope_stmt.where(OridWeeklyResearchSummary.week == week)
+    scope_rows = (await db.execute(scope_stmt)).scalars().all()
+
+    total_rows = len(scope_rows)
+    submitted_count = sum(1 for r in scope_rows if r.is_submitted)
+    total_scores = [r.total_score for r in scope_rows if r.total_score is not None]
+
+    summary_cards = ResearchSummaryCards(
+        total_students=len(students),
+        experimental_count=experimental_count,
+        control_count=control_count,
+        submitted_count=submitted_count,
+        submission_rate=round(submitted_count / total_rows, 4) if total_rows else 0.0,
+        avg_guide_use_count=_avg([r.guide_use_count for r in scope_rows]),
+        avg_total_score=_avg_or_none(total_scores),
+    )
+
+    group_comparison: list[ResearchGroupComparisonRow] = []
+    for cond in ("experimental", "control"):
+        cond_rows = [r for r in scope_rows if (r.condition or "experimental") == cond]
+        cond_submitted = sum(1 for r in cond_rows if r.is_submitted)
+        group_comparison.append(
+            ResearchGroupComparisonRow(
+                condition=cond,
+                student_count=len({r.user_id for r in cond_rows}),
+                avg_word_count=_avg([r.word_count for r in cond_rows]),
+                avg_revision_count=_avg([r.revision_count for r in cond_rows]),
+                avg_guide_use_count=_avg([r.guide_use_count for r in cond_rows]),
+                avg_badge_count=_avg([r.badge_count for r in cond_rows]),
+                avg_orid_score=_avg_or_none([r.orid_score for r in cond_rows if r.orid_score is not None]),
+                avg_sel_score=_avg_or_none([r.sel_score for r in cond_rows if r.sel_score is not None]),
+                avg_total_score=_avg_or_none([r.total_score for r in cond_rows if r.total_score is not None]),
+                submission_rate=round(cond_submitted / len(cond_rows), 4) if cond_rows else 0.0,
+            )
+        )
+
+    trend_res = await db.execute(
+        select(OridWeeklyResearchSummary).where(OridWeeklyResearchSummary.user_id.in_(student_ids))
+    )
+    trend_rows = trend_res.scalars().all()
+    weekly_trends: list[ResearchWeeklyTrendPoint] = []
+    for wk in range(1, 7):
+        for cond in ("experimental", "control"):
+            rows = [r for r in trend_rows if r.week == wk and (r.condition or "experimental") == cond]
+            if not rows:
+                continue
+            weekly_trends.append(
+                ResearchWeeklyTrendPoint(
+                    week=wk,
+                    condition=cond,
+                    avg_word_count=_avg([r.word_count for r in rows]),
+                    avg_revision_count=_avg([r.revision_count for r in rows]),
+                    avg_guide_use_count=_avg([r.guide_use_count for r in rows]),
+                    avg_badge_count=_avg([r.badge_count for r in rows]),
+                    avg_orid_score=_avg_or_none([r.orid_score for r in rows if r.orid_score is not None]),
+                    avg_sel_score=_avg_or_none([r.sel_score for r in rows if r.sel_score is not None]),
+                    avg_total_score=_avg_or_none([r.total_score for r in rows if r.total_score is not None]),
+                    student_count=len({r.user_id for r in rows}),
+                )
+            )
+
+    completion_distribution = ResearchCompletionDistribution(
+        submitted=submitted_count,
+        not_submitted=total_rows - submitted_count,
+    )
+
+    student_rows_out: list[ResearchStudentRow] = [
+        ResearchStudentRow(
+            student_id=r.user_id,
+            student_email=student_by_id[r.user_id].email,
+            student_display_name=_student_ui_name(student_by_id[r.user_id]),
+            condition=r.condition or "experimental",
+            week=r.week,
+            task_type=r.task_type,
+            word_count=r.word_count,
+            save_count=r.save_count,
+            revision_count=r.revision_count,
+            guide_use_count=r.guide_use_count,
+            badge_count=r.badge_count,
+            orid_score=r.orid_score,
+            sel_score=r.sel_score,
+            total_score=r.total_score,
+            is_submitted=r.is_submitted,
+        )
+        for r in scope_rows
+        if r.user_id in student_by_id
+    ]
+    student_rows_out.sort(key=lambda row: (row.student_email, row.week))
+
+    return TeacherResearchOverview(
+        class_id=classroom.id,
+        class_name=classroom.name,
+        week=week,
+        summary_cards=summary_cards,
+        group_comparison=group_comparison,
+        weekly_trends=weekly_trends,
+        completion_distribution=completion_distribution,
+        student_rows=student_rows_out,
+    )
+
+
+@router.get("/classes/{class_id}/research-overview", response_model=TeacherResearchOverview)
+async def get_teacher_research_overview(
+    class_id: UUID,
+    week: int | None = Query(None, ge=1, le=6),
+    db: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_active_user),
+):
+    """Research-analysis data for the "研究分析" tab: guiding-method (condition)
+    vs. writing engagement/revision, built from OridWeeklyResearchSummary.
+    `week` omitted → aggregated across weeks 1–6 (weekly_trends always spans
+    all 6 weeks regardless, since that is its purpose)."""
+    return await teacher_research_overview(class_id, week, db, user)
+
+
+@router.get("/classes/{class_id}/research-export")
+async def export_research_csv(
+    class_id: UUID,
+    week: int | None = Query(None, ge=1, le=6),
+    db: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_active_user),
+):
+    """Download a research CSV (one row per student × week) for the
+    "研究分析" tab. Separate from /classes/{class_id}/export (monitoring)."""
+    class_ids = await _get_allowed_class_ids(db, user)
+    if class_id not in class_ids:
+        raise HTTPException(status_code=403, detail="Class not assigned")
+
+    class_row = await db.execute(select(ClassRoom).where(ClassRoom.id == class_id))
+    classroom = class_row.scalars().first()
+    if not classroom:
+        raise HTTPException(status_code=404, detail="Class not found")
+
+    overview = await teacher_research_overview(class_id, week, db, user)
+
+    student_ids = [row.student_id for row in overview.student_rows]
+    earned_badges_by_student: dict[UUID, str] = {}
+    if student_ids:
+        badge_res = await db.execute(
+            select(OridBadgeEvent.user_id, OridBadgeEvent.badge_id)
+            .where(OridBadgeEvent.user_id.in_(student_ids))
+        )
+        badges_by_student: dict[UUID, set[str]] = {}
+        for uid, badge_id in badge_res.all():
+            badges_by_student.setdefault(uid, set()).add(badge_id)
+        for uid, badge_ids in badges_by_student.items():
+            order = ["badge_start", "badge_30", "badge_60", "badge_90"]
+            ordered = [b for b in order if b in badge_ids]
+            earned_badges_by_student[uid] = "|".join(ordered)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "student_email", "student_name", "condition", "week", "task_type",
+        "word_count", "save_count", "revision_count", "guide_use_count",
+        "badge_count", "earned_badges", "orid_score", "sel_score", "total_score",
+        "is_submitted",
+    ])
+    for row in overview.student_rows:
+        writer.writerow([
+            row.student_email,
+            row.student_display_name,
+            row.condition,
+            row.week,
+            row.task_type or "",
+            row.word_count,
+            row.save_count,
+            row.revision_count,
+            row.guide_use_count,
+            row.badge_count,
+            earned_badges_by_student.get(row.student_id, ""),
+            row.orid_score if row.orid_score is not None else "",
+            row.sel_score if row.sel_score is not None else "",
+            row.total_score if row.total_score is not None else "",
+            _csv_bool(row.is_submitted),
+        ])
+
+    output.seek(0)
+    week_label = str(week) if week is not None else "all"
+    filename = f"research_{classroom.name}_week{week_label}.csv"
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv; charset=utf-8-sig",

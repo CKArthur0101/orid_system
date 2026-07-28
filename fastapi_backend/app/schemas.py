@@ -398,6 +398,10 @@ class OridWritingCreate(BaseModel):
     session_id: UUID
     week: int
     content: str
+    # "submit" only when the student explicitly submits ("提交我的寫作");
+    # omitted/"draft" covers autosave and the "儲存草稿" button — matches
+    # existing behavior where drafts and submissions share the same upsert.
+    save_intent: str = Field("draft", pattern="^(draft|submit)$")
 
 
 # ✅ 更新 writing 用（PUT）
@@ -525,3 +529,76 @@ class PostTestScoreRead(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ----------------------------
+# Teacher research dashboard (ORID Teacher Research MVP)
+# ----------------------------
+class ResearchSummaryCards(BaseModel):
+    total_students: int
+    experimental_count: int
+    control_count: int
+    submitted_count: int
+    submission_rate: float
+    avg_guide_use_count: float
+    avg_total_score: float | None = None
+
+
+class ResearchGroupComparisonRow(BaseModel):
+    condition: str  # experimental / control
+    student_count: int
+    avg_word_count: float
+    avg_revision_count: float
+    avg_guide_use_count: float
+    avg_badge_count: float
+    avg_orid_score: float | None = None
+    avg_sel_score: float | None = None
+    avg_total_score: float | None = None
+    submission_rate: float
+
+
+class ResearchWeeklyTrendPoint(BaseModel):
+    week: int
+    condition: str
+    avg_word_count: float
+    avg_revision_count: float
+    avg_guide_use_count: float
+    avg_badge_count: float
+    avg_orid_score: float | None = None
+    avg_sel_score: float | None = None
+    avg_total_score: float | None = None
+    student_count: int
+
+
+class ResearchCompletionDistribution(BaseModel):
+    submitted: int
+    not_submitted: int
+
+
+class ResearchStudentRow(BaseModel):
+    student_id: UUID
+    student_email: str
+    student_display_name: str
+    condition: str
+    week: int
+    task_type: str | None = None
+    word_count: int
+    save_count: int
+    revision_count: int
+    guide_use_count: int
+    badge_count: int
+    orid_score: float | None = None
+    sel_score: float | None = None
+    total_score: int | None = None
+    is_submitted: bool
+
+
+class TeacherResearchOverview(BaseModel):
+    class_id: UUID
+    class_name: str
+    week: int | None = None  # None = aggregated across weeks 1–6
+    summary_cards: ResearchSummaryCards
+    group_comparison: list[ResearchGroupComparisonRow]
+    weekly_trends: list[ResearchWeeklyTrendPoint]
+    completion_distribution: ResearchCompletionDistribution
+    student_rows: list[ResearchStudentRow]

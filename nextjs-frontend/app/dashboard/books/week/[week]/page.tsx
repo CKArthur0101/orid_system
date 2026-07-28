@@ -1289,6 +1289,7 @@ export default function WeekBookPage() {
           session_id: sessionId,
           week: weekNum,
           content,
+          save_intent: "submit",
         }),
       });
 

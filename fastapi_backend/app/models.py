@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, Text, func, String, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, Text, func, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy.orm import DeclarativeBase
@@ -236,3 +236,51 @@ class OridBadgeEvent(Base):
     used_feedback_or_prompt = Column(Boolean, nullable=False, default=False)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class OridWeeklyResearchSummary(Base):
+    """One row per user per week per session: research-oriented counters for the
+    teacher research dashboard (guiding-method vs. writing engagement/revision).
+
+    Populated/updated by a small set of existing hook points (writing save/submit,
+    AI feedback, control prompt usage, badge events, rubric scoring) — this is a
+    coarse per-week summary, NOT a clickstream/event log. `condition` and
+    `class_id` are snapshotted at first-write time and are not retroactively
+    rewritten if a student's group assignment changes later.
+    """
+
+    __tablename__ = "orid_weekly_research_summaries"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "week", "session_id",
+            name="uq_orid_weekly_research_user_week_session",
+        ),
+        Index("ix_orid_weekly_research_class_week", "class_id", "week"),
+        Index("ix_orid_weekly_research_condition_week", "condition", "week"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False, index=True)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("orid_sessions.id"), nullable=False)
+    class_id = Column(UUID(as_uuid=True), ForeignKey("classes.id"), nullable=True)
+
+    week = Column(Integer, nullable=False)           # 1–6
+    task_type = Column(String(32), nullable=True)     # orid_stage (odd) / synthesis (even)
+    condition = Column(String(16), nullable=False, default="experimental")  # snapshot of User.orid_condition
+
+    word_count = Column(Integer, nullable=False, default=0)
+    save_count = Column(Integer, nullable=False, default=0)
+    revision_count = Column(Integer, nullable=False, default=0)
+    guide_use_count = Column(Integer, nullable=False, default=0)
+    badge_count = Column(Integer, nullable=False, default=0)
+
+    orid_score = Column(Float, nullable=True)
+    sel_score = Column(Float, nullable=True)
+    total_score = Column(Integer, nullable=True)
+
+    is_submitted = Column(Boolean, nullable=False, default=False)
+    # Internal-only, for revision-change detection — never exposed via API/CSV.
+    content_fingerprint = Column(String(64), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
