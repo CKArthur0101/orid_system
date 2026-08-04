@@ -121,7 +121,11 @@ export function WritingPromptHelper({
             </p>
           </div>
           <p className="mt-3 text-[10px] text-amber-900/50 md:text-[11px]">
-            {atEnd ? "看完提示了嗎？可以回到左邊開始寫作喔！" : "想好了就按「下一步」"}
+            {atEnd
+              ? synthesisMode
+                ? "看完提示了嗎？可以到中間大框開始寫，並對一下清單喔！"
+                : "看完提示了嗎？可以回到左邊開始寫作喔！"
+              : "想好了就按「下一步」"}
           </p>
         </div>
       </div>

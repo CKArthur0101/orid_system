@@ -20,7 +20,9 @@ export function BadgeModal({ badgeId, onClose }: BadgeModalProps) {
         ? "銅"
         : badgeId === "badge_60"
           ? "銀"
-          : "金";
+          : badgeId === "badge_90"
+            ? "金"
+            : "整";
 
   return (
     <div

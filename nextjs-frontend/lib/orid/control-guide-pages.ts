@@ -104,25 +104,23 @@ export function getControlGuidePages(stage: StageKey): ControlGuidePage[] {
 }
 
 const SYNTHESIS_ORID = [
-  "故事裡讓我印象最深的是……",
-  "看到這件事時，我覺得……，因為……",
-  "這讓我想到……",
-  "我從這個故事學到……",
-  "以後如果我遇到類似的情況，我會……",
+  "先寫開頭：故事裡讓我印象最深的是……",
+  "再接感受：看到這件事時，我覺得……，因為……",
+  "再寫體會：這讓我想到……／我學到……",
+  "最後寫行動：以後如果遇到類似情況，我會……",
 ];
 
 const SYNTHESIS_SEL = [
-  "你上週的 O 有提到哪個重要情節？可以用那個當開頭。",
-  "你上週的 R 寫了什麼感受？可以用連接詞接到感受那一句。",
-  "你上週的 I 有沒有體會或想法？可以寫「這讓我想到……」。",
-  "你上週的 D 有沒有說要怎麼做？記得在結尾補上具體的行動。",
-  "整合時，記得把「觀察 → 感受 → 想法 → 行動」接起來。",
+  "對一下清單：有故事裡的事了嗎？",
+  "有寫感受和原因了嗎？",
+  "有寫學到或想到什麼了嗎？",
+  "有寫以後會怎麼做了嗎？句子有接起來嗎？",
 ];
 
 export function getSynthesisGuidePages(): ControlGuidePage[] {
   return interleavePages(SYNTHESIS_ORID, SYNTHESIS_SEL, "I").map((page) =>
     page.track === "orid"
-      ? { ...page, badge: "✏️ 整合句型" }
-      : { ...page, badge: "📖 上週回顧" },
+      ? { ...page, badge: "✏️ 一步一步寫" }
+      : { ...page, badge: "✓ 寫之前對一下" },
   );
 }

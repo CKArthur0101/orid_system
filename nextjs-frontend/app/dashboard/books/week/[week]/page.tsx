@@ -1200,6 +1200,21 @@ export default function WeekBookPage() {
       appendAiReply(data?.ai_reply, "ALL");
       const savedId = String(data?.meta?.saved_to_writing_id ?? "");
       if (isUuid(savedId)) setWritingId(savedId);
+
+      const meta = data?.meta ?? {};
+      if (Array.isArray(meta.earnedBadges)) {
+        const merged = Array.from(
+          new Set([...earnedBadges, ...(meta.earnedBadges as BadgeId[])]),
+        ) as BadgeId[];
+        const newOnes: BadgeId[] = Array.isArray(meta.newlyEarnedBadges)
+          ? (meta.newlyEarnedBadges as BadgeId[])
+          : getNewlyEarnedBadges(earnedBadges, merged);
+        setEarnedBadges(merged);
+        if (newOnes.length > 0) {
+          setBadgeModalQueue((prev) => [...prev, ...newOnes.filter((b) => !prev.includes(b))]);
+        }
+        await persistWritingSnapshot(writingData, totalScore, merged);
+      }
     } catch (e: any) {
       setFbError(e?.message ?? "整合回饋失敗");
     } finally {
@@ -1213,7 +1228,9 @@ export default function WeekBookPage() {
 
   async function runPromptUsage() {
     if (!sessionId) return;
-    const wordCount = String(writingData.stages[focusStage]?.d1 ?? "").trim().length;
+    const wordCount = isEvenWeek(weekNum)
+      ? String(writingData.synthesis_draft ?? "").trim().length
+      : String(writingData.stages[focusStage]?.d1 ?? "").trim().length;
     try {
       const r = await fetch("/api/orid/prompt-usage", {
         method: "POST",
@@ -1606,7 +1623,7 @@ export default function WeekBookPage() {
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2">
               <textarea
                 className="min-h-0 w-full flex-1 resize-none rounded-xl border border-amber-100 bg-[#fffcf7] p-2.5 text-base leading-relaxed outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-300/30 md:p-3 md:text-sm lg:text-base"
-                placeholder="把上週的 O、R、I、D 接起來，寫成一篇完整反思短文……"
+                placeholder="依序寫：故事裡的事 → 感受與原因 → 學到什麼 → 以後會怎麼做……"
                 value={writingData.synthesis_draft ?? ""}
                 onChange={(e) =>
                   setWritingData((prev) => ({

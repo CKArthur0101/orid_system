@@ -65,9 +65,27 @@ BADGE_CONFIG: dict[str, dict] = {
         "modal_title": "恭喜獲得松果金徽章！",
         "modal_text": "太棒了！你已經把觀察、感受、體會和行動都寫完了。",
     },
+    # Even-week integration task. Independent track from badge_30/60/90
+    # (which are O/R/I/D stage-progress only) — rewards starting the
+    # integrated draft and using the synthesis guide/AI feedback at least
+    # once, not passing any ORID rubric bar.
+    "badge_synthesis_start": {
+        "id": "badge_synthesis_start",
+        "name": "整合下筆章",
+        "description": (
+            "在「整合寫作」框裡寫幾句，並按一次「取得整合回饋」（或看一次整合寫作提示），"
+            "就可以獲得。"
+        ),
+        "earned_description": "已獲得：你已經開始把上週的想法收成一篇，也問過小幫手了！",
+        "modal_title": "恭喜獲得整合下筆章！",
+        "modal_text": (
+            "你已經開始把上週的觀察、感受、體會和行動收成一篇文章，也使用了整合寫作的引導。"
+            "接下來可以照建議調整一個地方，讓文章更順。"
+        ),
+    },
 }
 
-BADGE_ORDER = ["badge_start", "badge_30", "badge_60", "badge_90"]
+BADGE_ORDER = ["badge_start", "badge_30", "badge_60", "badge_90", "badge_synthesis_start"]
 
 _STAGE_KEYS = ("O", "R", "I", "D")
 
@@ -158,6 +176,21 @@ def calculate_earned_badges(
         earned.append("badge_90")
 
     return earned
+
+
+def calculate_earned_synthesis_badge(
+    *,
+    has_synthesis_content: bool,
+    has_used_synthesis_guide: bool,
+) -> list[str]:
+    """Even-week integration badge — independent of the O/R/I/D stage track.
+
+    Rewards starting the integrated draft and using the synthesis guide/AI
+    feedback at least once (does not require passing any ORID rubric bar).
+    """
+    if has_synthesis_content and has_used_synthesis_guide:
+        return ["badge_synthesis_start"]
+    return []
 
 
 def get_new_badges(

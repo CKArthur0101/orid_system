@@ -69,6 +69,7 @@ from app.services.orid_rubric_scoring import (
 )
 from app.services.orid_badges import (
     calculate_earned_badges,
+    calculate_earned_synthesis_badge,
     get_new_badges,
     get_earned_badges_from_db,
     load_session_progress,
@@ -2901,29 +2902,39 @@ async def record_prompt_usage(
 
     # Badge evaluation (control: stage progress by saved content)
     has_content = bool(word_count and word_count > 0)
+    is_synthesis_week = week % 2 == 0
     stages_passed: set[str] = set()
-    try:
-        writing_raw = await _fetch_latest_writing_content_for_week(
-            db, user.id, session.id, week
+    current_badges: list[str] = []
+    if is_synthesis_week:
+        # Even-week integration badge — independent of the O/R/I/D stage
+        # track; rewards starting the integrated draft + viewing the guide.
+        current_badges = calculate_earned_synthesis_badge(
+            has_synthesis_content=has_content,
+            has_used_synthesis_guide=True,
         )
-        if writing_raw:
-            writing_obj = ensure_orid_writing_obj(
-                raw_content=writing_raw,
-                week=week,
-                empty_factory=_ensure_orid_writing_v1,
+    else:
+        try:
+            writing_raw = await _fetch_latest_writing_content_for_week(
+                db, user.id, session.id, week
             )
-            stages_passed = stages_passed_from_writing_obj(writing_obj, mode="content")
-    except Exception:
-        logger.warning("prompt-usage stage progress lookup failed", exc_info=True)
-    if has_content and stage in ("O", "R", "I", "D"):
-        stages_passed.add(stage)
+            if writing_raw:
+                writing_obj = ensure_orid_writing_obj(
+                    raw_content=writing_raw,
+                    week=week,
+                    empty_factory=_ensure_orid_writing_v1,
+                )
+                stages_passed = stages_passed_from_writing_obj(writing_obj, mode="content")
+        except Exception:
+            logger.warning("prompt-usage stage progress lookup failed", exc_info=True)
+        if has_content and stage in ("O", "R", "I", "D"):
+            stages_passed.add(stage)
+        current_badges = calculate_earned_badges(
+            has_writing_content=has_content,
+            has_used_feedback_or_prompt=True,
+            stages_passed=stages_passed,
+        )
 
     prev_badges = await get_earned_badges_from_db(db, user_id=user.id, session_id=session.id, week=week)
-    current_badges = calculate_earned_badges(
-        has_writing_content=has_content,
-        has_used_feedback_or_prompt=True,
-        stages_passed=stages_passed,
-    )
     new_badges = get_new_badges(prev_badges, current_badges)
     if new_badges:
         await record_badge_events(
@@ -2932,7 +2943,7 @@ async def record_prompt_usage(
             session_id=session.id,
             reading_id=session.reading_id,
             week=week,
-            task_type="orid_stage",
+            task_type="synthesis" if is_synthesis_week else "orid_stage",
             condition=session.condition,
             new_badge_ids=new_badges,
             total_score=None,
@@ -3391,6 +3402,7 @@ async def writing_coach_chat(
             feedback_round=syn_round,
             reading_excerpt=reading_ex,
             synthesis_clarify=syn_clarify,
+            student_text=body,
         )
         hist_syn: list[dict[str, str]] = []
         for m in msgs[-ORID_HISTORY_LIMIT:]:
@@ -3614,6 +3626,52 @@ async def writing_coach_chat(
             score_result = {}
             badge_meta = {}
             rubric_levels_snapshot = {}
+    elif source == "synthesis_feedback":
+        # Even-week integration badge only — independent of the O/R/I/D
+        # stage-progress track (badge_30/60/90). Rewards starting the
+        # integrated draft + using the synthesis guide/AI feedback once.
+        try:
+            week_num = getattr(session, "book_unit", None)
+            try:
+                week_num = int(week_num or 1)
+            except (ValueError, TypeError):
+                week_num = 1
+
+            prev_badges = await get_earned_badges_from_db(
+                db, user_id=user.id, session_id=session.id, week=week_num
+            )
+            current_synth_badges = calculate_earned_synthesis_badge(
+                has_synthesis_content=bool(body),
+                has_used_synthesis_guide=True,
+            )
+            new_synth_badges = get_new_badges(prev_badges, current_synth_badges)
+            if new_synth_badges:
+                await record_badge_events(
+                    db,
+                    user_id=user.id,
+                    session_id=session.id,
+                    reading_id=session.reading_id,
+                    week=week_num,
+                    task_type="synthesis",
+                    condition=condition,
+                    new_badge_ids=new_synth_badges,
+                    total_score=None,
+                    word_count=len(body) if body else 0,
+                    feedback_count=1,
+                    prompt_view_count=0,
+                    used_feedback_or_prompt=True,
+                )
+                await db.commit()
+            badge_meta = {
+                "earnedBadges": list(set(prev_badges + current_synth_badges)),
+                "newlyEarnedBadges": new_synth_badges,
+            }
+        except Exception:
+            logger.exception(
+                "synthesis badge block failed; returning chat reply without badge meta",
+                extra={"session_id": str(session.id)},
+            )
+            badge_meta = {}
 
     coach_meta.update(
         {

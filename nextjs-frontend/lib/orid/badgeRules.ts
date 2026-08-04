@@ -3,7 +3,12 @@
  * Tooltip and modal copy is centralised here.
  */
 
-export type BadgeId = "badge_start" | "badge_30" | "badge_60" | "badge_90";
+export type BadgeId =
+  | "badge_start"
+  | "badge_30"
+  | "badge_60"
+  | "badge_90"
+  | "badge_synthesis_start";
 
 export type OridStageKey = "O" | "R" | "I" | "D";
 
@@ -22,7 +27,13 @@ export interface BadgeConfig {
   svgPath: string;
 }
 
-export const BADGE_ORDER: BadgeId[] = ["badge_start", "badge_30", "badge_60", "badge_90"];
+export const BADGE_ORDER: BadgeId[] = [
+  "badge_start",
+  "badge_30",
+  "badge_60",
+  "badge_90",
+  "badge_synthesis_start",
+];
 
 export const BADGE_CONFIG: Record<BadgeId, BadgeConfig> = {
   badge_start: {
@@ -63,6 +74,18 @@ export const BADGE_CONFIG: Record<BadgeId, BadgeConfig> = {
     modalTitle: "恭喜獲得松果金徽章！",
     modalText: "太棒了！你已經把觀察、感受、體會和行動都寫完了。",
     svgPath: "/images/orid/badges/badge_90.svg",
+  },
+  // Even-week integration task badge — independent track from badge_30/60/90.
+  badge_synthesis_start: {
+    id: "badge_synthesis_start",
+    name: "整合下筆章",
+    unlockHint:
+      "在「整合寫作」框裡寫幾句，並按一次「取得整合回饋」（或看一次整合寫作提示），就可以獲得。",
+    earnedHint: "已獲得：你已經開始把上週的想法收成一篇，也問過小幫手了！",
+    modalTitle: "恭喜獲得整合下筆章！",
+    modalText:
+      "你已經開始把上週的觀察、感受、體會和行動收成一篇文章，也使用了整合寫作的引導。接下來可以照建議調整一個地方，讓文章更順。",
+    svgPath: "/images/orid/badges/badge_start.svg",
   },
 };
 
@@ -144,6 +167,17 @@ export function calculateEarnedBadges(input: BadgeEvalInput): BadgeId[] {
     earned.push("badge_90");
   }
   return earned;
+}
+
+/** Even-week integration badge — independent of the O/R/I/D stage track. */
+export function calculateEarnedSynthesisBadge(input: {
+  hasSynthesisContent: boolean;
+  hasUsedSynthesisGuide: boolean;
+}): BadgeId[] {
+  if (input.hasSynthesisContent && input.hasUsedSynthesisGuide) {
+    return ["badge_synthesis_start"];
+  }
+  return [];
 }
 
 /** Return badges in current that are NOT in previous. */

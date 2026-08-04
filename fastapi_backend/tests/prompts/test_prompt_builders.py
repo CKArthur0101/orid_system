@@ -361,11 +361,12 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "小華" in synthesis_system
     assert "先檢查段落銜接" in synthesis_system
     assert "你已經做到：" in synthesis_system
-    assert "你可以再加強：" in synthesis_system
-    assert "試試看這樣寫：" in synthesis_system
+    assert "再想一想：" in synthesis_system
+    assert "可以這樣修改：" in synthesis_system
     # 可選 meta 仍會插入中段；預設不傳時僅有 playbook 內建「三段標題」與週一區塊，無【學生自填閱讀心得】中段
     assert "【學生自填閱讀心得" not in synthesis_system
     assert "【當前寫作階段】" not in synthesis_system
+    assert "【偵測】" not in synthesis_system
 
     syn_layered = build_synthesis_coach_system_prompt(
         book_context=build_book_context_block(_book_pack()),
@@ -388,6 +389,47 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "教材事實核對器" in checker_system
     assert "BOOK_CONTEXT" in checker_system
     assert "學生句子" in checker_user
+
+
+def test_synthesis_pasted_stage_paragraphs_detection():
+    """複製 O/R/I/D 按鈕直接貼上（未加銜接語）應被偵測到，觸發連貫性優先提示。"""
+    from app.prompts.builders.coach_chat import looks_like_pasted_stage_paragraphs
+
+    week1_lines = {
+        "O": "阿松爺爺一開始都不分享柿子，總是自己吃掉一些柿子",
+        "R": "因為看到阿松爺爺打抱不平，凶巴巴的把老爺爺趕跑",
+        "I": "這件事讓我學到，獨自吃東西沒有和大家一起分享有趣",
+        "D": "下次我遇到有好東西的時候，也想跟朋友分享",
+    }
+    pasted_draft = "\n".join(week1_lines.values())
+    assert looks_like_pasted_stage_paragraphs(pasted_draft, week1_lines) is True
+
+    # A freshly written synthesis paragraph (not verbatim copies) must not trigger it.
+    written_draft = (
+        "故事中阿松爺爺很自私，我覺得很生氣。後來大家決定要一起分享，"
+        "我學到分享比獨占快樂。下次我也想試著分享。"
+    )
+    assert looks_like_pasted_stage_paragraphs(written_draft, week1_lines) is False
+
+    # No Week-1 reference lines available (e.g. empty week1) — can't detect, default False.
+    assert looks_like_pasted_stage_paragraphs(pasted_draft, None) is False
+    assert looks_like_pasted_stage_paragraphs(pasted_draft, {}) is False
+
+    synthesis_pasted_system = build_synthesis_coach_system_prompt(
+        book_context=build_book_context_block(_book_pack()),
+        week1_orid_lines=week1_lines,
+        student_text=pasted_draft,
+    )
+    assert "【偵測】" in synthesis_pasted_system
+    assert "連貫性" in synthesis_pasted_system
+    assert "不要**要求整篇重寫" in synthesis_pasted_system
+
+    synthesis_written_system = build_synthesis_coach_system_prompt(
+        book_context=build_book_context_block(_book_pack()),
+        week1_orid_lines=week1_lines,
+        student_text=written_draft,
+    )
+    assert "【偵測】" not in synthesis_written_system
 
 
 def test_normalize_feedback_focus_o_high_avoids_sequence_regression():

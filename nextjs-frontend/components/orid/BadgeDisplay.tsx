@@ -91,7 +91,15 @@ export function BadgeDisplay({ earnedBadges, size = 32, className }: BadgeDispla
                   className="text-[10px] font-bold text-amber-800"
                   aria-hidden
                 >
-                  {id === "badge_start" ? "筆" : id === "badge_30" ? "銅" : id === "badge_60" ? "銀" : "金"}
+                  {id === "badge_start"
+                    ? "筆"
+                    : id === "badge_30"
+                      ? "銅"
+                      : id === "badge_60"
+                        ? "銀"
+                        : id === "badge_90"
+                          ? "金"
+                          : "整"}
                 </span>
               ) : (
                 <LockedBadgeCircle size={size} />

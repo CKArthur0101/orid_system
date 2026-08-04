@@ -5,6 +5,7 @@ from app.services.orid_badges import (
     BADGE_ORDER,
     _score_from_writing_obj,
     calculate_earned_badges,
+    calculate_earned_synthesis_badge,
     get_new_badges,
     should_show_badge_modal,
     stages_passed_from_orid_levels,
@@ -123,10 +124,42 @@ class TestShouldShowBadgeModal:
         assert should_show_badge_modal([]) is False
 
 
-def test_badge_order_covers_all_four():
-    assert len(BADGE_ORDER) == 4
+def test_badge_order_covers_orid_track_plus_synthesis():
+    assert len(BADGE_ORDER) == 5
     assert "badge_start" in BADGE_ORDER
     assert "badge_90" in BADGE_ORDER
+    assert "badge_synthesis_start" in BADGE_ORDER
+
+
+class TestCalculateEarnedSynthesisBadge:
+    def test_no_content_no_badge(self):
+        assert calculate_earned_synthesis_badge(
+            has_synthesis_content=False, has_used_synthesis_guide=False
+        ) == []
+
+    def test_content_without_guide_use_no_badge(self):
+        assert calculate_earned_synthesis_badge(
+            has_synthesis_content=True, has_used_synthesis_guide=False
+        ) == []
+
+    def test_content_plus_guide_use_gives_badge(self):
+        result = calculate_earned_synthesis_badge(
+            has_synthesis_content=True, has_used_synthesis_guide=True
+        )
+        assert result == ["badge_synthesis_start"]
+
+    def test_independent_from_orid_stage_badges(self):
+        """The synthesis badge must not imply/require any O/R/I/D stage badge."""
+        synth = calculate_earned_synthesis_badge(
+            has_synthesis_content=True, has_used_synthesis_guide=True
+        )
+        orid = calculate_earned_badges(
+            has_writing_content=False,
+            has_used_feedback_or_prompt=False,
+            stages_passed=None,
+        )
+        assert synth == ["badge_synthesis_start"]
+        assert orid == []
 
 
 class TestScoreFromWritingObj:

@@ -15,6 +15,28 @@ from app.prompts.templates.coach_chat import (
 
 _SYNTHESIS_PHASE_CHOICES = frozenset({"select_evidence", "align_prompt", "short_draft", "expand_revise"})
 
+
+def looks_like_pasted_stage_paragraphs(
+    text: str, week1_orid_lines: Optional[dict[str, str]] = None
+) -> bool:
+    """True when the draft contains 3+ of the Week-1 O/R/I/D lines verbatim.
+
+    Matches the「用複製 O/R/I/D 按鈕直接貼上」pattern exactly (the 複製 button
+    appends the stored stage text unchanged), which is a far more reliable
+    signal than guessing from connector words — plenty of genuine ORID stage
+    text naturally opens with phrases like「這件事讓我學到」.
+    """
+    t = (text or "").strip()
+    if not t or not week1_orid_lines:
+        return False
+    hits = 0
+    for key in ("O", "R", "I", "D"):
+        line = (week1_orid_lines.get(key) or "").strip()
+        if len(line) >= 8 and line in t:
+            hits += 1
+    return hits >= 3
+
+
 _SYNTHESIS_RUBRICS: tuple[tuple[str, str], ...] = (
     ("完整性", "文章是否包含故事事件、感受、體會與未來行動四個部分？"),
     ("連貫性", "句子之間是否順暢？不是把四段硬貼在一起，而是有串接。"),
@@ -103,6 +125,7 @@ def compose_synthesis_coach_mid_block(
     feedback_round: int,
     reading_excerpt: Optional[str],
     synthesis_clarify: bool,
+    looks_pasted: bool = False,
 ) -> str:
     """
     Inserted between 【教材脈絡】 and personal tail.
@@ -114,6 +137,14 @@ def compose_synthesis_coach_mid_block(
         cap = rex[:2000]
         tail_note = "\n（以上節選已截斷至約 2000 字）" if len(rex) > 2000 else ""
         pieces.append(f"【學生自填閱讀心得／摘記節選（唯讀）】\n{cap}{tail_note}")
+
+    if looks_pasted:
+        pieces.append(
+            "【偵測】草稿看起來像是把上週幾段（觀察／感受／體會／行動）直接貼上、段落之間還沒加銜接語。"
+            "這種情況通常代表「完整性」已經有了；本輪回饋請優先只看「連貫性」這一項："
+            "先肯定四個部分都在了，再只指出「哪兩段之間」可以加一句銜接、"
+            "並給一個銜接語或連接詞的小範例即可；**不要**要求整篇重寫、**不要**要求把每一段都改寫。"
+        )
 
     phase = synthesis_phase if (synthesis_phase or "") in _SYNTHESIS_PHASE_CHOICES else None
     rnd = 2 if int(feedback_round) == 2 else 1
@@ -142,6 +173,7 @@ def build_synthesis_coach_system_prompt(
     feedback_round: int = 1,
     reading_excerpt: Optional[str] = None,
     synthesis_clarify: bool = False,
+    student_text: str = "",
 ) -> str:
     """
     Week-2 synthesis: feedback on the student's integrated paragraph using Week-1 ORID slots as context.
@@ -158,6 +190,7 @@ def build_synthesis_coach_system_prompt(
         feedback_round=feedback_round,
         reading_excerpt=reading_excerpt,
         synthesis_clarify=synthesis_clarify,
+        looks_pasted=looks_like_pasted_stage_paragraphs(student_text, week1_orid_lines),
     )
     return format_synthesis_coach_playbook(
         week1_block=joined,
