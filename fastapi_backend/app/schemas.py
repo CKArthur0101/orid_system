@@ -548,6 +548,7 @@ class ResearchGroupComparisonRow(BaseModel):
     condition: str  # experimental / control
     student_count: int
     avg_word_count: float
+    avg_save_count: float = 0.0
     avg_revision_count: float
     avg_guide_use_count: float
     avg_badge_count: float
@@ -561,6 +562,7 @@ class ResearchWeeklyTrendPoint(BaseModel):
     week: int
     condition: str
     avg_word_count: float
+    avg_save_count: float = 0.0
     avg_revision_count: float
     avg_guide_use_count: float
     avg_badge_count: float

@@ -1086,6 +1086,7 @@ async def teacher_research_overview(
                 condition=cond,
                 student_count=len({r.user_id for r in cond_rows}),
                 avg_word_count=_avg([r.word_count for r in cond_rows]),
+                avg_save_count=_avg([r.save_count for r in cond_rows]),
                 avg_revision_count=_avg([r.revision_count for r in cond_rows]),
                 avg_guide_use_count=_avg([r.guide_use_count for r in cond_rows]),
                 avg_badge_count=_avg([r.badge_count for r in cond_rows]),
@@ -1111,6 +1112,7 @@ async def teacher_research_overview(
                     week=wk,
                     condition=cond,
                     avg_word_count=_avg([r.word_count for r in rows]),
+                    avg_save_count=_avg([r.save_count for r in rows]),
                     avg_revision_count=_avg([r.revision_count for r in rows]),
                     avg_guide_use_count=_avg([r.guide_use_count for r in rows]),
                     avg_badge_count=_avg([r.badge_count for r in rows]),
@@ -1219,7 +1221,7 @@ async def export_research_csv(
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
-        "student_email", "student_name", "condition", "week", "task_type",
+        "student_id", "student_email", "student_name", "condition", "week", "task_type",
         "word_count", "save_count", "revision_count", "guide_use_count",
         "badge_count", "earned_badges",
         # Exploratory system AI scores — NOT formal RQ1/RQ2 dependent variables.
@@ -1230,6 +1232,7 @@ async def export_research_csv(
     ])
     for row in overview.student_rows:
         writer.writerow([
+            str(row.student_id),
             row.student_email,
             row.student_display_name,
             row.condition,

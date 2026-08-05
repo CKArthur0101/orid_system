@@ -35,6 +35,7 @@ type ResearchGroupComparisonRow = {
   condition: string;
   student_count: number;
   avg_word_count: number;
+  avg_save_count: number;
   avg_revision_count: number;
   avg_guide_use_count: number;
   avg_badge_count: number;
@@ -48,6 +49,7 @@ type ResearchWeeklyTrendPoint = {
   week: number;
   condition: string;
   avg_word_count: number;
+  avg_save_count: number;
   avg_revision_count: number;
   avg_guide_use_count: number;
   avg_badge_count: number;
@@ -90,10 +92,11 @@ type TeacherResearchOverview = {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const METRIC_OPTIONS = [
-  { key: "avg_word_count", label: "字數" },
-  { key: "avg_revision_count", label: "修改次數" },
-  { key: "avg_guide_use_count", label: "引導使用次數" },
-  { key: "avg_badge_count", label: "徽章數（參與）" },
+  { key: "avg_word_count", label: "字數（RQ3）" },
+  { key: "avg_save_count", label: "儲存次數（RQ3）" },
+  { key: "avg_revision_count", label: "修改次數（RQ3）" },
+  { key: "avg_guide_use_count", label: "引導使用（RQ3）" },
+  { key: "avg_badge_count", label: "徽章數（參與／RQ3）" },
   { key: "avg_orid_score", label: "AI 系統 ORID 分（探索）" },
   { key: "avg_sel_score", label: "AI 系統 SEL 分（探索）" },
   { key: "avg_total_score", label: "AI 系統總分（探索）" },
@@ -134,6 +137,7 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [rowWeekFilter, setRowWeekFilter] = useState<number | "all">("all");
   const [rowConditionFilter, setRowConditionFilter] = useState<"all" | "experimental" | "control">("all");
+  const [rowTaskTypeFilter, setRowTaskTypeFilter] = useState<"all" | "orid_stage" | "synthesis">("all");
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
@@ -174,9 +178,10 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
     return studentRows.filter((r) => {
       if (rowWeekFilter !== "all" && r.week !== rowWeekFilter) return false;
       if (rowConditionFilter !== "all" && r.condition !== rowConditionFilter) return false;
+      if (rowTaskTypeFilter !== "all" && (r.task_type || "") !== rowTaskTypeFilter) return false;
       return true;
     });
-  }, [studentRows, rowWeekFilter, rowConditionFilter]);
+  }, [studentRows, rowWeekFilter, rowConditionFilter, rowTaskTypeFilter]);
 
   const groupBarData = useMemo(
     () =>
@@ -244,7 +249,9 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
     <div className="space-y-6">
       <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm leading-relaxed text-amber-950/85">
         <strong className="font-semibold">研究提醒：</strong>
-        RQ1／RQ2 正式依變項為<strong>人工 rubric</strong>評分。下方 AI 系統分數僅供過程／探索參考；徽章為參與／階段完成指標，不是主要學習成效。RQ4（科技接受度）請用課堂 Google 表單或紙本，不在本系統內填寫。
+        RQ1／RQ2 正式依變項為<strong>人工 rubric</strong>評分；AI 系統分數僅供過程／探索參考。
+        RQ3（投入與修正）看下方歷程指標（字數、儲存、修改、引導使用、徽章、提交率）——屬<strong>寫作歷程資料</strong>，不是直接學習成效。
+        徽章為參與／階段完成指標。RQ4（科技接受度）請用課堂 Google 表單或紙本，不在本系統內填寫。
       </div>
       {/* Controls row */}
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -309,7 +316,7 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
 
       {/* Metric switch */}
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-base font-medium text-amber-900/75">比較指標：</span>
+        <span className="text-base font-medium text-amber-900/75">比較指標（RQ3 歷程／探索分）：</span>
         {METRIC_OPTIONS.map((m) => (
           <button
             key={m.key}
@@ -452,6 +459,19 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
                     <SelectItem value="control">控制組</SelectItem>
                   </SelectContent>
                 </Select>
+                <Select
+                  value={rowTaskTypeFilter}
+                  onValueChange={(v) => setRowTaskTypeFilter(v as "all" | "orid_stage" | "synthesis")}
+                >
+                  <SelectTrigger className={`w-[150px] ${TEACHER_SELECT}`}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">全部任務</SelectItem>
+                    <SelectItem value="orid_stage">ORID 分段</SelectItem>
+                    <SelectItem value="synthesis">整合寫作</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
           </CardHeader>
@@ -463,7 +483,9 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
                     <th className="px-3 py-2">學生</th>
                     <th className="px-3 py-2">組別</th>
                     <th className="px-3 py-2 text-center">週</th>
+                    <th className="px-3 py-2 text-center">任務</th>
                     <th className="px-3 py-2 text-center">字數</th>
+                    <th className="px-3 py-2 text-center">儲存</th>
                     <th className="px-3 py-2 text-center">修改</th>
                     <th className="px-3 py-2 text-center">引導</th>
                     <th className="px-3 py-2 text-center">徽章</th>
@@ -486,7 +508,15 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
                         </span>
                       </td>
                       <td className="px-3 py-2 text-center">{r.week}</td>
+                      <td className="px-3 py-2 text-center text-xs">
+                        {r.task_type === "synthesis"
+                          ? "整合"
+                          : r.task_type === "orid_stage"
+                            ? "ORID"
+                            : (r.task_type || "—")}
+                      </td>
                       <td className="px-3 py-2 text-center">{r.word_count}</td>
+                      <td className="px-3 py-2 text-center">{r.save_count}</td>
                       <td className="px-3 py-2 text-center">{r.revision_count}</td>
                       <td className="px-3 py-2 text-center">{r.guide_use_count}</td>
                       <td className="px-3 py-2 text-center">{r.badge_count}</td>
@@ -496,7 +526,7 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
                   ))}
                   {!filteredStudentRows.length && (
                     <tr>
-                      <td colSpan={9} className="p-8 text-center text-amber-800/50">
+                      <td colSpan={11} className="p-8 text-center text-amber-800/50">
                         尚無符合條件的資料
                       </td>
                     </tr>
