@@ -40,7 +40,11 @@ def looks_like_pasted_stage_paragraphs(
 _SYNTHESIS_RUBRICS: tuple[tuple[str, str], ...] = (
     ("完整性", "文章是否包含故事事件、感受、體會與未來行動四個部分？"),
     ("連貫性", "句子之間是否順暢？不是把四段硬貼在一起，而是有串接。"),
-    ("反思深度", "學生是否說明原因、想法、體會，並能從故事連結到自己？"),
+    ("反思深度", "是否說明原因、想法、體會，並能從故事連結到自己的生活經驗？"),
+    (
+        "SEL表現",
+        "是否看得出情緒覺察、同理、關係理解或負責任行動？（引導用，勿對學生說 SEL 術語）",
+    ),
     ("行動具體性", "D 的部分是否具體？學生是否說出實際能做到的行動？"),
 )
 
@@ -71,21 +75,25 @@ def _synthesis_operational_instructions(
         rubric_lines = [f"- {rid}：{text}" for rid, text in _SYNTHESIS_RUBRICS if rid in rubric_ids]
         lines.append("【本輪檢查重點（對照下列 1～2 條即可）】\n" + "\n".join(rubric_lines))
     elif not r1:
-        lines.append("【本輪為第二輪】可在連貫性、反思深度與行動具體性上給較具體建議，仍以短段落、不要代寫全文。")
+        lines.append(
+            "【本輪為第二輪】可在連貫性、反思深度、SEL 表現（一個短問句）與行動具體性上給較具體建議，"
+            "仍以短段落、不要代寫全文；不要一次談超過一個主缺口。"
+        )
         lines.append(
             "【本輪檢查重點（對照下列 1～2 條即可）】\n"
             "- 連貫性：段落之間有銜接，先說什麼、再說什麼不會突然跳走。\n"
+            "- 反思深度或 SEL 表現：原因／生活連結，或情緒覺察／同理／關係／負責任行動擇一短問。\n"
             "- 行動具體性：D 的部分是否具體說出實際能做到的行動？"
         )
 
     if r1:
         lines.append(
             "【兩輪制／份量】這是**第一輪**：請**只給「一個」最小下一步**（一句方向 + 可選半句示例提示），"
-            "不要一次列很多缺點、不要代寫整段。"
+            "不要一次列很多缺點、不要代寫整段；請學生回到整合格子自己改。"
         )
     else:
         lines.append(
-            "【兩輪制／份量】這是**第二輪**：可以再多一小層（例如補一句銜接或一個更清楚的例子），"
+            "【兩輪制／份量】這是**第二輪**：可以再多一小層（例如補一句銜接、一個生活連結或一個更清楚的行動），"
             "仍請維持短段落，不要代寫整篇。"
         )
 
@@ -112,11 +120,20 @@ def _synthesis_layer_and_rubrics(*, phase: str, feedback_round: int) -> tuple[st
     if phase == "short_draft":
         if not r2:
             return "完整性與連貫性：短稿是否有各部分，讀者看得懂主線。", frozenset({"完整性", "連貫性"})
-        return "反思深度：學生是否說明原因並連結到自己？", frozenset({"反思深度", "行動具體性"})
+        return (
+            "反思深度與 SEL 表現：原因／生活連結是否清楚？必要時一個短問補強情緒覺察或同理。",
+            frozenset({"反思深度", "SEL表現"}),
+        )
     # expand_revise
     if not r2:
-        return "反思深度與行動具體性：體會是否清楚？未來行動是否具體可做？", frozenset({"反思深度", "行動具體性"})
-    return "行動具體性為主：D 的部分是否具體說出實際能做到的行動？", frozenset({"行動具體性", "連貫性"})
+        return (
+            "反思深度、SEL 表現與行動具體性：體會是否清楚？行動是否具體可做？",
+            frozenset({"反思深度", "行動具體性", "SEL表現"}),
+        )
+    return (
+        "行動具體性為主；若行動已具體，可給一個負責任行動／關係理解的短問。",
+        frozenset({"行動具體性", "SEL表現"}),
+    )
 
 
 def compose_synthesis_coach_mid_block(
@@ -144,6 +161,7 @@ def compose_synthesis_coach_mid_block(
             "這種情況通常代表「完整性」已經有了；本輪回饋請優先只看「連貫性」這一項："
             "先肯定四個部分都在了，再只指出「哪兩段之間」可以加一句銜接、"
             "並給一個銜接語或連接詞的小範例即可；**不要**要求整篇重寫、**不要**要求把每一段都改寫。"
+            "本輪先不要談 SEL 表現或行動精修；等銜接補上後，下一輪再考慮。"
         )
 
     phase = synthesis_phase if (synthesis_phase or "") in _SYNTHESIS_PHASE_CHOICES else None

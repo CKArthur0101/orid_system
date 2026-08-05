@@ -384,10 +384,15 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "你已經做到：" in synthesis_system
     assert "再想一想：" in synthesis_system
     assert "可以這樣修改：" in synthesis_system
+    assert "SEL 表現" in synthesis_system
+    assert "生活連結" in synthesis_system
+    assert "優先規則" in synthesis_system
+    assert "不做正式計分" in synthesis_system
+    assert "回到整合寫作格子" in synthesis_system
     # 可選 meta 仍會插入中段；預設不傳時僅有 playbook 內建「三段標題」與週一區塊，無【學生自填閱讀心得】中段
     assert "【學生自填閱讀心得" not in synthesis_system
     assert "【當前寫作階段】" not in synthesis_system
-    assert "【偵測】" not in synthesis_system
+    assert "草稿看起來像是把上週幾段" not in synthesis_system
 
     syn_layered = build_synthesis_coach_system_prompt(
         book_context=build_book_context_block(_book_pack()),
@@ -400,7 +405,16 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "我讀到分享很重要" in syn_layered
     assert "【當前寫作階段】" in syn_layered
     assert "【本輪回饋層級" in syn_layered
-    assert "R1" in syn_layered and "R2" in syn_layered
+    assert "完整性" in syn_layered and "連貫性" in syn_layered
+
+    syn_r2 = build_synthesis_coach_system_prompt(
+        book_context=build_book_context_block(_book_pack()),
+        week1_orid_lines={"O": "他把柿子藏起來", "R": "", "I": "", "D": ""},
+        synthesis_phase="short_draft",
+        feedback_round=2,
+    )
+    assert "SEL表現" in syn_r2 or "SEL 表現" in syn_r2
+    assert "反思深度" in syn_r2
 
     checker_system, checker_user = build_book_grounding_checker_prompts(
         student_text="阿松爺爺把柿子藏到屋後倉庫",
@@ -441,16 +455,17 @@ def test_synthesis_pasted_stage_paragraphs_detection():
         week1_orid_lines=week1_lines,
         student_text=pasted_draft,
     )
-    assert "【偵測】" in synthesis_pasted_system
+    assert "草稿看起來像是把上週幾段" in synthesis_pasted_system
     assert "連貫性" in synthesis_pasted_system
     assert "不要**要求整篇重寫" in synthesis_pasted_system
+    assert "先不要談 SEL" in synthesis_pasted_system
 
     synthesis_written_system = build_synthesis_coach_system_prompt(
         book_context=build_book_context_block(_book_pack()),
         week1_orid_lines=week1_lines,
         student_text=written_draft,
     )
-    assert "【偵測】" not in synthesis_written_system
+    assert "草稿看起來像是把上週幾段" not in synthesis_written_system
 
 
 def test_normalize_feedback_focus_o_high_avoids_sequence_regression():
@@ -623,3 +638,4 @@ def test_prompt_versions_cover_active_surfaces():
     }.issubset(PROMPT_VERSIONS.keys())
     assert PROMPT_VERSIONS["genai_feedback"] == "wf_v11"
     assert PROMPT_VERSIONS["feedback_narration"] == "fn_v11"
+    assert PROMPT_VERSIONS["synthesis_coach"] == "sc_v8"

@@ -120,9 +120,9 @@ AI 是實驗組研究處理的一部分，需對準：
 | 項目 | 現況（程式／playbook） | 本文件目標 |
 |------|------------------------|------------|
 | 完整／連貫／深度／行動 | 已在 synthesis coach playbook | 維持 |
-| SEL 表現（具名面向） | **尚未**在整合 playbook 具名 | Phase 3 再改 prompt；本文件先定規準 |
-| 正式自動計分 | 偶數週**不做** ORID/SEL 正式系統分 | **維持**：正式分用人評；不急著自動計分 |
-| 貼上→連貫優先 | 已有 `looks_like_pasted_stage_paragraphs` | 維持 |
+| SEL 表現（具名面向） | **已加入** playbook 五面向與優先序（`sc_v8`）；引導用、不做正式自動計分 | 已對齊 Phase 3 |
+| 正式自動計分 | 偶數週**不做** ORID/SEL 正式系統分 | **維持**：正式分用人評 |
+| 貼上→連貫優先 | 已有 `looks_like_pasted_stage_paragraphs`；貼上時本輪不談 SEL | 維持 |
 
 工程可選階段（A–D）與另一套「證據／扣題／結構／語言」描述見 `fastapi_backend/docs/SYNTHESIS_INTEGRATED_WRITING_SPEC.md`；**研究用人評／AI 引導五面向以本節為準**。
 
