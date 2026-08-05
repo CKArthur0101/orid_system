@@ -7,6 +7,9 @@ export type ControlGuidePage = {
   text: string;
 };
 
+/** Book packs for control guides. book2/book3 TBD → generic fallback. */
+export type ControlGuideBookId = "book1" | "book2" | "book3" | "generic";
+
 const ORID_PROMPTS: Record<StageKey, string[]> = {
   O: [
     "故事中，______做了______。",
@@ -34,14 +37,37 @@ const ORID_PROMPTS: Record<StageKey, string[]> = {
   ],
 };
 
-/** O 段以故事觀察提問為主（無 SEL rubric）；R/I/D 用 rubric 的 student_prompts */
-const SEL_PROMPTS: Record<StageKey, string[]> = {
+/** Generic story questions (no book-specific character names). */
+const SEL_PROMPTS_GENERIC: Record<StageKey, string[]> = {
   O: [
     "故事中哪一個情節讓你印象最深？",
     "主角遇到了什麼問題？",
     "故事裡發生了哪些重要的事情？",
     "故事一開始，發生了什麼事？",
   ],
+  R: [
+    "故事中哪一個地方讓你有這種感覺？",
+    "你的感覺可以再說得更清楚一點嗎？",
+    "你覺得故事裡的人當時可能在想什麼？",
+    "如果你是故事裡的人，你可能會有什麼感覺？",
+  ],
+  I: [
+    "這個故事想讓我們學到什麼？",
+    "從主角的改變，你覺得帶來什麼不同？",
+    "故事裡的人為什麼會有這樣的改變？",
+    "哪一個角色的做法讓故事有什麼不一樣？",
+  ],
+  D: [
+    "如果你遇到類似情況，你可以在什麼時候、對誰、怎麼做？",
+    "這個行動會對你或別人有什麼幫助？",
+    "看完這個故事，你想在生活中改變什麼？",
+    "你可以在什麼時候、對誰做出類似的行動？",
+  ],
+};
+
+/** Book 1（《阿松爺爺》）character-grounded SEL prompts. */
+const SEL_PROMPTS_BOOK1: Record<StageKey, string[]> = {
+  O: SEL_PROMPTS_GENERIC.O,
   R: [
     "故事中哪一個地方讓你有這種感覺？",
     "你的感覺可以再說得更清楚一點嗎？",
@@ -54,12 +80,7 @@ const SEL_PROMPTS: Record<StageKey, string[]> = {
     "阿松爺爺為什麼會有這樣的改變？",
     "哎唷奶奶的做法讓故事有什麼不一樣？",
   ],
-  D: [
-    "如果你遇到類似情況，你可以在什麼時候、對誰、怎麼做？",
-    "這個行動會對你或別人有什麼幫助？",
-    "看完這個故事，你想在生活中改變什麼？",
-    "你可以在什麼時候、對誰做出類似的行動？",
-  ],
+  D: SEL_PROMPTS_GENERIC.D,
 };
 
 const TRACK_BADGE: Record<"orid" | "sel", Record<StageKey, string>> = {
@@ -99,8 +120,28 @@ function interleavePages(orid: string[], sel: string[], stage: StageKey): Contro
   return pages;
 }
 
-export function getControlGuidePages(stage: StageKey): ControlGuidePage[] {
-  return interleavePages(ORID_PROMPTS[stage], SEL_PROMPTS[stage], stage);
+/** Weeks 1–2 → book1; 3–4 → book2; 5–6 → book3. */
+export function controlGuideBookIdFromWeek(week: number): ControlGuideBookId {
+  if (!Number.isFinite(week) || week < 1) return "generic";
+  const unit = Math.ceil(week / 2);
+  if (unit === 1) return "book1";
+  if (unit === 2) return "book2";
+  if (unit === 3) return "book3";
+  return "generic";
+}
+
+function resolveSelPrompts(bookId?: ControlGuideBookId | string | null): Record<StageKey, string[]> {
+  const key = String(bookId || "book1").trim().toLowerCase();
+  if (key === "book1" || key === "1") return SEL_PROMPTS_BOOK1;
+  // book2 / book3 packs TBD — use generic until curated content exists
+  return SEL_PROMPTS_GENERIC;
+}
+
+export function getControlGuidePages(
+  stage: StageKey,
+  bookId?: ControlGuideBookId | string | null,
+): ControlGuidePage[] {
+  return interleavePages(ORID_PROMPTS[stage], resolveSelPrompts(bookId)[stage], stage);
 }
 
 const SYNTHESIS_ORID = [
@@ -117,7 +158,10 @@ const SYNTHESIS_SEL = [
   "有寫以後會怎麼做了嗎？句子有接起來嗎？",
 ];
 
-export function getSynthesisGuidePages(): ControlGuidePage[] {
+export function getSynthesisGuidePages(
+  _bookId?: ControlGuideBookId | string | null,
+): ControlGuidePage[] {
+  // Synthesis frames are book-neutral for now; bookId reserved for future packs.
   return interleavePages(SYNTHESIS_ORID, SYNTHESIS_SEL, "I").map((page) =>
     page.track === "orid"
       ? { ...page, badge: "✏️ 一步一步寫" }

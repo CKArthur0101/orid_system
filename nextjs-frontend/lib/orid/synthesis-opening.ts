@@ -22,7 +22,7 @@ export const SYNTHESIS_CHECKLIST_LABELS: {
 ];
 
 /**
- * Short opening for the right-hand synthesis chat.
+ * Short opening for the right-hand synthesis chat / control helper.
  * Must keep prefix 「歡迎來到第 」 for persisted-message detection.
  *
  * Keeps structure hints only — no pasting last week's full O/R/I/D
@@ -32,9 +32,13 @@ export function buildSynthesisOpeningMessage(
   _priorWeek: WeekStages | null,
   bookTitle?: string | null,
   evenWeekNum: number = 2,
+  options?: { isControl?: boolean },
 ): string {
   const book = bookTitle?.trim() ? `《${bookTitle.trim()}》` : "這本書";
   const priorWeekNum = evenWeekNum - 1;
+  const closing = options?.isControl
+    ? "左邊可看／複製上週原文。右邊可以翻「整合寫作提示」，一步一步想清楚再寫。"
+    : "左邊可看／複製上週原文。寫好後按「取得整合回饋」，我一次只幫你改一個重點。";
   return [
     `歡迎來到第 ${evenWeekNum} 週「整合寫作」！`,
     `這週把第 ${priorWeekNum} 週的四格，收成一篇跟 ${book} 有關的短文。`,
@@ -42,7 +46,7 @@ export function buildSynthesisOpeningMessage(
     "可以照這個順序寫：",
     "1. 故事裡的事　2. 感受＋原因　3. 學到什麼　4. 以後怎麼做",
     "",
-    "左邊可看／複製上週原文。寫好後按「取得整合回饋」，我一次只幫你改一個重點。",
+    closing,
   ].join("\n");
 }
 

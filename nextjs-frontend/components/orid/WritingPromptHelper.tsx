@@ -4,8 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { PersimmonBullet } from "./PersimmonBullet";
 import {
+  controlGuideBookIdFromWeek,
   getControlGuidePages,
   getSynthesisGuidePages,
+  type ControlGuideBookId,
   type ControlGuidePage,
 } from "@/lib/orid/control-guide-pages";
 
@@ -18,6 +20,10 @@ interface WritingPromptHelperProps {
   synthesisMode?: boolean;
   /** Personalized opening reference (control group synthesis tab) */
   openingText?: string;
+  /** Book pack key for parameterized control guides (book2/3 fall back to generic). */
+  bookId?: ControlGuideBookId | string | null;
+  /** Academic week 1–6; used when bookId is omitted. */
+  week?: number;
 }
 
 export function WritingPromptHelper({
@@ -25,10 +31,14 @@ export function WritingPromptHelper({
   onPromptViewed,
   synthesisMode,
   openingText,
+  bookId,
+  week,
 }: WritingPromptHelperProps) {
+  const resolvedBookId =
+    bookId ?? (typeof week === "number" ? controlGuideBookIdFromWeek(week) : "book1");
   const pages: ControlGuidePage[] = synthesisMode
-    ? getSynthesisGuidePages()
-    : getControlGuidePages(focusStage);
+    ? getSynthesisGuidePages(resolvedBookId)
+    : getControlGuidePages(focusStage, resolvedBookId);
 
   const [pageIndex, setPageIndex] = useState(0);
   const loggedViewRef = useRef(false);
@@ -36,7 +46,7 @@ export function WritingPromptHelper({
   useEffect(() => {
     setPageIndex(0);
     loggedViewRef.current = false;
-  }, [focusStage, synthesisMode]);
+  }, [focusStage, synthesisMode, resolvedBookId]);
 
   const current = pages[pageIndex] ?? pages[0];
   const total = pages.length;

@@ -142,7 +142,12 @@ from app.prompts.parsers.json_payloads import (
 )
 from app.services.safety import check_safety
 from app.services.rag import get_feedback_rag_context
-from app.services.orid_condition import normalize_orid_condition, is_control_condition
+from app.services.orid_condition import (
+    CONTROL_AI_FORBIDDEN_DETAIL,
+    is_control_condition,
+    normalize_orid_condition,
+    session_condition_from_user_orid_condition,
+)
 from app.services.orid_writing_store import (
     ensure_orid_writing_obj,
     merge_synthesis_feedback_into_writing,
@@ -863,6 +868,9 @@ async def seed_writing_coach_welcome_if_needed(
     session: OridSession,
     reading: Optional[Reading],
 ) -> None:
+    # Control participants use fixed WritingPromptHelper pages only — no AI coach seed.
+    if is_control_condition(getattr(session, "condition", None), default=DEFAULT_ORID_CONDITION):
+        return
     book_pack = load_book_pack_from_reading(reading)
     text = build_writing_coach_welcome_text(book_pack)
     try:
@@ -2723,10 +2731,18 @@ async def create_session(
     wk = _week_from_reading_title(reading.title)
     bu = book_unit_from_week(wk) if wk is not None else None
 
+    # Students cannot self-assign condition; only force_new-capable accounts may override.
+    if data.condition and _user_can_force_new(user):
+        sess_condition = normalize_orid_condition(data.condition, default=DEFAULT_ORID_CONDITION)
+    else:
+        sess_condition = session_condition_from_user_orid_condition(
+            getattr(user, "orid_condition", None)
+        )
+
     s = OridSession(
         user_id=user.id,
         reading_id=data.reading_id,
-        condition=normalize_orid_condition(data.condition, default=DEFAULT_ORID_CONDITION),
+        condition=sess_condition,
         current_stage="O",
         stage_turn=0,
         thread_id=None,
@@ -2752,12 +2768,11 @@ async def ensure_session(
     user_email = getattr(user, "email", None)
 
     # Determine the effective condition for this user:
-    # admin/test override via URL ?condition=, else use user.orid_condition mapped to session condition.
+    # admin/test override via URL ?condition=, else map User.orid_condition → session condition.
     def _resolve_condition(url_override: Optional[str]) -> str:
         if url_override and _user_can_force_new(user):
             return normalize_orid_condition(url_override, default=DEFAULT_ORID_CONDITION)
-        user_group = str(getattr(user, "orid_condition", "experimental") or "experimental").strip().lower()
-        return "genai" if user_group == "experimental" else "control"
+        return session_condition_from_user_orid_condition(getattr(user, "orid_condition", None))
 
     def _session_stale(sess: OridSession) -> bool:
         """True if the user's condition changed after this session was created."""
@@ -2982,6 +2997,11 @@ async def writing_coach_chat(
     session = r.scalars().first()
     if not session or session.user_id != user.id:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    condition = normalize_orid_condition(session.condition, default=DEFAULT_ORID_CONDITION)
+    # Control: fixed guide pages only — block all personalized coach / feedback paths.
+    if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
+        raise HTTPException(status_code=403, detail=CONTROL_AI_FORBIDDEN_DETAIL)
 
     rr = await db.execute(select(Reading).filter(Reading.id == session.reading_id))
     reading = rr.scalars().first()
@@ -3719,6 +3739,9 @@ async def writing_assist(
     if not session or session.user_id != user.id:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    if is_control_condition(session.condition, default=DEFAULT_ORID_CONDITION):
+        raise HTTPException(status_code=403, detail=CONTROL_AI_FORBIDDEN_DETAIL)
+
     rr = await db.execute(select(Reading).filter(Reading.id == session.reading_id))
     reading = rr.scalars().first()
     book_pack = load_book_pack_from_reading(reading)
@@ -3751,6 +3774,9 @@ async def writing_feedback(
     session = r.scalars().first()
     if not session or session.user_id != user.id:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if is_control_condition(session.condition, default=DEFAULT_ORID_CONDITION):
+        raise HTTPException(status_code=403, detail=CONTROL_AI_FORBIDDEN_DETAIL)
 
     rr = await db.execute(select(Reading).filter(Reading.id == session.reading_id))
     reading = rr.scalars().first()

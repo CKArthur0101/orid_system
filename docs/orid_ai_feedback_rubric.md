@@ -194,20 +194,14 @@ AI 是實驗組研究處理的一部分，需對準：
 
 | 輸入 | 應有行為 |
 |------|----------|
-| `condition=control` | 不呼叫個人化 LLM 寫作批改；僅固定提示（及既有非個人化規則路徑若保留） |
+| `condition=control` | **403** 拒絕對個人化 LLM／寫作批改 API；僅固定提示（`WritingPromptHelper` + `prompt-usage`） |
 | `experimental` + 奇數 + `feedback_button` | ORID 主向度 + SEL 輔助 → JSON／層級 → 未過則三段敘事 |
 | `experimental` + 偶數 + `synthesis_feedback` | 五面向目標版（含 SEL 引導）+ 單點缺口 + 貼上啟發式 |
 | `stage` | 選對 O/R/I/D 規則與 SEL by_stage |
-| `week` / 書包 | 注入對應書本脈絡（三書齊後） |
+| `week` / 書包 | 注入對應書本脈絡（三書齊後）；控制組固定提示依 `bookId`（book2/3 暫通用） |
 | `task_type` | `orid_stage` vs `synthesis` 使用不同 builder／playbook |
 
-建議改動檔（**尚未改**）：
-
-- 奇數週：`prompts/templates/writing_feedback.py`、`prompts/builders/writing_feedback.py`、`prompts/orid_playbook.py`、`prompts/builders/coach_chat.py`（narration）、`prompts/versions.py`
-- 偶數週：`format_synthesis_coach_playbook`、`build_synthesis_coach_system_prompt`、`versions.py`（`synthesis_coach`）
-- 測試：`tests/prompts/test_prompt_builders.py` 等
-
-版本號：行為變更時遞增 `PROMPT_VERSIONS` 對應鍵，便於實驗記錄。
+Phase 2–4 已落地：奇數／偶數 prompt、控制組 API 閘門與固定提示參數化。
 
 ---
 
@@ -234,7 +228,7 @@ AI 是實驗組研究處理的一部分，需對準：
 |------|------|
 | `RASF_SCORING_SPEC.md` | 強調系統計分與引導一體；本文件強調**人評為正式 DV**，系統分為探索。RASF 單點引導原則仍適用實驗組奇數週。 |
 | `SYNTHESIS_INTEGRATED_WRITING_SPEC.md` | 四階 A–D 與「證據／扣題／結構／語言」；本文件研究面向為**五面向**（含 SEL）。兩者並存時：**研究／人評／未來 prompt 對齊以本文件為準**。 |
-| 現行 synthesis playbook | 尚無具名「SEL 表現」；屬 Phase 3 對齊項。 |
+| 現行 synthesis playbook | **已具名「SEL 表現」**（`sc_v8`）；正式自動計分仍不做 |
 
 ---
 
@@ -243,3 +237,4 @@ AI 是實驗組研究處理的一部分，需對準：
 | 日期 | 說明 |
 |------|------|
 | 2026-08 | Phase 1 初版：奇數／偶數規準、SEL 映射、三段式、控制差異、prompt 設計規範（未改碼） |
+| 2026-08 | Phase 2–3：奇數／偶數 AI prompt 對齊；Phase 4：控制組 API 403 閘門＋固定提示 bookId 參數化 |

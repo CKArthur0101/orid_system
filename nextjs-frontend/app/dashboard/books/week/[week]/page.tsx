@@ -474,8 +474,11 @@ export default function WeekBookPage() {
     [messages],
   );
   const synthesisOpeningText = useMemo(
-    () => buildSynthesisOpeningMessage(priorWeekData, bookPack?.book_title, weekNum),
-    [priorWeekData, bookPack?.book_title, weekNum],
+    () =>
+      buildSynthesisOpeningMessage(priorWeekData, bookPack?.book_title, weekNum, {
+        isControl: isControlConditionValue(condition),
+      }),
+    [priorWeekData, bookPack?.book_title, weekNum, condition],
   );
   /** 整合寫作 tab：開場引導（依上週內容）+ 本週 stage=ALL 的對話，不混入上週 ORID 回饋 */
   const synthesisTabMessages = useMemo((): ChatMsg[] => {
@@ -1163,7 +1166,7 @@ export default function WeekBookPage() {
   }
 
   async function runSynthesisFeedback() {
-    if (!sessionId || !isEvenWeek(weekNum)) return;
+    if (!sessionId || !isEvenWeek(weekNum) || isControl) return;
 
     const draft = String(writingData.synthesis_draft ?? "").trim();
     if (draft.length < 12) {
@@ -1638,14 +1641,16 @@ export default function WeekBookPage() {
               {fbError && oridPanelCollapsed ? (
                 <div className="whitespace-pre-wrap text-xs text-red-600">{fbError}</div>
               ) : null}
-              <button
-                type="button"
-                className="kid-btn-primary shrink-0"
-                disabled={!sessionId || fbLoading}
-                onClick={() => void runSynthesisFeedback()}
-              >
-                {fbLoading ? "…" : "取得整合回饋"}
-              </button>
+              {!isControl ? (
+                <button
+                  type="button"
+                  className="kid-btn-primary shrink-0"
+                  disabled={!sessionId || fbLoading}
+                  onClick={() => void runSynthesisFeedback()}
+                >
+                  {fbLoading ? "…" : "取得整合回饋"}
+                </button>
+              ) : null}
             </div>
           </div>
         ) : null}
@@ -1687,6 +1692,7 @@ export default function WeekBookPage() {
                     onPromptViewed={() => void runPromptUsage()}
                     synthesisMode
                     openingText={synthesisOpeningText}
+                    week={weekNum}
                   />
                 ) : (
                   <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-2 sm:p-3">
@@ -1850,6 +1856,7 @@ export default function WeekBookPage() {
                 <WritingPromptHelper
                   focusStage={focusStage}
                   onPromptViewed={() => void runPromptUsage()}
+                  week={weekNum}
                 />
               ) : (
                 <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#fffcf7]">
