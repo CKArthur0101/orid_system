@@ -2299,9 +2299,15 @@ def _looks_valid_feedback_narration(text: str) -> bool:
     if "你已經做到" in t and "本階段完成" in t:
         return True
     # Accept revision card (narration three-section format).
-    if not ("你已經做到" in t and "你可以再加強" in t):
+    # Research titles: 再想一想／可以這樣修改；legacy: 你可以再加強／試著補一句.
+    has_rethink = "你可以再加強" in t or "再想一想" in t
+    if not ("你已經做到" in t and has_rethink):
         return False
-    return "試著補一句" in t or "試試看" in t
+    return (
+        "可以這樣修改" in t
+        or "試著補一句" in t
+        or "試試看" in t
+    )
 
 
 def _prev_ai_opener_from_messages(msgs: list[Any]) -> Optional[str]:

@@ -259,6 +259,24 @@ def test_genai_feedback_prompt_uses_orid_as_primary_and_sel_as_auxiliary():
     assert "故事中哪一個地方讓你有這種感覺" in r_system
     assert "你覺得阿松爺爺當時可能在想什麼" in r_system
     assert "不要在給學生的文字中直接使用「SEL」" in r_system
+    assert "研究對準" in r_system
+    assert "RQ1" in r_system and "RQ2" in r_system and "RQ3" in r_system
+    assert "情緒覺察" in r_system
+
+    i_system, _ = build_genai_feedback_prompts(
+        stage="I",
+        text="我學到要分享。",
+        book_pack=pack,
+    )
+    assert "生活連結" in i_system
+    assert "對準 RQ1" in i_system
+
+    d_system, _ = build_genai_feedback_prompts(
+        stage="D",
+        text="我要更好。",
+        book_pack=pack,
+    )
+    assert "負責任行動" in d_system
 
     o_system, _ = build_genai_feedback_prompts(
         stage="O",
@@ -268,6 +286,7 @@ def test_genai_feedback_prompt_uses_orid_as_primary_and_sel_as_auxiliary():
     assert "不使用 SEL 輔助" in o_system
     assert "內部參考：情緒覺察" not in o_system
     assert "故事中哪一個地方讓你有這種感覺" not in o_system
+    assert "對準 RQ1" in o_system
 
 
 def test_normalize_feedback_focus_o_meta_stuck_prefers_spec_over_short_canned():
@@ -330,8 +349,8 @@ def test_coach_and_checker_builders_keep_expected_sections():
     )
     assert "每段最多 2 句" in narration_system
     assert "你已經做到：" in narration_system
-    assert "你可以再加強：" in narration_system
-    assert "試著補一句：" in narration_system
+    assert "再想一想：" in narration_system
+    assert "可以這樣修改：" in narration_system
     assert "像老師坐在學生旁邊" in narration_system
     assert "書裡完全沒有的詞" in narration_system
     assert "RASF-Anchor" in narration_system
@@ -341,9 +360,11 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "先肯定再引導" in narration_system
     assert "繁體中文為主" in narration_system
     assert "循序漸進" in narration_system
-    assert "【I 段】" in narration_system
+    assert "【I 段" in narration_system
+    assert "生活連結" in narration_system
     assert "禁止「我們一步一步來」" in narration_system
     assert "2～4 個短任務" not in narration_system
+    assert "可以這樣修改：" in narration_user
     assert "【輸入粗分類】mixed_script" in narration_user
     assert "我觉得故事很有趣" in narration_user
     assert "結構化回饋 JSON" in narration_user
@@ -600,3 +621,5 @@ def test_prompt_versions_cover_active_surfaces():
         "book_grounding_checker",
         "orid_checker",
     }.issubset(PROMPT_VERSIONS.keys())
+    assert PROMPT_VERSIONS["genai_feedback"] == "wf_v11"
+    assert PROMPT_VERSIONS["feedback_narration"] == "fn_v11"

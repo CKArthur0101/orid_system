@@ -81,15 +81,24 @@ def _format_sel_guidance_for_prompt(book_pack: Optional[dict[str, Any]], stage: 
     if stage == "O" or not isinstance(items, list) or not items:
         return (
             "【SEL 輔助引導（本段）】\n"
-            "O 段不使用 SEL 輔助；只看故事人物、事件與前後變化。"
+            "O 段不使用 SEL 輔助；只看故事人物、事件與前後變化（對準 ORID／RQ1）。"
         )
 
+    research_focus = {
+        "R": "本段研究焦點：先把感受與原因寫清楚（情緒覺察）；必要時一個同理角度問句。",
+        "I": "本段研究焦點：體會＋故事支持；生活連結用「自己經驗」問句（不新增 SEL 代號）；可輔同理／關係理解。",
+        "D": "本段研究焦點：具體可行行動（負責任行動）；必要時問對誰／怎麼做才合適（關係理解）。",
+    }.get(stage, "")
+
     lines: list[str] = [
-        "【SEL 輔助引導（只給 AI 內部使用，不取代 ORID 判斷）】",
-        "SEL 只能幫你選一個友善問題；ok 只依 ORID 本段 rubric 判斷。",
-        "不要在給學生的文字中直接使用「SEL」或「情緒覺察」「同理與觀點理解」「價值反思」「負責任行動」等術語。",
-        "請把 SEL 轉成國小五、六年級看得懂的具體問題；每次最多用一個方向。",
+        "【SEL 輔助引導（只給 AI 內部使用，不取代 ORID 判斷｜對準 RQ2）】",
+        "SEL 只能幫你把那一個友善問句問得更具體；ok 只依 ORID 本段 rubric 判斷。",
+        "研究用語對照（勿對學生說出）：情緒覺察≈SEL_SA；同理理解≈SEL_SOA；關係理解≈SEL_RS；負責任行動≈SEL_RD；生活連結→I 段體會，非 SEL ID。",
+        "不要在給學生的文字中直接使用「SEL」或「情緒覺察」「同理理解」「關係理解」「負責任行動」「自我覺察」「自我管理」「社會覺察」「人際技巧」「負責任的決定」等術語。",
+        "請把 SEL 轉成國小五、六年級看得懂的具體問題；每次最多用一個方向，且仍服務本段 ORID 主缺口。",
     ]
+    if research_focus:
+        lines.append(research_focus)
     for it in items[:3]:
         if not isinstance(it, dict):
             continue
@@ -198,22 +207,29 @@ _STAGE_RUBRIC_LEVEL_KEYS: dict[str, str] = {
 def _rasf_json_format_block(stage: str) -> str:
     """RASF-Anchor 規則：多向度估層級 + 原文錨點引導。"""
     keys = _STAGE_RUBRIC_LEVEL_KEYS.get(stage.upper(), '"O1": "X 層級"')
-    return f"""【RASF-Anchor 輸出規則（評量對準 + 原文錨點，重要）】
+    i_life = ""
+    if (stage or "").strip().upper() == "I":
+        i_life = (
+            "\n- I 段特別：若缺的是「生活連結」（把自己經驗連上故事），"
+            "用 suggestions 一個問句引導即可；**不要**為此新增 SEL id；"
+            "仍以 I1 是否有體會＋故事支持為 ok 主判斷。"
+        )
+    return f"""【RASF-Anchor 輸出規則（評量對準 + 原文錨點，重要｜對準 RQ1–RQ3）】
 - rubric_focus：必填本段 ORID 主向度 id（O1 / R1 / I1 / D1），不可 null。
 - rubric_level_estimate：必須是**物件**，依本段填入所有對應向度的層級估計：
   本段格式：{{{ keys }}}
   層級用語：「1 起步」「2 接近」「3 達標」「4 精進」（有把握才填，不確定可填 null）
   SEL 向度只估層級，**不要**另寫 missing；missing 只對 ORID 主向度（一刀）。
 - student_anchor_quote（必填，除非草稿空白）：從學生原文**原封不動**摘 4～20 個連續字（人名、事件、感受詞、行動詞），供後續引導錨定；禁止改寫或捏造。
-- draft_next_step：**僅在 ok=false（等級 1 或 2）時填寫**；用白話寫在學生哪一句前/後加什麼才能升到 3 達標；禁止給整段新例文。**等級 3 或 4 時填 null。**
+- draft_next_step：**僅在 ok=false（等級 1 或 2）時填寫**；用白話寫在學生哪一句前/後加什麼才能升到 3 達標；禁止給整段新例文；語氣要像「請回到你這一格，在『……』後面補……」。**等級 3 或 4 時填 null。**
 - missing / suggestions 引導規則（RASF 核心）：
   先估 ORID 主向度目前是第幾階。
   **等級 3（達標）或 4（精進）→ ok=true；missing=[]；suggestions=[]；example=null；draft_next_step=null。不得再要求補細節、精進或下一階。**
   等級 1 或 2 → ok=false；再只描述「從目前階 → 3 達標」還差的一個缺口。
   missing（等級 1/2 才填）**必須**引用 student_anchor_quote（或同句中的學生用詞），用「你已經有○○，再補△△會更完整」語意。
-  suggestions（等級 1/2 才填）：**一個問句**，引導學生在 anchor 那句前/後自己補一句；不要列多步驟。
+  suggestions（等級 1/2 才填）：**一個問句**，引導學生在 anchor 那句前/後**自己**補一句（支持修改行為）；不要列多步驟、不要寫完整答案。
   example（等級 1/2 且必要才填）：只能是**接在 anchor 上的半句填空**（保留＿＿＿），禁止「故事的主角是……」這類從零開始的通用例句。
-  SEL 的缺口不得成為 missing 的主題；SEL 最多用來把 ORID 那一刀的問句問得更具體。""".strip()
+  SEL 的缺口不得成為 missing 的主題；SEL 最多用來把 ORID 那一刀的問句問得更具體。{i_life}""".strip()
 
 
 def _o_needs_book_plot_anchor(*, text: str, input_bucket: str) -> bool:
@@ -288,7 +304,7 @@ def build_genai_feedback_prompts(
 【語氣與長度感】
 學生常在一節課約 **40 分鐘**內寫完 ORID 四格，所以回饋要短、清楚、可立刻動筆。
 用字要適合國小五、六年級：短句、口語、容易懂。不要用「深化、完整度、精準、論述、脈絡、可執行」這類太大人的詞。
-一次只指出一個最重要的修改方向；suggestions 優先用 1 個問句引導學生自己補，example 只給填空式支架。
+一次只指出一個最重要的修改方向；suggestions 優先用 1 個問句請學生**回到自己格子裡**補／改，example 只給填空式支架，禁止完整範文。
 
 【本輪輸入語氣（仍只輸出 JSON）】
 {bucket_hint}
@@ -304,7 +320,7 @@ def build_genai_feedback_prompts(
 - praise：**必須**看得出你有讀學生原文，盡量點到裡面**正確**的人/事/詞（若完全空白再用鼓勵下筆，禁止空泛罐頭讚美）。
   若草稿含書裡沒有的情節：praise 只肯定書裡有的人名或寫作方向，**不要**把錯誤情節當成就。
 - missing：不多於 1 條，對準本段**一個**主問題（一刀）；依 RASF 規則只談「下一階 gap」。
-- suggestions：不多於 1 條；用 **1 個問句**或「下一步只補……」引導學生自己改，不要列多步驟，也不要把答案寫完。
+- suggestions：不多於 1 條；用 **1 個問句**引導學生自己改（可含「請回到這一格……」），不要列多步驟，也不要把答案寫完。
 - example：只給句型開頭、填空式提示或半句支架（例如「我覺得＿＿＿，因為＿＿＿。」）；不要填入完整角色、情節與答案讓學生可直接複製。
 - improved：通常 null。
 

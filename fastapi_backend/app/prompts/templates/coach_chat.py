@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 
+# Aligned with docs/orid_ai_feedback_rubric.md (odd-week experimental narration).
+# Frontend parseFeedbackNarration still accepts legacy aliases.
 FEEDBACK_NARRATION_SECTION_TITLES = (
     "你已經做到：",
-    "你可以再加強：",
-    "試著補一句：",
+    "再想一想：",
+    "可以這樣修改：",
 )
 
 COACH_SOURCE_NOTES = {
