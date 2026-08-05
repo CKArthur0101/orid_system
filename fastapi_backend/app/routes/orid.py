@@ -734,6 +734,19 @@ def _orid_stage_d1_from_writing_content(raw: str | None) -> dict[str, str]:
     return out
 
 
+def _strip_system_score_from_writing_content(content: str) -> str:
+    """Remove exploratory AI score snapshot from writing JSON (control group)."""
+    try:
+        obj = json.loads(content)
+        if isinstance(obj, dict) and "score" in obj:
+            cleaned = dict(obj)
+            cleaned.pop("score", None)
+            return json.dumps(cleaned, ensure_ascii=False)
+    except Exception:
+        pass
+    return content
+
+
 async def _fetch_latest_writing_content_for_week(
     db: AsyncSession,
     user_id: UUID,
@@ -2872,7 +2885,11 @@ async def get_orid_progress(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
-    """Return persisted badges and score for the student's session/week."""
+    """Return persisted badges and score for the student's session/week.
+
+    Control sessions never receive system AI scores (research: exploratory scores
+    are experimental-only; formal RQ1/RQ2 use human rubrics).
+    """
     r = await db.execute(select(OridSession).filter(OridSession.id == session_id))
     session = r.scalars().first()
     if not session or session.user_id != user.id:
@@ -2889,6 +2906,9 @@ async def get_orid_progress(
         writing_content=writing_content,
         empty_writing_factory=_ensure_orid_writing_v1,
     )
+    if is_control_condition(session.condition, default=DEFAULT_ORID_CONDITION):
+        progress["totalScore"] = None
+        progress["score"] = {}
     return OridProgressRead(**progress)
 
 
@@ -3510,10 +3530,13 @@ async def writing_coach_chat(
         await bump_guide_use(db, user_id=user.id, week=data.week, session_id=session.id, amount=1)
         await db.commit()
         try:
-            week_num = getattr(session, "book_unit", None)
+            # Academic week 1–6 (not book_unit). Badge events + writing lookup must match
+            # OridWeekSubmission.week / research summary week keys.
             try:
-                week_num = int(week_num or 1)
+                week_num = int(data.week)
             except (ValueError, TypeError):
+                week_num = 1
+            if week_num < 1 or week_num > 6:
                 week_num = 1
 
             orid_levels: dict[str, Any] = {}
@@ -3564,6 +3587,11 @@ async def writing_coach_chat(
             total_score_int = score_result.get("totalScore") if score_result else None
             stage_u = (stage_ctx or "O").strip().upper()
             is_control = is_control_condition(condition, default=DEFAULT_ORID_CONDITION)
+            # Control should not reach here (Phase 4 403); if it does, skip system scores.
+            if is_control:
+                score_result = {}
+                total_score_int = None
+                rubric_levels_snapshot = {}
             stages_passed: set[str] = set()
             if saved_obj is not None:
                 try:
@@ -3616,11 +3644,11 @@ async def writing_coach_chat(
                         total_score=total_score_int,
                     )
                 # Research summary keyed by the real academic week (1–6) from
-                # the request, not `week_num` (book_unit) used by the badge table above.
+                # the request (same as week_num after Phase 5 fix).
                 await sync_scores(
                     db,
                     user_id=user.id,
-                    week=data.week,
+                    week=week_num,
                     session_id=session.id,
                     orid_score=score_result.get("oridSubtotal") if score_result else None,
                     sel_score=score_result.get("selSubtotal") if score_result else None,
@@ -3629,7 +3657,7 @@ async def writing_coach_chat(
                 await sync_badges(
                     db,
                     user_id=user.id,
-                    week=data.week,
+                    week=week_num,
                     session_id=session.id,
                     badge_count=len(set(prev_badges + current_badges)),
                 )
@@ -3657,10 +3685,11 @@ async def writing_coach_chat(
         # stage-progress track (badge_30/60/90). Rewards starting the
         # integrated draft + using the synthesis guide/AI feedback once.
         try:
-            week_num = getattr(session, "book_unit", None)
             try:
-                week_num = int(week_num or 1)
+                week_num = int(data.week)
             except (ValueError, TypeError):
+                week_num = 1
+            if week_num < 1 or week_num > 6:
                 week_num = 1
 
             prev_badges = await get_earned_badges_from_db(
@@ -3687,7 +3716,14 @@ async def writing_coach_chat(
                     prompt_view_count=0,
                     used_feedback_or_prompt=True,
                 )
-                await db.commit()
+            await sync_badges(
+                db,
+                user_id=user.id,
+                week=week_num,
+                session_id=session.id,
+                badge_count=len(set(prev_badges + current_synth_badges)),
+            )
+            await db.commit()
             badge_meta = {
                 "earnedBadges": list(set(prev_badges + current_synth_badges)),
                 "newlyEarnedBadges": new_synth_badges,
@@ -4021,6 +4057,9 @@ async def create_writing(
         raise HTTPException(status_code=400, detail="content is empty")
 
     content_str = data.content.strip()
+    if is_control_condition(session.condition, default=DEFAULT_ORID_CONDITION):
+        content_str = _strip_system_score_from_writing_content(content_str)
+
     ins = pg_insert(OridWeekSubmission).values(
         id=uuid4(),
         user_id=user.id,
@@ -4106,6 +4145,13 @@ async def update_writing(
     content = (data.content or "").strip()
     if not content:
         raise HTTPException(status_code=400, detail="content is empty")
+
+    sess_r = await db.execute(select(OridSession).filter(OridSession.id == w.session_id))
+    writing_session = sess_r.scalars().first()
+    if writing_session and is_control_condition(
+        writing_session.condition, default=DEFAULT_ORID_CONDITION
+    ):
+        content = _strip_system_score_from_writing_content(content)
 
     w.content = content
     await db.commit()

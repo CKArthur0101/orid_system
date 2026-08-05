@@ -953,7 +953,9 @@ async def export_class_csv(
         "姓名", "學生信箱", "研究組別", "目前階段", "對話輪數",
         "寫作完成格數", "回饋點擊次數", "回饋通過次數", "回饋通過格數",
         "後測_O", "後測_R", "後測_I", "後測_D", "後測_ALL",
-        "總分_90", "ORID分", "SEL分", "已獲徽章",
+        # System AI scores are exploratory only (not formal RQ1/RQ2 DVs).
+        "ai_system_total_score_exploratory", "ai_system_orid_score_exploratory",
+        "ai_system_sel_score_exploratory", "earned_badges_participation",
         *research_headers,
         *badge_headers,
     ])
@@ -1194,26 +1196,36 @@ async def export_research_csv(
     overview = await teacher_research_overview(class_id, week, db, user)
 
     student_ids = [row.student_id for row in overview.student_rows]
-    earned_badges_by_student: dict[UUID, str] = {}
+    badges_by_student_week: dict[tuple[UUID, int], set[str]] = {}
     if student_ids:
         badge_res = await db.execute(
-            select(OridBadgeEvent.user_id, OridBadgeEvent.badge_id)
-            .where(OridBadgeEvent.user_id.in_(student_ids))
+            select(OridBadgeEvent.user_id, OridBadgeEvent.week, OridBadgeEvent.badge_id).where(
+                OridBadgeEvent.user_id.in_(student_ids)
+            )
         )
-        badges_by_student: dict[UUID, set[str]] = {}
-        for uid, badge_id in badge_res.all():
-            badges_by_student.setdefault(uid, set()).add(badge_id)
-        for uid, badge_ids in badges_by_student.items():
-            order = ["badge_start", "badge_30", "badge_60", "badge_90"]
-            ordered = [b for b in order if b in badge_ids]
-            earned_badges_by_student[uid] = "|".join(ordered)
+        for uid, evt_week, badge_id in badge_res.all():
+            try:
+                wk = int(evt_week)
+            except (TypeError, ValueError):
+                continue
+            badges_by_student_week.setdefault((uid, wk), set()).add(str(badge_id))
+
+    def _ordered_badges(badge_ids: set[str]) -> str:
+        # Odd-week participation track only in research CSV; synthesis badge
+        # intentionally omitted (process badge; see research_design_context).
+        order = ["badge_start", "badge_30", "badge_60", "badge_90"]
+        return "|".join(b for b in order if b in badge_ids)
 
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
         "student_email", "student_name", "condition", "week", "task_type",
         "word_count", "save_count", "revision_count", "guide_use_count",
-        "badge_count", "earned_badges", "orid_score", "sel_score", "total_score",
+        "badge_count", "earned_badges",
+        # Exploratory system AI scores — NOT formal RQ1/RQ2 dependent variables.
+        "ai_system_orid_score_exploratory",
+        "ai_system_sel_score_exploratory",
+        "ai_system_total_score_exploratory",
         "is_submitted",
     ])
     for row in overview.student_rows:
@@ -1228,7 +1240,7 @@ async def export_research_csv(
             row.revision_count,
             row.guide_use_count,
             row.badge_count,
-            earned_badges_by_student.get(row.student_id, ""),
+            _ordered_badges(badges_by_student_week.get((row.student_id, int(row.week)), set())),
             row.orid_score if row.orid_score is not None else "",
             row.sel_score if row.sel_score is not None else "",
             row.total_score if row.total_score is not None else "",

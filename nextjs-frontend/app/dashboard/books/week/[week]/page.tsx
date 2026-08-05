@@ -131,10 +131,14 @@ function mergeProgressIntoWriting(
   writing: OridWritingV1,
   totalScore: number | null,
   badges: BadgeId[],
+  options?: { includeScore?: boolean },
 ): OridWritingV1 {
   const next: OridWritingV1 = { ...writing };
-  if (totalScore != null) {
+  const includeScore = options?.includeScore !== false;
+  if (includeScore && totalScore != null) {
     next.score = { totalScore, maxTotal: 90 };
+  } else if (!includeScore) {
+    delete next.score;
   }
   if (badges.length > 0) {
     next.earnedBadges = Array.from(new Set(badges)) as BadgeId[];
@@ -902,7 +906,9 @@ export default function WeekBookPage() {
           const parsed = parseWritingRecordContent(latest.content, weekNum);
           setWritingData(parsed);
           const fromWriting = extractProgressFromWriting(parsed);
-          if (fromWriting.totalScore != null) setTotalScore(fromWriting.totalScore);
+          if (!isControlConditionValue(condition) && fromWriting.totalScore != null) {
+            setTotalScore(fromWriting.totalScore);
+          }
           if (fromWriting.earnedBadges.length > 0) {
             setEarnedBadges((prev) =>
               Array.from(new Set([...prev, ...fromWriting.earnedBadges])) as BadgeId[],
@@ -918,7 +924,9 @@ export default function WeekBookPage() {
                 const normalized = normalizeWritingContent(parsed, weekNum);
                 setWritingData(normalized);
                 const fromWriting = extractProgressFromWriting(normalized);
-                if (fromWriting.totalScore != null) setTotalScore(fromWriting.totalScore);
+                if (!isControlConditionValue(condition) && fromWriting.totalScore != null) {
+                  setTotalScore(fromWriting.totalScore);
+                }
                 if (fromWriting.earnedBadges.length > 0) {
                   setEarnedBadges((prev) =>
                     Array.from(new Set([...prev, ...fromWriting.earnedBadges])) as BadgeId[],
@@ -941,7 +949,7 @@ export default function WeekBookPage() {
     })();
 
     return () => ac.abort();
-  }, [sessionId, weekNum, writingHydratedSessionId]);
+  }, [sessionId, weekNum, writingHydratedSessionId, condition]);
 
   useEffect(() => {
     if (!sessionId || progressHydratedSessionId === sessionId) return;
@@ -960,7 +968,7 @@ export default function WeekBookPage() {
         });
         if (!res.ok) return;
         const data = await res.json();
-        if (data?.totalScore != null) {
+        if (!isControlConditionValue(condition) && data?.totalScore != null) {
           setTotalScore(Number(data.totalScore));
         }
         if (Array.isArray(data?.earnedBadges) && data.earnedBadges.length > 0) {
@@ -976,7 +984,7 @@ export default function WeekBookPage() {
     })();
 
     return () => ac.abort();
-  }, [sessionId, weekNum, progressHydratedSessionId]);
+  }, [sessionId, weekNum, progressHydratedSessionId, condition]);
 
   /** 聊天載入後：奇數週空聊天才種 ORID 開場；整合寫作開場改由 synthesisTabMessages 顯示，不寫入全域 messages */
   useEffect(() => {
@@ -1005,7 +1013,9 @@ export default function WeekBookPage() {
     badges: BadgeId[],
   ) {
     if (!sessionId || !readingId) return;
-    const payload = mergeProgressIntoWriting(snapshot, totalScore, badges);
+    const payload = mergeProgressIntoWriting(snapshot, totalScore, badges, {
+      includeScore: !isControl,
+    });
     try {
       const r = await fetch(`/api/orid/writings`, {
         method: "POST",
@@ -1130,8 +1140,12 @@ export default function WeekBookPage() {
         : getNewlyEarnedBadges(earnedBadges, allBadges);
 
       const resolvedScore = scoreFromMeta ?? 0;
-      setWritingData(mergeProgressIntoWriting(nextWriting, resolvedScore, allBadges));
-      setTotalScore(resolvedScore);
+      setWritingData(
+        mergeProgressIntoWriting(nextWriting, resolvedScore, allBadges, {
+          includeScore: !isControl,
+        }),
+      );
+      if (!isControl) setTotalScore(resolvedScore);
       setEarnedBadges(allBadges);
       if (newOnes.length > 0) {
         setBadgeModalQueue((prev) => [...prev, ...newOnes.filter((b) => !prev.includes(b))]);
@@ -1277,7 +1291,9 @@ export default function WeekBookPage() {
 
       if (label === "draft") {
         try {
-          const payload = mergeProgressIntoWriting(writingData, totalScore, earnedBadges);
+          const payload = mergeProgressIntoWriting(writingData, totalScore, earnedBadges, {
+            includeScore: !isControl,
+          });
           if (typeof window !== "undefined") {
             localStorage.setItem(localDraftStorageKey(sessionId, weekNum), JSON.stringify(payload));
           }
@@ -1290,7 +1306,9 @@ export default function WeekBookPage() {
         return;
       }
 
-      const payload = mergeProgressIntoWriting(writingData, totalScore, earnedBadges);
+      const payload = mergeProgressIntoWriting(writingData, totalScore, earnedBadges, {
+        includeScore: !isControl,
+      });
       try {
         if (typeof window !== "undefined") {
           localStorage.setItem(localDraftStorageKey(sessionId, weekNum), JSON.stringify(payload));

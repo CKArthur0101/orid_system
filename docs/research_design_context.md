@@ -164,6 +164,19 @@ AI feedback 設計應鼓勵學生回到自己的文字修改，以促進上述�
 - **不在系統內實作**問卷模組。
 - 使用課堂 **Google 表單或紙本**；分析時與 `user_id`／班級／條件對齊即可。
 
+### 5.6 匯出欄位資料字典（Phase 5）
+
+教師「研究分析」CSV（`/research-export`）與課堂監控 CSV 中的系統分欄位：
+
+| 欄位（研究匯出） | 意義 | 正式分析角色 |
+|------------------|------|----------------|
+| `word_count` / `save_count` / `revision_count` / `guide_use_count` | RQ3 歷程 | 可用 |
+| `badge_count` / `earned_badges` | 參與／階段完成（奇數週 start/30/60/90；**不含** `badge_synthesis_start`） | 非 RQ1／RQ2 主 DV |
+| `ai_system_*_score_exploratory` | 系統 AI 自動分 | **探索用 only**；正式 RQ1／RQ2 用人評 |
+| `condition` / `week` / `task_type` / `is_submitted` | 分組與完成 | 可用 |
+
+人評分數目前在系統外（紙本／表單／獨立表）；匯出後與 `student_email`／週次對齊即可。
+
 ---
 
 ## 六、奇數週與偶數週任務（研究層）
@@ -221,7 +234,8 @@ AI feedback 設計應鼓勵學生回到自己的文字修改，以促進上述�
 2. **系統分 ≠ 正式 DV**：儀表板分數不可單獨宣稱回答 RQ1／RQ2。  
 3. **偶數週自動計分**：文件已要求 SEL **引導**面向；正式自動計分非優先。  
 4. **舊文件落差**：部分歷史設計文可能描述已廢棄之 `/orid/chat` 或與現行「人評為主」策略不同——以**本文件＋現行程式**為準（見下方衝突說明）。  
-5. **條件閘門（Phase 4）**：控制組 session 呼叫 `writing-coach/chat`、`writings/feedback`、`writings/assist` 回 **403**；前端隱藏「取得回饋／取得整合回饋」；session 條件由 `User.orid_condition` 決定（僅 force_new 帳號可覆寫）。
+5. **條件閘門（Phase 4）**：控制組 session 呼叫 `writing-coach/chat`、`writings/feedback`、`writings/assist` 回 **403**；前端隱藏「取得回饋／取得整合回饋」；session 條件由 `User.orid_condition` 決定（僅 force_new 帳號可覆寫）。  
+6. **分數／徽章對齊（Phase 5）**：控制組 `/progress` 不回系統分；寫入寫作 JSON 時剝除 `score`；徽章事件週次改用學術週（1–6）；教師儀表與 CSV 標明系統分為探索用；研究匯出徽章依該列週次篩選，且省略 `badge_synthesis_start`。
 
 ### 與既有 docs 的關係（衝突說明）
 
@@ -239,3 +253,4 @@ AI feedback 設計應鼓勵學生回到自己的文字修改，以促進上述�
 |------|------|
 | 2026-08 | Phase 1 初版：RQ、組別、資料來源、人評為主決策、SEL 映射 |
 | 2026-08 | Phase 4：條件閘門與控制組提示 bookId 參數化（book2/3 通用 fallback） |
+| 2026-08 | Phase 5：系統分＝探索用標示、控制組分數剝除、徽章週次修正、匯出資料字典 |

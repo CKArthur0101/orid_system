@@ -93,10 +93,10 @@ const METRIC_OPTIONS = [
   { key: "avg_word_count", label: "字數" },
   { key: "avg_revision_count", label: "修改次數" },
   { key: "avg_guide_use_count", label: "引導使用次數" },
-  { key: "avg_badge_count", label: "徽章數" },
-  { key: "avg_orid_score", label: "ORID 分" },
-  { key: "avg_sel_score", label: "SEL 分" },
-  { key: "avg_total_score", label: "總分" },
+  { key: "avg_badge_count", label: "徽章數（參與）" },
+  { key: "avg_orid_score", label: "AI 系統 ORID 分（探索）" },
+  { key: "avg_sel_score", label: "AI 系統 SEL 分（探索）" },
+  { key: "avg_total_score", label: "AI 系統總分（探索）" },
 ] as const;
 type MetricKey = (typeof METRIC_OPTIONS)[number]["key"];
 
@@ -242,6 +242,10 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
 
   return (
     <div className="space-y-6">
+      <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm leading-relaxed text-amber-950/85">
+        <strong className="font-semibold">研究提醒：</strong>
+        RQ1／RQ2 正式依變項為<strong>人工 rubric</strong>評分。下方 AI 系統分數僅供過程／探索參考；徽章為參與／階段完成指標，不是主要學習成效。RQ4（科技接受度）請用課堂 Google 表單或紙本，不在本系統內填寫。
+      </div>
       {/* Controls row */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -297,9 +301,9 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
         <StatCard
           icon={<PieIcon className="h-5 w-5 text-[#6f58a8]" />}
           iconBg="bg-[#f3effa]"
-          label="平均總分"
+          label="平均 AI 系統總分（探索）"
           value={cards?.avg_total_score != null ? cards.avg_total_score : "—"}
-          sub="ORID + SEL，滿分 90"
+          sub="非正式依變項；滿分 90"
         />
       </div>
 
@@ -463,7 +467,7 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
                     <th className="px-3 py-2 text-center">修改</th>
                     <th className="px-3 py-2 text-center">引導</th>
                     <th className="px-3 py-2 text-center">徽章</th>
-                    <th className="px-3 py-2 text-center">總分</th>
+                    <th className="px-3 py-2 text-center">AI 總分（探索）</th>
                     <th className="px-3 py-2 text-center">已提交</th>
                   </tr>
                 </thead>
