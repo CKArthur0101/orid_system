@@ -24,6 +24,7 @@ from app.services.orid_research_summary import (
     normalize_writing_text,
     task_type_for_week,
 )
+from app.services.orid_condition import CONTROL_AI_FORBIDDEN_DETAIL
 from app.users import get_jwt_strategy
 
 
@@ -243,7 +244,7 @@ async def test_submit_marks_submitted_and_changed_content_bumps_revision(
 
 
 # ---------------------------------------------------------------------------
-# API tests — guide_use_count (control prompt-usage / feedback_button)
+# API tests — guide_use_count (control fixed prompt usage only)
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio(loop_scope="function")
 async def test_prompt_usage_bumps_guide_use_count(test_client, db_session, authenticated_user):
@@ -280,7 +281,9 @@ async def test_prompt_usage_bumps_guide_use_count(test_client, db_session, authe
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_feedback_button_bumps_guide_use_count(test_client, db_session, authenticated_user):
+async def test_control_feedback_button_forbidden_and_does_not_bump_guide_use_count(
+    test_client, db_session, authenticated_user
+):
     user = authenticated_user["user"]
     reading = Reading(title="第1週 回饋測試", content=_minimal_book_pack())
     db_session.add(reading)
@@ -305,11 +308,11 @@ async def test_feedback_button_bumps_guide_use_count(test_client, db_session, au
         },
         headers=authenticated_user["headers"],
     )
-    assert r.status_code == 200, r.text
+    assert r.status_code == 403, r.text
+    assert CONTROL_AI_FORBIDDEN_DETAIL in r.text
 
     summary = await _fetch_summary(db_session, user_id=user.id, week=1, session_id=session.id)
-    assert summary is not None
-    assert summary.guide_use_count == 1
+    assert summary is None
 
 
 # ---------------------------------------------------------------------------
