@@ -204,9 +204,35 @@ _STAGE_RUBRIC_LEVEL_KEYS: dict[str, str] = {
 }
 
 
+_STAGE_REVISION_TARGETS: dict[str, str] = {
+    "O": "請回到 O 觀察格，補角色、事件或情節",
+    "R": "請回到 R 感受格，補感受原因",
+    "I": "請回到 I 體會格，補生活連結或學到的想法",
+    "D": "請回到 D 行動格，補具體對象、情境與做法",
+}
+
+
+_STAGE_EXAMPLE_SCAFFOLDS: dict[str, str] = {
+    "O": "故事裡，＿＿做了＿＿。／我印象最深的是＿＿。",
+    "R": "我覺得＿＿，因為＿＿。",
+    "I": "這讓我想到＿＿。",
+    "D": "以後遇到＿＿時，我會＿＿。",
+}
+
+
+def _stage_revision_target(stage: str) -> str:
+    return _STAGE_REVISION_TARGETS.get((stage or "O").strip().upper(), _STAGE_REVISION_TARGETS["O"])
+
+
+def _stage_example_scaffold(stage: str) -> str:
+    return _STAGE_EXAMPLE_SCAFFOLDS.get((stage or "O").strip().upper(), _STAGE_EXAMPLE_SCAFFOLDS["O"])
+
+
 def _rasf_json_format_block(stage: str) -> str:
     """RASF-Anchor 規則：多向度估層級 + 原文錨點引導。"""
     keys = _STAGE_RUBRIC_LEVEL_KEYS.get(stage.upper(), '"O1": "X 層級"')
+    revision_target = _stage_revision_target(stage)
+    example_scaffold = _stage_example_scaffold(stage)
     i_life = ""
     if (stage or "").strip().upper() == "I":
         i_life = (
@@ -221,14 +247,16 @@ def _rasf_json_format_block(stage: str) -> str:
   層級用語：「1 起步」「2 接近」「3 達標」「4 精進」（有把握才填，不確定可填 null）
   SEL 向度只估層級，**不要**另寫 missing；missing 只對 ORID 主向度（一刀）。
 - student_anchor_quote（必填，除非草稿空白）：從學生原文**原封不動**摘 4～20 個連續字（人名、事件、感受詞、行動詞），供後續引導錨定；禁止改寫或捏造。
-- draft_next_step：**僅在 ok=false（等級 1 或 2）時填寫**；用白話寫在學生哪一句前/後加什麼才能升到 3 達標；禁止給整段新例文；語氣要像「請回到你這一格，在『……』後面補……」。**等級 3 或 4 時填 null。**
+- draft_next_step：**僅在 ok=false（等級 1 或 2）時填寫**；最多 1 句，必須使用本段修改落點：「{revision_target}」。不要放入書中完整事件，也不要替學生完成句子。**等級 3 或 4 時填 null。**
 - missing / suggestions 引導規則（RASF 核心）：
   先估 ORID 主向度目前是第幾階。
   **等級 3（達標）或 4（精進）→ ok=true；missing=[]；suggestions=[]；example=null；draft_next_step=null。不得再要求補細節、精進或下一階。**
   等級 1 或 2 → ok=false；再只描述「從目前階 → 3 達標」還差的一個缺口。
   missing（等級 1/2 才填）**必須**引用 student_anchor_quote（或同句中的學生用詞），用「你已經有○○，再補△△會更完整」語意。
-  suggestions（等級 1/2 才填）：**一個問句**，引導學生在 anchor 那句前/後**自己**補一句（支持修改行為）；不要列多步驟、不要寫完整答案。
-  example（等級 1/2 且必要才填）：只能是**接在 anchor 上的半句填空**（保留＿＿＿），禁止「故事的主角是……」這類從零開始的通用例句。
+  suggestions（等級 1/2 才填）：**一個短問句或短指令**，必須明確指向「{revision_target}」；不要列多步驟，不要寫書中完整事件，不要寫完整答案。
+  example（等級 1/2 且必要才填）：只能使用本段填空支架：「{example_scaffold}」。保留＿＿，不得放入具體人名、完整情節、完整原因或完整做法。
+  學生會看到的 praise / missing / suggestions / example / draft_next_step 必須改成學生語；不得出現 rubric、level、criteria、score、RASF、層級、等級、達標、精進、評分、規準等評量語。
+  學生可見三段每段最多 2 個短句；每次最多一個主要修改方向。
   SEL 的缺口不得成為 missing 的主題；SEL 最多用來把 ORID 那一刀的問句問得更具體。{i_life}""".strip()
 
 
@@ -267,6 +295,8 @@ def build_genai_feedback_prompts(
     rubric_block = _format_writing_rubric_for_prompt(book_pack, stage)
     sel_guidance_block = _format_sel_guidance_for_prompt(book_pack, stage)
     rasf_block = _rasf_json_format_block(stage)
+    revision_target = _stage_revision_target(stage)
+    example_scaffold = _stage_example_scaffold(stage)
     bucket_hint = bucket_tone_hint_zh(input_bucket)
     rag_block = ""
     if stage != "D":
@@ -278,7 +308,7 @@ def build_genai_feedback_prompts(
 {BOOK_FACT_RULES}
 
 【教材不符時的回饋要求】
-學生寫了書中沒有或對不上的事 → ok 為 false；missing 要**點名是哪個詞或哪件事**看起來不在書裡，並用「書裡說的是『……』」這樣的說法引一句最接近的書中內容讓學生對照；**禁止**用「對照摘要句」「對照摘錄句」等術語。suggestions 引導學生對照那句書中內容改寫，仍**不要幫寫整段**。
+學生寫了書中沒有或對不上的事 → ok 為 false；missing 可點名學生草稿裡不對的詞或事件類型，但**不要**直接提供書中完整事件答案；**禁止**用「對照摘要句」「對照摘錄句」等術語。suggestions 只請學生回到故事中找真正發生的事來改，仍**不要幫寫整句**。
 """.strip()
 
     system_prompt = f"""
@@ -304,7 +334,11 @@ def build_genai_feedback_prompts(
 【語氣與長度感】
 學生常在一節課約 **40 分鐘**內寫完 ORID 四格，所以回饋要短、清楚、可立刻動筆。
 用字要適合國小五、六年級：短句、口語、容易懂。不要用「深化、完整度、精準、論述、脈絡、可執行」這類太大人的詞。
-一次只指出一個最重要的修改方向；suggestions 優先用 1 個問句請學生**回到自己格子裡**補／改，example 只給填空式支架，禁止完整範文。
+本段修改落點：{revision_target}。
+一次只指出一個最重要的修改方向；suggestions 優先用 1 個短問句請學生照本段修改落點補／改。
+example 只能用這種填空支架：「{example_scaffold}」。不要直接提供故事事件內容，不要替學生完成句子。
+每個可見欄位都要短：praise、missing、suggestions 各最多 1 句；example 最多 1 個句型。
+學生可見文字不要像評分規準；不要對學生說 rubric、level、criteria、score、RASF、層級、等級、達標、精進、評分、規準。
 
 【本輪輸入語氣（仍只輸出 JSON）】
 {bucket_hint}
@@ -319,9 +353,9 @@ def build_genai_feedback_prompts(
 ====================
 - praise：**必須**看得出你有讀學生原文，盡量點到裡面**正確**的人/事/詞（若完全空白再用鼓勵下筆，禁止空泛罐頭讚美）。
   若草稿含書裡沒有的情節：praise 只肯定書裡有的人名或寫作方向，**不要**把錯誤情節當成就。
-- missing：不多於 1 條，對準本段**一個**主問題（一刀）；依 RASF 規則只談「下一階 gap」。
-- suggestions：不多於 1 條；用 **1 個問句**引導學生自己改（可含「請回到這一格……」），不要列多步驟，也不要把答案寫完。
-- example：只給句型開頭、填空式提示或半句支架（例如「我覺得＿＿＿，因為＿＿＿。」）；不要填入完整角色、情節與答案讓學生可直接複製。
+- missing：不多於 1 條，對準本段**一個**主問題（一刀）；用學生語說「還差哪一種句子」，不要寫成規準判語。
+- suggestions：不多於 1 條；用 **1 個短問句或短指令**引導學生自己改，必須明確使用「{revision_target}」；不要列多步驟，也不要把答案寫完。
+- example：只給本段填空支架「{example_scaffold}」或 null；不要填入完整角色、情節、原因與做法讓學生可直接複製。
 - improved：通常 null。
 
 {rasf_block}
@@ -349,9 +383,9 @@ def build_genai_feedback_prompts(
     o_summary_priority = ""
     if stage == "O":
         o_summary_priority = (
-            "若學生草稿已寫到多個事件且出現時間銜接，missing 請**優先**補齊「書裡／故事裡」還**幾乎沒寫到**的一大段情節（只依上方教材可支持的事實，勿發明）；"
-            "用口語直接說缺哪一段，**不要**在 missing／suggestions／example 裡寫「故事摘要」「對照摘要」「掃摘要」等詞。\n"
-            "suggestions 請用問句提示學生回想 1 個尚未寫到的具體情節，不要在 example 直接替學生寫成完整句。\n"
+            "若學生草稿已寫到多個事件且出現時間銜接，missing 請**優先**提醒「故事裡還有重要情節沒寫到」，不要直接提供那段完整事件答案；"
+            "**不要**在 missing／suggestions／example 裡寫「故事摘要」「對照摘要」「掃摘要」等詞。\n"
+            "suggestions 請用短問句提示學生自己回想 1 個尚未寫到的情節，不要直接把那個事件寫出來。\n"
             "不要只要求加轉折詞、套先後句型或微調用詞，除非教材重點真的都已出現。\n\n"
         )
 
@@ -360,7 +394,7 @@ def build_genai_feedback_prompts(
         o_plot_anchor = """
 【本輪特別：O 段草稿極短或學生表達卡住】
 suggestions 與 example **不可**整段只做「一步一步／慢慢來／先再最後」等抽象流程。
-suggestions 可用問句帶到書裡一幕；example 仍只能是填空或半句支架，不要把完整答案寫好給學生複製。
+suggestions 可問「故事裡還有哪一幕？」但不要直接提供那一幕；example 只能用本段填空支架，不要把完整答案寫好給學生複製。
 """.strip()
 
     user_prompt = f"""
@@ -370,7 +404,7 @@ suggestions 可用問句帶到書裡一幕；example 仍只能是填空或半句
 {text}
 ---
 
-{o_summary_priority}{o_plot_anchor + chr(10) + chr(10) if o_plot_anchor else ""}請輸出 JSON。missing 與 suggestions 各至多 1 個字串。若 rubric 等級 3 或 4（ok=true）：missing=[]、suggestions=[]、example=null、draft_next_step=null，不再要求任何修改。若等級 1 或 2（ok=false）：必須填 student_anchor_quote 與 draft_next_step（除非草稿空白）；suggestions 用 1 個問句引導在 anchor 句前/後補寫；example 多數 null，若填只能接 anchor 的半句填空。improved 多數 null。
+{o_summary_priority}{o_plot_anchor + chr(10) + chr(10) if o_plot_anchor else ""}請輸出 JSON。missing 與 suggestions 各至多 1 個字串且要短。若 rubric 等級 3 或 4（ok=true）：missing=[]、suggestions=[]、example=null、draft_next_step=null，不再要求任何修改。若等級 1 或 2（ok=false）：必須填 student_anchor_quote 與 draft_next_step（除非草稿空白）；suggestions 用 1 個短問句引導在 anchor 句前/後補寫，並明確使用「{revision_target}」；example 多數 null，若填只能用「{example_scaffold}」這類填空支架，不得放入可直接抄的完整角色、情節、原因或做法。improved 多數 null。
 """.strip()
 
     return system_prompt, user_prompt

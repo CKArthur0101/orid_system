@@ -62,20 +62,12 @@ def _stage_safe_fallback_question(stage: str, student_text: Optional[str] = None
         anchor = ""
 
     if s == "R":
-        if anchor:
-            return _one_question(f"你剛剛提到{anchor}，那一刻你最明顯的感覺是什麼")
         return _one_question("故事裡哪一幕最讓你有感覺")
     if s == "I":
-        if anchor:
-            return _one_question(f"你剛剛提到{anchor}，你覺得這件事在提醒我們什麼")
-        return _one_question("根據故事裡發生的事，你覺得它想提醒我們什麼")
+        return _one_question("這讓你想到什麼")
     if s == "D":
-        if anchor:
-            return _one_question(f"下次遇到像{anchor}這樣的情況，你會先做哪一個小動作")
         return _one_question("下次遇到類似情況，你會先做哪一個小動作")
-    if anchor:
-        return _one_question(f"你剛剛提到{anchor}，接著是哪一件事讓情況開始改變")
-    return _one_question("接著發生了什麼")
+    return _one_question("故事裡誰做了什麼")
 
 
 def clamp_checker_output(

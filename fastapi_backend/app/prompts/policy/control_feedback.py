@@ -47,22 +47,35 @@ def _is_generic_praise(p: str) -> bool:
 
 def _default_example_line(stage: str, anchor: str = "") -> str:
     s = (stage or "O").strip().upper()
-    a = (anchor or "").strip()
     if s == "O":
-        if a:
-            return f"例如：一開始「{a}」，後來又發生了別的事，你可以把後面那一句接著寫出來。"
-        return "例如：一開始……，後來……。先把前後順序寫出來就可以了。"
+        return "例如：故事裡，＿＿做了＿＿。"
     if s == "R":
-        if a:
-            return f"例如：我看到「{a}」這一幕時，覺得有點難過，因為我覺得他沒有想到別人。"
-        return "例如：我覺得……，因為……。先寫感受，再補原因。"
+        return "例如：我覺得＿＿，因為＿＿。"
     if s == "I":
-        if a:
-            return f"例如：這件事讓我明白不能只想到自己，因為「{a}」讓我看到分享很重要。"
-        return "例如：這件事讓我明白……，因為……。先寫你學到什麼，再補理由。"
-    if a:
-        return f"例如：下次遇到像「{a}」這樣的情況，我會先停一下，再想想要怎麼做比較好。"
-    return "例如：下次遇到……，我會先……。先寫你做得到的第一步就好。"
+        return "例如：這讓我想到＿＿。"
+    return "例如：以後遇到＿＿時，我會＿＿。"
+
+
+def _revision_target_for_stage(stage: str) -> str:
+    s = (stage or "O").strip().upper()
+    if s == "R":
+        return "請回到 R 感受格，補感受原因"
+    if s == "I":
+        return "請回到 I 體會格，補生活連結或學到的想法"
+    if s == "D":
+        return "請回到 D 行動格，補具體對象、情境與做法"
+    return "請回到 O 觀察格，補角色、事件或情節"
+
+
+def _revision_question_for_stage(stage: str) -> str:
+    s = (stage or "O").strip().upper()
+    if s == "R":
+        return "哪一幕讓你有這種感覺？"
+    if s == "I":
+        return "這讓你想到什麼？"
+    if s == "D":
+        return "你會在什麼時候怎麼做？"
+    return "故事裡誰做了什麼？"
 
 
 def _draft_snippet(student_draft: str, max_len: int = 18) -> str:
@@ -104,13 +117,13 @@ def format_control_feedback_reply(
     nudge = ""
     if anchor:
         if s_up == "O":
-            nudge = f"故事裡有「{anchor}」這件事，你可以想想：誰做了什麼？"
+            nudge = "想一想故事裡哪一幕最重要：誰做了什麼？"
         elif s_up == "R":
-            nudge = f"看到「{anchor}」這一幕，你心裡是什麼感覺？"
+            nudge = "想一想哪一幕讓你有這種感覺？"
         elif s_up == "I":
-            nudge = f"「{anchor}」這件事讓你想到什麼提醒？"
+            nudge = "想一想故事讓你想到什麼？"
         else:
-            nudge = f"如果生活裡遇到像「{anchor}」那種情況，你第一步會怎麼做？"
+            nudge = "想一想生活裡遇到類似情況時，你第一步會怎麼做？"
 
     pr = (praise or "").strip()
     if missing_looks_book_grounding_priority(m0) or "對齊教材" in m0:
@@ -150,7 +163,7 @@ def format_control_feedback_reply(
     line3_custom: str | None = None
 
     if o_meta_anchor and nudge:
-        base_line3 = f"{nudge} 你可以用句型試試：{scaffold_for_stage(s_up)}"
+        base_line3 = f"{nudge}\n例如：{scaffold_for_stage(s_up)}"
     elif s0 and "用。結尾" in s0:
         base_line3 = f"先想清楚這一件事：誰做了什麼？你可以用句型：{scaffold_for_stage(s_up)}"
     elif grounding_priority or "對齊教材" in m0:
@@ -167,8 +180,7 @@ def format_control_feedback_reply(
         else:
             line3_custom = base_line3
     elif short_o_plain:
-        shown = anchor if len(anchor) <= 44 else anchor[:41] + "…"
-        base_line3 = f"故事裡有「{shown}」這一幕，你可以先問自己：誰做了什麼？句型：{scaffold_for_stage(s_up)}"
+        base_line3 = f"先問自己：故事裡誰做了什麼？\n例如：{scaffold_for_stage(s_up)}"
     elif s0 and not any(
         x in s0 for x in ("補充更多細節", "內容完整度", "深化內容", "增加完整度")
     ):
@@ -189,10 +201,13 @@ def format_control_feedback_reply(
         else:
             line3 = f"{base_line3}\n例如：{ex}"
 
+    target = _revision_target_for_stage(s_up)
+    line3 = f"{target}。{_revision_question_for_stage(s_up)}\n例如：{scaffold_for_stage(s_up)}"
+
     return (
         f"你已經做到：\n{line1}\n\n"
-        f"你可以再加強：\n{line2}\n\n"
-        f"試著補一句：\n{line3}"
+        f"再想一想：\n{line2}\n\n"
+        f"可以這樣修改：\n{line3}"
     ).strip()
 
 

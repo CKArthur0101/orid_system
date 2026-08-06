@@ -106,7 +106,7 @@ def test_personalized_control_praise_skips_fake_quote_for_one_word():
     assert q == ""
 
 
-def test_control_feedback_short_o_with_anchor_uses_book_in_example():
+def test_control_feedback_short_o_with_anchor_uses_blank_scaffold():
     reply = format_control_feedback_reply(
         ok=False,
         missing=["內容還有點短，你可以試著多寫一點；也可以先看看下方「試試看這樣寫」的起頭，跟著接一句就好。"],
@@ -117,9 +117,9 @@ def test_control_feedback_short_o_with_anchor_uses_book_in_example():
         praise=personalized_control_praise_line("[O 本段寫作] 好", "客觀") or "",
         student_draft="[O 本段寫作] 好",
     )
-    assert "阿松爺爺把柿子藏到屋後倉庫" in reply
+    assert "阿松爺爺把柿子藏到屋後倉庫" not in reply
     assert "誰做了什麼" in reply
-    assert "故事中，＿＿＿做了＿＿＿" in reply
+    assert "故事裡，＿＿做了＿＿" in reply
 
 
 def test_genai_feedback_builder_changes_contract_by_stage():
@@ -666,7 +666,7 @@ def test_apply_o_key_event_gaps_skips_grounding_priority_missing():
     assert "外星人" in m[0]
 
 
-def test_control_feedback_o_meta_stuck_reply_uses_anchor_nudge_not_raw_missing():
+def test_control_feedback_o_meta_stuck_reply_uses_blank_nudge_not_raw_missing():
     reply = format_control_feedback_reply(
         ok=False,
         missing=[CONTROL_O_META_MISSING],
@@ -677,10 +677,11 @@ def test_control_feedback_o_meta_stuck_reply_uses_anchor_nudge_not_raw_missing()
         student_draft="我不知道誰做了什麼",
     )
     assert "故事裡到底是誰做了什麼" in reply
-    assert "阿松爺爺把柿子藏到屋後倉庫" in reply
+    assert "阿松爺爺把柿子藏到屋後倉庫" not in reply
+    assert "故事裡，＿＿做了＿＿" in reply
 
 
-def test_control_feedback_o_meta_stuck_prefers_book_anchor_over_echo_suggestion():
+def test_control_feedback_o_meta_stuck_prefers_blank_scaffold_over_echo_suggestion():
     reply = format_control_feedback_reply(
         ok=False,
         missing=["內容還有點短，讀的人還看不出故事在演什麼"],
@@ -690,10 +691,11 @@ def test_control_feedback_o_meta_stuck_prefers_book_anchor_over_echo_suggestion(
         example=None,
         student_draft="我不知道誰做了什麼",
     )
-    assert "阿松爺爺把柿子藏到屋後倉庫" in reply
-    assert "故事裡有「" in reply
+    assert "阿松爺爺把柿子藏到屋後倉庫" not in reply
+    assert "故事裡有「" not in reply
     assert "我們先補一句「是誰做了什麼」" not in reply
     assert "故事裡到底是誰做了什麼" in reply
+    assert "故事裡，＿＿做了＿＿" in reply
 
 
 def test_control_feedback_reply_does_not_prefix_step_by_step():
@@ -708,7 +710,8 @@ def test_control_feedback_reply_does_not_prefix_step_by_step():
     )
     assert "我們一步一步來" not in reply
     assert "誰做了什麼" in reply
-    assert "故事中，＿＿＿做了＿＿＿" in reply
+    assert "故事裡，＿＿做了＿＿" in reply
+    assert "阿松爺爺把柿子藏起來" not in reply
 
 
 def test_prompt_versions_cover_active_surfaces():

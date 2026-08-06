@@ -4,10 +4,10 @@ import re
 
 
 _DEFAULT_SCAFFOLDS: dict[str, str] = {
-    "O": "故事中，＿＿＿做了＿＿＿。",
-    "R": "我覺得＿＿＿，因為＿＿＿。",
-    "I": "這個故事讓我學到＿＿＿，因為＿＿＿。",
-    "D": "以後如果我遇到＿＿＿，我會＿＿＿。",
+    "O": "故事裡，＿＿做了＿＿。",
+    "R": "我覺得＿＿，因為＿＿。",
+    "I": "這讓我想到＿＿。",
+    "D": "以後遇到＿＿時，我會＿＿。",
 }
 
 _BLANK_TOKENS = ("＿＿", "__", "……", "...")
@@ -47,8 +47,8 @@ def scaffold_feedback_example(stage: str, example: str | None) -> str | None:
     text = str(example).strip()
     if not text:
         return None
-    if _looks_like_scaffold(text) and len(text) <= 80:
-        return text
+    if _looks_like_scaffold(text):
+        return scaffold_for_stage(stage)
     if _looks_copyable_answer(text) or len(text) > 80:
         return scaffold_for_stage(stage)
     return text

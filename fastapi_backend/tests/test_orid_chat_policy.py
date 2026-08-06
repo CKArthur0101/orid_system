@@ -417,7 +417,7 @@ def test_control_feedback_reply_grounding_praise_skips_wrong_event_quote():
         praise="你有寫到「送了奶奶一朵花」，讓人知道這段是在說誰。",
         student_draft="故事中，阿松爺爺送了奶奶一朵花",
     )
-    praise_section = reply.split("你可以再加強：")[0]
+    praise_section = reply.split("再想一想：")[0]
     assert "送了奶奶一朵花" not in praise_section
     assert "一朵花" not in praise_section
 
@@ -558,11 +558,11 @@ def test_feedback_narration_validation_requires_three_sections():
 def test_scaffold_guard_rejects_full_answer():
     example = "我覺得阿松爺爺後來很溫暖，因為他願意把柿子分享給大家。"
 
-    assert scaffold_feedback_example("R", example) == "我覺得＿＿＿，因為＿＿＿。"
+    assert scaffold_feedback_example("R", example) == "我覺得＿＿，因為＿＿。"
 
 
 def test_scaffold_guard_allows_blank_scaffold():
-    example = "我覺得＿＿＿，因為＿＿＿。"
+    example = "我覺得＿＿，因為＿＿。"
 
     assert scaffold_feedback_example("R", example) == example
 
@@ -663,7 +663,7 @@ def test_maybe_promote_rid_pass_bar_stops_ghost_wall():
         ok=False,
         missing=["可以再多寫一點書裡那一幕，像是他「故意在大家面前大口吃甜柿子」這個畫面。"],
         suggestions=["你可以接著寫：「因為他 _ _ _ ，所以我覺得 _ _ _ 。」"],
-        example="我覺得＿＿＿，因為＿＿＿。",
+        example="我覺得＿＿，因為＿＿。",
         rubric_meta={"rubric_focus": "R1", "rubric_level_estimate": {"R1": "2 接近"}},
     )
     assert r_ok is True
@@ -719,7 +719,7 @@ def test_scrub_revision_prompts_already_in_draft_rewrites_loop():
     missing = ["這一段可以再多寫「故意在大家面前大口吃」這個畫面。"]
     suggestions = ["把「故意在大家面前大口吃」再寫清楚一點。"]
     new_m, new_s, new_ex = scrub_revision_prompts_already_in_draft(
-        "R", draft, missing, suggestions, "我覺得＿＿＿，因為＿＿＿。"
+        "R", draft, missing, suggestions, "我覺得＿＿，因為＿＿。"
     )
     assert "故意在大家面前大口吃" not in new_m[0] or "不必" in new_m[0] or "已經" in new_m[0]
     assert "故意在大家面前大口吃" not in new_s[0]
@@ -895,10 +895,11 @@ def test_control_feedback_reply_preserves_example_in_try_section():
         example="故事裡先發生的是阿松爺爺把柿子藏起來，後來大家才知道他不想分給別人。",
         student_draft="阿松爺爺不分享柿子",
     )
-    assert "試著補一句：" in reply
+    assert "可以這樣修改：" in reply
     assert "誰做了什麼" in reply
     assert "例如：" in reply
-    assert "＿＿＿" in reply
+    assert "故事裡，＿＿做了＿＿" in reply
+    assert "阿松爺爺把柿子藏起來" not in reply
 
 
 def test_normalize_feedback_focus_strength_tone_changes_with_draft_quality():
