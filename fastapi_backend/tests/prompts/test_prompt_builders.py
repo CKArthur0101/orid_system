@@ -387,6 +387,9 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "SEL 表現" in synthesis_system
     assert "生活連結" in synthesis_system
     assert "優先規則" in synthesis_system
+    assert "完整 ≠ 連貫" in synthesis_system
+    assert "硬串" in synthesis_system
+    assert "串起來了" in synthesis_system
     assert "不做正式計分" in synthesis_system
     assert "回到整合寫作格子" in synthesis_system
     # 可選 meta 仍會插入中段；預設不傳時僅有 playbook 內建「三段標題」與週一區塊，無【學生自填閱讀心得】中段
@@ -415,6 +418,22 @@ def test_coach_and_checker_builders_keep_expected_sections():
     )
     assert "SEL表現" in syn_r2 or "SEL 表現" in syn_r2
     assert "反思深度" in syn_r2
+
+    syn_r2_depth = build_synthesis_coach_system_prompt(
+        book_context=build_book_context_block(_book_pack()),
+        week1_orid_lines={"O": "他把柿子藏起來", "R": "", "I": "", "D": ""},
+        feedback_round=2,
+        student_text=(
+            "讀完阿松爺爺的故事後，我最記得他一開始把甜柿子藏起來、不肯分享，"
+            "這讓我覺得他很小氣也很孤單。"
+            "後來看到大家因為分享變得開心，我才明白分享其實可以讓自己和別人都更好過。"
+            "所以下次當球場上有人想加入我們，我會先說好啊，再約他一起練投籃。"
+        ),
+    )
+    assert "【第二輪／銜接已大致足夠】" in syn_r2_depth
+    assert "不要**去改短／拆句" in syn_r2_depth or "不要**要求改短／拆句" in syn_r2_depth
+    assert "【本輪為第二輪】" in syn_r2_depth
+    assert "不是把句子改短" in syn_r2_depth
 
     checker_system, checker_user = build_book_grounding_checker_prompts(
         student_text="阿松爺爺把柿子藏到屋後倉庫",
@@ -466,6 +485,73 @@ def test_synthesis_pasted_stage_paragraphs_detection():
         student_text=written_draft,
     )
     assert "草稿看起來像是把上週幾段" not in synthesis_written_system
+
+
+def test_synthesis_hard_stitched_orid_forces_coherence_priority():
+    """硬串偵測不綁定特定書本人名／情節，靠通用連貫線索判斷。"""
+    from app.prompts.builders.coach_chat import find_abrupt_orid_boundaries, looks_like_hard_stitched_orid_synthesis
+
+    hard_stitched = (
+        "故事裡阿松爺爺的柿子很甜，卻都不分享給別人，只把蒂跟葉子給別人，"
+        "後來葉子變成有趣的東西，爺爺就不給了把葉子藏起來，最後還把樹砍掉。"
+        "我覺得爺爺這樣很小氣。"
+        "這件事讓我學到分享不一定是壞事，因為後來分享反而有驚喜。"
+        "下次我打籃球有人要報隊，我不會拒絕，會跟他一起打，學新技巧。"
+    )
+    assert looks_like_hard_stitched_orid_synthesis(hard_stitched) is True
+
+    # Same hard-stitch pattern but a completely different book/story/action —
+    # detector must generalise, not key off this one essay's nouns.
+    other_book_hard_stitched = (
+        "書裡的小熊一開始都自己躲在洞裡看書，不跟其他動物玩，也不借書給別人。"
+        "我覺得小熊這樣很孤單，看起來也不快樂。"
+        "這件事讓我學到，一個人看書雖然自由，但少了朋友會很無聊。"
+        "以後班上分組的時候，我不會自己選好朋友就好，會多找還沒有組別的同學。"
+    )
+    assert looks_like_hard_stitched_orid_synthesis(other_book_hard_stitched) is True
+
+    integrated = (
+        "讀完阿松爺爺的故事後，我最記得他一開始把甜柿子藏起來、不肯分享，"
+        "這讓我覺得他很小氣也很孤單。"
+        "後來看到大家因為分享變得開心，我才明白分享其實可以讓自己和別人都更好過。"
+        "所以下次當球場上有人想加入我們，我會先說好啊，再約他一起練投籃。"
+    )
+    assert looks_like_hard_stitched_orid_synthesis(integrated) is False
+
+    # Weaker case: only one abrupt transition (R→I has a connector, I→D doesn't)
+    # should not fire the full force-block — avoids over-triggering on essays
+    # that are mostly fine with just one soft spot.
+    mostly_ok_one_gap = (
+        "故事裡的小熊一開始都自己躲在洞裡看書，不跟其他動物玩。"
+        "我覺得小熊這樣很孤單，這讓我覺得他其實也想要朋友。"
+        "我才明白，一個人看書雖然自由，但少了朋友會很無聊。"
+        "以後班上分組的時候，我會多找還沒有組別的同學。"
+    )
+    boundaries = find_abrupt_orid_boundaries(mostly_ok_one_gap)
+    assert len(boundaries) <= 1
+    assert looks_like_hard_stitched_orid_synthesis(mostly_ok_one_gap) is False
+
+    system = build_synthesis_coach_system_prompt(
+        book_context=build_book_context_block(_book_pack()),
+        week1_orid_lines={"O": "他把柿子藏起來", "R": "", "I": "", "D": ""},
+        student_text=hard_stitched,
+    )
+    assert "【偵測】草稿雖然故事／感受／體會／行動大致都有" in system
+    assert "完整 ≠ 連貫" in system
+    assert "本輪先不要談 SEL" in system
+    assert "串起來了" in system
+    assert "行動精修" in system
+    assert "不要**去改『行動』那一句本身的長短或拆句" in system
+    # Points at the actual weak boundary rather than a fixed script.
+    assert "銜接特別不足的地方大約在" in system
+
+    integrated_system = build_synthesis_coach_system_prompt(
+        book_context=build_book_context_block(_book_pack()),
+        week1_orid_lines={"O": "他把柿子藏起來", "R": "", "I": "", "D": ""},
+        student_text=integrated,
+    )
+    assert "【偵測】草稿雖然故事／感受／體會／行動大致都有" not in integrated_system
+    assert "【偵測】草稿看起來像是把上週幾段" not in integrated_system
 
 
 def test_normalize_feedback_focus_o_high_avoids_sequence_regression():
@@ -638,4 +724,4 @@ def test_prompt_versions_cover_active_surfaces():
     }.issubset(PROMPT_VERSIONS.keys())
     assert PROMPT_VERSIONS["genai_feedback"] == "wf_v11"
     assert PROMPT_VERSIONS["feedback_narration"] == "fn_v11"
-    assert PROMPT_VERSIONS["synthesis_coach"] == "sc_v8"
+    assert PROMPT_VERSIONS["synthesis_coach"] == "sc_v12"

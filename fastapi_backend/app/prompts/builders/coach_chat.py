@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from app.prompts.orid_playbook import (
@@ -14,6 +15,33 @@ from app.prompts.templates.coach_chat import (
 )
 
 _SYNTHESIS_PHASE_CHOICES = frozenset({"select_evidence", "align_prompt", "short_draft", "expand_revise"})
+
+_COHERENCE_FORCE_REPLY = (
+    "本輪回饋請優先只看「連貫性」這一項："
+    "先肯定四個部分都在了，只針對上面標出的那個交界處（若沒有標出，你自己找全文中最跳的一處）"
+    "指出可以加一句銜接、並給一個銜接語或連接詞的小範例即可；"
+    "**不要**要求整篇重寫、**不要**要求把每一段都改寫、"
+    "**不要**去改『行動』那一句本身的長短或拆句——連貫的重點是段落之間有沒有橋，不是句子本身寫得好不好。"
+    "**不要**說「串起來了」「接得很順」「整篇很完整就好」；"
+    "本輪先不要談 SEL 表現或行動精修；等銜接補上後，下一輪再考慮。"
+)
+
+# Generic reflective-writing cues — deliberately book-agnostic (no character/plot
+# nouns) so this generalises across every book pack, not just one sample essay.
+_O_CUE = re.compile(r"(故事[裡里中]|書[裡裏]|文章[裡裏]|繪本[裡裏]|一開始|主角|作者)")
+_R_CUE = re.compile(r"(我覺得|我感到|讓我覺得|覺得很|心情|很難過|很生氣|很開心|很感動|很孤單|很小氣|很害怕)")
+_I_CUE = re.compile(r"(學到|讓我學到|想到|明白|道理|提醒我|原來|懂了|體會到)")
+_D_CUE = re.compile(r"(下次|以後|我會|如果.{0,10}(遇到|發生)|打算)")
+
+# Generic connective phrases that mark a *deliberate* transition between stages —
+# their absence around a boundary (not merely anywhere in the essay) is the signal.
+_GLUE_CONNECTORS = re.compile(
+    r"(因此|於是|這讓我聯想|同樣地|就像|舉例來說|換句話說|進一步|讀完之後|"
+    r"從這件事|所以下次|因為這樣|我才明白|這讓我覺得|後來看到|也讓我|讓我想到|"
+    r"這也讓|因為這件事|正因為)"
+)
+
+_BOUNDARY_ZH = {"O_R": "故事→感受", "R_I": "感受→體會", "I_D": "體會→行動"}
 
 
 def looks_like_pasted_stage_paragraphs(
@@ -37,6 +65,80 @@ def looks_like_pasted_stage_paragraphs(
     return hits >= 3
 
 
+def _first_match_after(pattern: re.Pattern[str], t: str, after: int) -> Optional[re.Match[str]]:
+    for m in pattern.finditer(t):
+        if m.start() >= after:
+            return m
+    return None
+
+
+def find_abrupt_orid_boundaries(text: str) -> list[str]:
+    """Return which O→R / R→I / I→D transitions lack a nearby connective phrase.
+
+    Checks connector presence *around each specific boundary* rather than
+    counting glue words anywhere in the essay — a connector used near one
+    boundary shouldn't hide a genuinely abrupt jump elsewhere, and a draft
+    with no book-specific keywords (any book pack) can still be detected.
+    """
+    t = re.sub(r"\s+", "", (text or "").strip())
+    if len(t) < 48:
+        return []
+
+    o = _first_match_after(_O_CUE, t, 0)
+    if not o:
+        return []
+    r = _first_match_after(_R_CUE, t, o.end())
+    if not r:
+        return []
+    i = _first_match_after(_I_CUE, t, r.end())
+    if not i:
+        return []
+    d = _first_match_after(_D_CUE, t, i.end())
+    if not d:
+        return []
+
+    def _has_glue(a: int, b: int) -> bool:
+        lo, hi = max(0, a - 6), min(len(t), b + 6)
+        return bool(_GLUE_CONNECTORS.search(t[lo:hi]))
+
+    abrupt: list[str] = []
+    if not _has_glue(o.start(), r.start()):
+        abrupt.append("O_R")
+    if not _has_glue(r.start(), i.start()):
+        abrupt.append("R_I")
+    if not _has_glue(i.start(), d.start()):
+        abrupt.append("I_D")
+    return abrupt
+
+
+def looks_like_hard_stitched_orid_synthesis(text: str) -> bool:
+    """True when a synthesis draft still reads like O→R→I→D hard-stitched stages.
+
+    Completeness can be fine while coherence is weak: story cue, then feeling,
+    then lesson, then future action appear in order, with at least two of the
+    three transitions missing any connective phrase nearby.
+    """
+    return len(find_abrupt_orid_boundaries(text)) >= 2
+
+
+def _coherence_priority_mid_block(*, kind: str, abrupt_boundaries: Optional[list[str]] = None) -> str:
+    if kind == "pasted":
+        head = (
+            "【偵測】草稿看起來像是把上週幾段（觀察／感受／體會／行動）直接貼上、"
+            "段落之間還沒加銜接語。這種情況通常代表「完整性」已經有了；"
+        )
+    else:
+        boundary_hint = ""
+        if abrupt_boundaries:
+            zh = "、".join(_BOUNDARY_ZH.get(b, b) for b in abrupt_boundaries)
+            boundary_hint = f"銜接特別不足的地方大約在「{zh}」之間；"
+        head = (
+            "【偵測】草稿雖然故事／感受／體會／行動大致都有，但讀起來仍像把四格"
+            f"一段接一段硬串，銜接還不夠（完整 ≠ 連貫）。{boundary_hint}"
+        )
+    return head + _COHERENCE_FORCE_REPLY
+
+
 _SYNTHESIS_RUBRICS: tuple[tuple[str, str], ...] = (
     ("完整性", "文章是否包含故事事件、感受、體會與未來行動四個部分？"),
     ("連貫性", "句子之間是否順暢？不是把四段硬貼在一起，而是有串接。"),
@@ -58,6 +160,19 @@ def _synthesis_phase_zh(phase: str) -> str:
     }.get(phase, phase)
 
 
+def _depth_priority_mid_block() -> str:
+    """Round-2 guidance when coherence gaps are no longer the main issue."""
+    return (
+        "【第二輪／銜接已大致足夠】"
+        "學生已用過第一輪整合回饋，草稿銜接問題已大致處理或不再明顯；"
+        "本輪**不要**再談段落銜接、**不要**要求改短／拆句／重寫最後一句行動。"
+        "本輪只挑一個主缺口，優先順序：反思深度（原因、生活連結）→ "
+        "SEL 表現（一個短問，勿說術語）→ 行動具體性（何時、對誰、怎麼開口，"
+        "不是句子長短）。若行動已有明確場景，改問「會先對對方說什麼」"
+        "或「這個行動跟剛才學到的道理怎麼連」，不要叫拆成兩句短句。"
+    )
+
+
 def _synthesis_operational_instructions(
     *,
     phase: Optional[str],
@@ -76,14 +191,15 @@ def _synthesis_operational_instructions(
         lines.append("【本輪檢查重點（對照下列 1～2 條即可）】\n" + "\n".join(rubric_lines))
     elif not r1:
         lines.append(
-            "【本輪為第二輪】可在連貫性、反思深度、SEL 表現（一個短問句）與行動具體性上給較具體建議，"
-            "仍以短段落、不要代寫全文；不要一次談超過一個主缺口。"
+            "【本輪為第二輪】銜接若已大致足夠，本輪**不要**再談連貫或改句子長短；"
+            "在反思深度、SEL 表現（一個短問句）與行動具體性中只挑一個主缺口，"
+            "仍以短段落、不要代寫全文。"
         )
         lines.append(
             "【本輪檢查重點（對照下列 1～2 條即可）】\n"
-            "- 連貫性：段落之間有銜接，先說什麼、再說什麼不會突然跳走。\n"
-            "- 反思深度或 SEL 表現：原因／生活連結，或情緒覺察／同理／關係／負責任行動擇一短問。\n"
-            "- 行動具體性：D 的部分是否具體說出實際能做到的行動？"
+            "- 反思深度：是否說明感受原因、體會，並能連結到自己的真實生活經驗？\n"
+            "- SEL 表現：情緒覺察、同理、關係理解或負責任行動擇一短問（勿說 SEL）。\n"
+            "- 行動具體性：是否說出何時、對誰、會怎麼開口或怎麼做？（不是把句子改短）"
         )
 
     if r1:
@@ -93,8 +209,8 @@ def _synthesis_operational_instructions(
         )
     else:
         lines.append(
-            "【兩輪制／份量】這是**第二輪**：可以再多一小層（例如補一句銜接、一個生活連結或一個更清楚的行動），"
-            "仍請維持短段落，不要代寫整篇。"
+            "【兩輪制／份量】這是**第二輪**：在反思深度、SEL 或行動具體性上再多一小層，"
+            "仍請維持短段落，不要代寫整篇；**不要**回頭改短最後一句或談銜接。"
         )
 
     if synthesis_clarify:
@@ -143,12 +259,14 @@ def compose_synthesis_coach_mid_block(
     reading_excerpt: Optional[str],
     synthesis_clarify: bool,
     looks_pasted: bool = False,
+    hard_stitched_boundaries: Optional[list[str]] = None,
 ) -> str:
     """
     Inserted between 【教材脈絡】 and personal tail.
     Empty when legacy defaults (round 1, no phase, no excerpt, no clarify).
     """
     pieces: list[str] = []
+    rnd = 2 if int(feedback_round) == 2 else 1
     rex = (reading_excerpt or "").strip()
     if rex:
         cap = rex[:2000]
@@ -156,16 +274,13 @@ def compose_synthesis_coach_mid_block(
         pieces.append(f"【學生自填閱讀心得／摘記節選（唯讀）】\n{cap}{tail_note}")
 
     if looks_pasted:
-        pieces.append(
-            "【偵測】草稿看起來像是把上週幾段（觀察／感受／體會／行動）直接貼上、段落之間還沒加銜接語。"
-            "這種情況通常代表「完整性」已經有了；本輪回饋請優先只看「連貫性」這一項："
-            "先肯定四個部分都在了，再只指出「哪兩段之間」可以加一句銜接、"
-            "並給一個銜接語或連接詞的小範例即可；**不要**要求整篇重寫、**不要**要求把每一段都改寫。"
-            "本輪先不要談 SEL 表現或行動精修；等銜接補上後，下一輪再考慮。"
-        )
+        pieces.append(_coherence_priority_mid_block(kind="pasted"))
+    elif hard_stitched_boundaries:
+        pieces.append(_coherence_priority_mid_block(kind="hard_stitched", abrupt_boundaries=hard_stitched_boundaries))
+    elif rnd == 2:
+        pieces.append(_depth_priority_mid_block())
 
     phase = synthesis_phase if (synthesis_phase or "") in _SYNTHESIS_PHASE_CHOICES else None
-    rnd = 2 if int(feedback_round) == 2 else 1
 
     if phase or rnd == 2 or synthesis_clarify:
         pieces.append(_synthesis_operational_instructions(phase=phase, feedback_round=rnd, synthesis_clarify=synthesis_clarify))
@@ -203,12 +318,16 @@ def build_synthesis_coach_system_prompt(
         lines.append(f"- {labels[k]}：{t or '（尚未撰寫）'}")
     joined = "\n".join(lines)
     hint = opening_hint or "先鎖定一段最想讀者跟上你的地方，再補一句銜接。"
+    pasted = looks_like_pasted_stage_paragraphs(student_text, week1_orid_lines)
+    abrupt_boundaries = [] if pasted else find_abrupt_orid_boundaries(student_text)
+    hard_stitched_boundaries = abrupt_boundaries if len(abrupt_boundaries) >= 2 else []
     mid = compose_synthesis_coach_mid_block(
         synthesis_phase=synthesis_phase,
         feedback_round=feedback_round,
         reading_excerpt=reading_excerpt,
         synthesis_clarify=synthesis_clarify,
-        looks_pasted=looks_like_pasted_stage_paragraphs(student_text, week1_orid_lines),
+        looks_pasted=pasted,
+        hard_stitched_boundaries=hard_stitched_boundaries,
     )
     return format_synthesis_coach_playbook(
         week1_block=joined,

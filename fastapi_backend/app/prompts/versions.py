@@ -7,7 +7,7 @@ PROMPT_VERSIONS = {
     "genai_feedback": "wf_v11",
     "feedback_narration": "fn_v11",
     "writing_coach": "wc_v6",
-    "synthesis_coach": "sc_v8",
+    "synthesis_coach": "sc_v12",
     "book_grounding_checker": "bgc_v1",
     "orid_checker": "oc_v1",
 }

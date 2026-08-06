@@ -65,6 +65,8 @@ type OridWritingV1 = {
   synthesis_draft?: string;
   synthesis_reading_reflection?: string;
   synthesis_round1_completed?: boolean;
+  /** Snapshot of synthesis_draft after round-1 feedback; used to reset round when heavily rewritten. */
+  synthesis_feedback_baseline_draft?: string;
   /** 舊版精靈資料；讀檔時保留，新 UI 不再寫入 */
   synthesis_evidence_notes?: string;
   synthesis_align_scaffold?: string;
@@ -333,6 +335,9 @@ function normalizeWritingContent(raw: unknown, week: number): OridWritingV1 {
         typeof o.synthesis_reading_reflection === "string" ? o.synthesis_reading_reflection : "",
       synthesis_round1_completed: !!o.synthesis_round1_completed,
     };
+    if (typeof o.synthesis_feedback_baseline_draft === "string") {
+      out.synthesis_feedback_baseline_draft = o.synthesis_feedback_baseline_draft;
+    }
     if (typeof o.synthesis_evidence_notes === "string") out.synthesis_evidence_notes = o.synthesis_evidence_notes;
     if (typeof o.synthesis_align_scaffold === "string") out.synthesis_align_scaffold = o.synthesis_align_scaffold;
     if (typeof o.synthesis_short_draft === "string") out.synthesis_short_draft = o.synthesis_short_draft;
@@ -341,6 +346,18 @@ function normalizeWritingContent(raw: unknown, week: number): OridWritingV1 {
   }
 
   return base;
+}
+
+/** If the student rewrites the synthesis draft heavily, treat the next feedback as round 1 again. */
+function synthesisDraftNeedsRound1Reset(baseline: string, current: string): boolean {
+  const b = baseline.trim();
+  const c = current.trim();
+  if (!b) return false;
+  if (c.length < b.length * 0.7) return true;
+  if (Math.abs(c.length - b.length) > Math.max(80, b.length * 0.35)) return true;
+  const probe = b.slice(0, Math.min(100, b.length));
+  if (probe.length >= 30 && !c.includes(probe.slice(0, 30))) return true;
+  return false;
 }
 
 function parseWritingRecordContent(content: unknown, week: number): OridWritingV1 {
@@ -1188,6 +1205,8 @@ export default function WeekBookPage() {
       return;
     }
 
+    const feedbackRound = writingData.synthesis_round1_completed ? 2 : 1;
+
     fbInflightRef.current += 1;
     setFbLoading(true);
     setFbError(null);
@@ -1207,6 +1226,7 @@ export default function WeekBookPage() {
           source: "synthesis_feedback",
           week: weekNum,
           save_feedback: true,
+          feedback_round: feedbackRound,
         }),
       });
 
@@ -1219,6 +1239,15 @@ export default function WeekBookPage() {
       if (isUuid(savedId)) setWritingId(savedId);
 
       const meta = data?.meta ?? {};
+      let nextWriting = writingData;
+      if (feedbackRound === 1) {
+        nextWriting = {
+          ...writingData,
+          synthesis_round1_completed: true,
+          synthesis_feedback_baseline_draft: draft,
+        };
+        setWritingData(nextWriting);
+      }
       if (Array.isArray(meta.earnedBadges)) {
         const merged = Array.from(
           new Set([...earnedBadges, ...(meta.earnedBadges as BadgeId[])]),
@@ -1230,7 +1259,9 @@ export default function WeekBookPage() {
         if (newOnes.length > 0) {
           setBadgeModalQueue((prev) => [...prev, ...newOnes.filter((b) => !prev.includes(b))]);
         }
-        await persistWritingSnapshot(writingData, totalScore, merged);
+        await persistWritingSnapshot(nextWriting, totalScore, merged);
+      } else if (feedbackRound === 1) {
+        await persistWritingSnapshot(nextWriting, totalScore, earnedBadges);
       }
     } catch (e: any) {
       setFbError(e?.message ?? "整合回饋失敗");
@@ -1646,12 +1677,25 @@ export default function WeekBookPage() {
                 className="min-h-0 w-full flex-1 resize-none rounded-xl border border-amber-100 bg-[#fffcf7] p-2.5 text-base leading-relaxed outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-300/30 md:p-3 md:text-sm lg:text-base"
                 placeholder="依序寫：故事裡的事 → 感受與原因 → 學到什麼 → 以後會怎麼做……"
                 value={writingData.synthesis_draft ?? ""}
-                onChange={(e) =>
-                  setWritingData((prev) => ({
-                    ...prev,
-                    synthesis_draft: e.target.value,
-                  }))
-                }
+                onChange={(e) => {
+                  const nextDraft = e.target.value;
+                  setWritingData((prev) => {
+                    const baseline = String(prev.synthesis_feedback_baseline_draft ?? "").trim();
+                    const needsReset =
+                      prev.synthesis_round1_completed &&
+                      synthesisDraftNeedsRound1Reset(baseline, nextDraft);
+                    return {
+                      ...prev,
+                      synthesis_draft: nextDraft,
+                      ...(needsReset
+                        ? {
+                            synthesis_round1_completed: false,
+                            synthesis_feedback_baseline_draft: undefined,
+                          }
+                        : {}),
+                    };
+                  });
+                }}
               />
               {copyFlash && oridPanelCollapsed ? (
                 <div className="text-xs font-medium text-emerald-700">{copyFlash}</div>
@@ -1666,7 +1710,11 @@ export default function WeekBookPage() {
                   disabled={!sessionId || fbLoading}
                   onClick={() => void runSynthesisFeedback()}
                 >
-                  {fbLoading ? "…" : "取得整合回饋"}
+                  {fbLoading
+                    ? "…"
+                    : writingData.synthesis_round1_completed
+                      ? "取得整合回饋（第二輪）"
+                      : "取得整合回饋"}
                 </button>
               ) : null}
             </div>

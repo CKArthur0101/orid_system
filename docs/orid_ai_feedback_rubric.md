@@ -120,7 +120,7 @@ AI 是實驗組研究處理的一部分，需對準：
 | 項目 | 現況（程式／playbook） | 本文件目標 |
 |------|------------------------|------------|
 | 完整／連貫／深度／行動 | 已在 synthesis coach playbook | 維持 |
-| SEL 表現（具名面向） | **已加入** playbook 五面向與優先序（`sc_v8`）；引導用、不做正式自動計分 | 已對齊 Phase 3 |
+| SEL 表現（具名面向） | **已加入** playbook 五面向與優先序（`sc_v12`）；引導用；**完整 ≠ 連貫**；硬串／貼上程式注入本輪只談連貫；第二輪（前端 `feedback_round=2`）改談深度／SEL／行動具體性，禁止改短句 | 已對齊 |
 | 正式自動計分 | 偶數週**不做** ORID/SEL 正式系統分 | **維持**：正式分用人評 |
 | 貼上→連貫優先 | 已有 `looks_like_pasted_stage_paragraphs`；貼上時本輪不談 SEL | 維持 |
 
@@ -228,7 +228,7 @@ Phase 2–4 已落地：奇數／偶數 prompt、控制組 API 閘門與固定�
 |------|------|
 | `RASF_SCORING_SPEC.md` | 強調系統計分與引導一體；本文件強調**人評為正式 DV**，系統分為探索。RASF 單點引導原則仍適用實驗組奇數週。 |
 | `SYNTHESIS_INTEGRATED_WRITING_SPEC.md` | 四階 A–D 與「證據／扣題／結構／語言」；本文件研究面向為**五面向**（含 SEL）。兩者並存時：**研究／人評／未來 prompt 對齊以本文件為準**。 |
-| 現行 synthesis playbook | **已具名「SEL 表現」**（`sc_v8`）；正式自動計分仍不做 |
+| 現行 synthesis playbook | **已具名「SEL 表現」**（`sc_v12`）；完整≠連貫；硬串／貼上程式強制本輪談銜接；第二輪談深度／SEL／行動具體性（非改短句）；前端 `synthesis_round1_completed` 驅動 `feedback_round`；正式自動計分仍不做 |
 
 ---
 
