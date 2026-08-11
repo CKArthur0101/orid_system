@@ -58,7 +58,9 @@ export function OridWeekHero({
       <div
         className={[
           "flex w-full gap-3",
-          compact ? "px-2 py-2" : "px-3 py-2.5 sm:px-4 sm:py-3 md:px-2 md:py-1.5 lg:px-4 lg:py-3",
+          compact
+            ? "px-2 py-2"
+            : "px-3 py-2 sm:px-4 sm:py-2.5 md:px-2 md:py-1 lg:px-3 lg:py-1.5 xl:px-4 xl:py-2.5",
         ].join(" ")}
       >
         <div className="min-w-0 flex-1">
@@ -67,7 +69,7 @@ export function OridWeekHero({
               <h1
                 className={[
                   "font-bold leading-tight text-amber-950",
-                  compact ? "text-sm" : "text-base sm:text-lg md:text-sm lg:text-lg",
+                  compact ? "text-sm" : "text-base sm:text-lg md:text-sm xl:text-lg",
                 ].join(" ")}
               >
                 {subtitle}
@@ -76,7 +78,7 @@ export function OridWeekHero({
                 <p
                   className={[
                     "mt-0.5 truncate font-semibold text-amber-800",
-                    compact ? "text-xs" : "text-sm sm:text-base md:text-xs lg:text-base",
+                    compact ? "text-xs" : "text-sm sm:text-base md:text-xs xl:text-base",
                   ].join(" ")}
                 >
                   《{bookTitle}》
@@ -112,9 +114,11 @@ export function OridWeekHero({
           </div>
           {weekNum <= 2 ? (
             <div
-              className={[
-                "mt-1.5 min-w-0 overflow-x-auto rounded-xl border border-amber-100 bg-white/85 md:mt-1 lg:mt-2",
-                compact ? "px-1.5 py-1" : "px-2 py-1.5 sm:px-3 sm:py-2 md:px-1.5 md:py-1 lg:px-3 lg:py-2",
+                className={[
+                "mt-1 min-w-0 overflow-x-auto rounded-xl border border-amber-100 bg-white/85 xl:mt-1.5",
+                compact
+                  ? "px-1.5 py-1"
+                  : "px-2 py-1.5 sm:px-3 sm:py-1.5 md:px-1.5 md:py-0.5 xl:px-3 xl:py-1.5",
               ].join(" ")}
             >
               <OridMissionProgress
@@ -131,7 +135,7 @@ export function OridWeekHero({
         </div>
 
         {hasBookArt && !compact ? (
-          <div className="hidden aspect-square w-[11rem] shrink-0 lg:block">
+          <div className="hidden aspect-square w-[6.75rem] shrink-0 md:block lg:w-[7.75rem] xl:w-[8.5rem] 2xl:w-[10rem]">
             <BookIllustration week={weekNum} variant="scene" layout="hero" className="h-full w-full" />
           </div>
         ) : null}

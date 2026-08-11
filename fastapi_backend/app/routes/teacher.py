@@ -1009,6 +1009,83 @@ def _avg_or_none(values: list[float]) -> float | None:
     return round(sum(values) / len(values), 2) if values else None
 
 
+def _research_condition_for_student(student: User) -> str:
+    return "control" if (student.orid_condition or "experimental") == "control" else "experimental"
+
+
+def _research_task_type_for_week(week: int) -> str:
+    return "orid_stage" if week % 2 == 1 else "synthesis"
+
+
+def _empty_research_student_row(student: User, week: int) -> ResearchStudentRow:
+    return ResearchStudentRow(
+        student_id=student.id,
+        student_email=student.email,
+        student_display_name=_student_ui_name(student),
+        condition=_research_condition_for_student(student),
+        week=week,
+        task_type=_research_task_type_for_week(week),
+        word_count=0,
+        save_count=0,
+        revision_count=0,
+        guide_use_count=0,
+        badge_count=0,
+        orid_score=None,
+        sel_score=None,
+        total_score=None,
+        is_submitted=False,
+    )
+
+
+def _summary_to_research_student_row(
+    summary: OridWeeklyResearchSummary,
+    student_by_id: dict[UUID, User],
+) -> ResearchStudentRow | None:
+    student = student_by_id.get(summary.user_id)
+    if student is None:
+        return None
+    return ResearchStudentRow(
+        student_id=summary.user_id,
+        student_email=student.email,
+        student_display_name=_student_ui_name(student),
+        condition=(
+            "control"
+            if (summary.condition or _research_condition_for_student(student)) == "control"
+            else "experimental"
+        ),
+        week=summary.week,
+        task_type=summary.task_type or _research_task_type_for_week(summary.week),
+        word_count=summary.word_count,
+        save_count=summary.save_count,
+        revision_count=summary.revision_count,
+        guide_use_count=summary.guide_use_count,
+        badge_count=summary.badge_count,
+        orid_score=summary.orid_score,
+        sel_score=summary.sel_score,
+        total_score=summary.total_score,
+        is_submitted=summary.is_submitted,
+    )
+
+
+def _fill_missing_research_student_rows(
+    rows: list[ResearchStudentRow],
+    *,
+    students: list[User],
+    weeks: list[int],
+) -> list[ResearchStudentRow]:
+    filled = list(rows)
+    existing = {(row.student_id, row.week) for row in filled}
+    for wk in weeks:
+        for student in students:
+            key = (student.id, wk)
+            if key in existing:
+                continue
+            filled.append(_empty_research_student_row(student, wk))
+            existing.add(key)
+    filled.sort(key=lambda row: (row.student_email, row.week))
+    return filled
+
+
 async def teacher_research_overview(
     class_id: UUID,
     week: int | None,
@@ -1050,7 +1127,7 @@ async def teacher_research_overview(
             student_rows=[],
         )
 
-    experimental_count = sum(1 for s in students if (s.orid_condition or "experimental") != "control")
+    experimental_count = sum(1 for s in students if _research_condition_for_student(s) != "control")
     control_count = len(students) - experimental_count
 
     # Rows in scope for cards / group comparison / completion / student table.
@@ -1063,9 +1140,21 @@ async def teacher_research_overview(
         scope_stmt = scope_stmt.where(OridWeeklyResearchSummary.week == week)
     scope_rows = (await db.execute(scope_stmt)).scalars().all()
 
-    total_rows = len(scope_rows)
-    submitted_count = sum(1 for r in scope_rows if r.is_submitted)
-    total_scores = [r.total_score for r in scope_rows if r.total_score is not None]
+    scope_student_rows = [
+        row
+        for row in (_summary_to_research_student_row(r, student_by_id) for r in scope_rows)
+        if row is not None
+    ]
+    scope_weeks = [week] if week is not None else (sorted({row.week for row in scope_student_rows}) or [1])
+    student_rows_out = _fill_missing_research_student_rows(
+        scope_student_rows,
+        students=students,
+        weeks=scope_weeks,
+    )
+
+    total_rows = len(student_rows_out)
+    submitted_count = sum(1 for r in student_rows_out if r.is_submitted)
+    total_scores = [r.total_score for r in student_rows_out if r.total_score is not None]
 
     summary_cards = ResearchSummaryCards(
         total_students=len(students),
@@ -1073,18 +1162,18 @@ async def teacher_research_overview(
         control_count=control_count,
         submitted_count=submitted_count,
         submission_rate=round(submitted_count / total_rows, 4) if total_rows else 0.0,
-        avg_guide_use_count=_avg([r.guide_use_count for r in scope_rows]),
+        avg_guide_use_count=_avg([r.guide_use_count for r in student_rows_out]),
         avg_total_score=_avg_or_none(total_scores),
     )
 
     group_comparison: list[ResearchGroupComparisonRow] = []
     for cond in ("experimental", "control"):
-        cond_rows = [r for r in scope_rows if (r.condition or "experimental") == cond]
+        cond_rows = [r for r in student_rows_out if (r.condition or "experimental") == cond]
         cond_submitted = sum(1 for r in cond_rows if r.is_submitted)
         group_comparison.append(
             ResearchGroupComparisonRow(
                 condition=cond,
-                student_count=len({r.user_id for r in cond_rows}),
+                student_count=len({r.student_id for r in cond_rows}),
                 avg_word_count=_avg([r.word_count for r in cond_rows]),
                 avg_save_count=_avg([r.save_count for r in cond_rows]),
                 avg_revision_count=_avg([r.revision_count for r in cond_rows]),
@@ -1101,10 +1190,23 @@ async def teacher_research_overview(
         select(OridWeeklyResearchSummary).where(OridWeeklyResearchSummary.user_id.in_(student_ids))
     )
     trend_rows = trend_res.scalars().all()
+    trend_student_rows = [
+        row
+        for row in (_summary_to_research_student_row(r, student_by_id) for r in trend_rows)
+        if row is not None
+    ]
+    trend_weeks = {row.week for row in trend_student_rows}
     weekly_trends: list[ResearchWeeklyTrendPoint] = []
     for wk in range(1, 7):
+        if wk not in trend_weeks:
+            continue
+        wk_rows = _fill_missing_research_student_rows(
+            [r for r in trend_student_rows if r.week == wk],
+            students=students,
+            weeks=[wk],
+        )
         for cond in ("experimental", "control"):
-            rows = [r for r in trend_rows if r.week == wk and (r.condition or "experimental") == cond]
+            rows = [r for r in wk_rows if (r.condition or "experimental") == cond]
             if not rows:
                 continue
             weekly_trends.append(
@@ -1119,7 +1221,7 @@ async def teacher_research_overview(
                     avg_orid_score=_avg_or_none([r.orid_score for r in rows if r.orid_score is not None]),
                     avg_sel_score=_avg_or_none([r.sel_score for r in rows if r.sel_score is not None]),
                     avg_total_score=_avg_or_none([r.total_score for r in rows if r.total_score is not None]),
-                    student_count=len({r.user_id for r in rows}),
+                    student_count=len({r.student_id for r in rows}),
                 )
             )
 
@@ -1127,29 +1229,6 @@ async def teacher_research_overview(
         submitted=submitted_count,
         not_submitted=total_rows - submitted_count,
     )
-
-    student_rows_out: list[ResearchStudentRow] = [
-        ResearchStudentRow(
-            student_id=r.user_id,
-            student_email=student_by_id[r.user_id].email,
-            student_display_name=_student_ui_name(student_by_id[r.user_id]),
-            condition=r.condition or "experimental",
-            week=r.week,
-            task_type=r.task_type,
-            word_count=r.word_count,
-            save_count=r.save_count,
-            revision_count=r.revision_count,
-            guide_use_count=r.guide_use_count,
-            badge_count=r.badge_count,
-            orid_score=r.orid_score,
-            sel_score=r.sel_score,
-            total_score=r.total_score,
-            is_submitted=r.is_submitted,
-        )
-        for r in scope_rows
-        if r.user_id in student_by_id
-    ]
-    student_rows_out.sort(key=lambda row: (row.student_email, row.week))
 
     return TeacherResearchOverview(
         class_id=classroom.id,

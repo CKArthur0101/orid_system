@@ -762,11 +762,11 @@ export default function TeacherDashboardPage() {
                       <div className="grid grid-cols-3 gap-3 text-center text-base">
                         <div className="rounded-xl border border-amber-100 bg-amber-50/70 p-3">
                           <p className="text-2xl font-bold text-amber-950">{studentDetail.feedback_click_count}</p>
-                          <p className="mt-0.5 text-base text-amber-800/55">點擊次數</p>
+                          <p className="mt-0.5 text-base text-amber-800/55">回饋使用次數</p>
                         </div>
                         <div className="rounded-xl border border-emerald-100 bg-[#edf7f1] p-3">
                           <p className="text-2xl font-bold text-[#3d8a63]">{studentDetail.feedback_ok_count}</p>
-                          <p className="mt-0.5 text-base text-amber-800/55">通過次數</p>
+                          <p className="mt-0.5 text-base text-amber-800/55">回饋通過次數</p>
                         </div>
                         <div className="rounded-xl border border-sky-100 bg-[#eef6fc] p-3">
                           <p className="text-2xl font-bold text-[#3d7eb0]">{studentDetail.feedback_ok_stages}/4</p>

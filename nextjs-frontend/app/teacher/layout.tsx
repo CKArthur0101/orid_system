@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { LogOut } from "lucide-react";
-import { logout } from "@/components/actions/logout-action";
 import { DilabLogo } from "@/components/orid/DilabLogo";
 import { TeacherDashboardSideDecor } from "@/components/orid/TeacherDashboardDecor";
+import { logoutToLogin } from "@/lib/logout";
 
 export default function TeacherLayout({ children }: { children: React.ReactNode }) {
   const [greeting, setGreeting] = useState<string | null>(null);
@@ -50,7 +50,7 @@ export default function TeacherLayout({ children }: { children: React.ReactNode 
             )}
             <button
               type="button"
-              onClick={() => logout()}
+              onClick={() => void logoutToLogin()}
               className="flex items-center gap-1.5 rounded-xl border border-amber-200 bg-white/80 px-3 py-1.5 text-xs font-medium text-amber-900/70 transition hover:border-amber-300 hover:bg-amber-50 hover:text-red-700 sm:text-sm"
             >
               <LogOut className="h-4 w-4" />

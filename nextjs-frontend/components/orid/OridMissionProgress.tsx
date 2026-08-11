@@ -67,7 +67,7 @@ export function OridMissionProgress({
   tabletTight?: boolean;
 }) {
   const usePersimmon = week === 1;
-  const bulletSize = compact ? 14 : usePersimmon ? 18 : 16;
+  const bulletSize = compact ? 14 : tabletTight ? 14 : usePersimmon ? 18 : 16;
   const tight = compact || tabletTight;
 
   return (
@@ -91,7 +91,7 @@ export function OridMissionProgress({
                 compact
                   ? "min-h-[28px] lg:min-h-[34px] lg:gap-1 lg:px-2"
                   : tight
-                    ? "min-h-[28px] md:min-h-[30px] lg:min-h-[40px] lg:gap-2 lg:px-2.5 lg:py-1 lg:text-xs"
+                    ? "min-h-[28px] md:min-h-[30px] xl:min-h-[38px] xl:gap-2 xl:px-2.5 xl:py-1 xl:text-xs"
                     : "min-h-[32px] md:min-h-[34px] lg:min-h-[40px] lg:gap-2 lg:px-2.5 lg:py-1 lg:text-xs",
                 done
                   ? "border-emerald-400 bg-emerald-50 text-emerald-900"
@@ -110,7 +110,7 @@ export function OridMissionProgress({
               <span
                 className={[
                   "whitespace-nowrap font-normal opacity-80",
-                  compact || tabletTight ? "hidden lg:inline" : "hidden sm:inline",
+                  compact || tabletTight ? "hidden xl:inline" : "hidden sm:inline",
                 ].join(" ")}
               >
                 {STATUS_LABEL[item.status]}
@@ -119,7 +119,12 @@ export function OridMissionProgress({
           </div>
         );
       })}
-      <span className="ml-1 shrink-0 whitespace-nowrap pl-1 text-[10px] font-medium text-amber-900/70 sm:ml-auto sm:pl-0 sm:text-xs md:text-[10px] lg:text-xs">
+      <span
+        className={[
+          "ml-1 shrink-0 whitespace-nowrap pl-1 text-[10px] font-medium text-amber-900/70 sm:text-xs md:text-[10px] lg:text-xs",
+          tabletTight ? "xl:ml-auto xl:pl-0" : "sm:ml-auto sm:pl-0",
+        ].join(" ")}
+      >
         已寫 {writtenCount} / 4
       </span>
     </div>

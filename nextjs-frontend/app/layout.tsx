@@ -20,6 +20,9 @@ export const metadata: Metadata = {
     icon: "/images/brand/dilab-favicon-32.png",
     apple: "/images/brand/dilab-favicon-180.png",
   },
+  other: {
+    google: "notranslate",
+  },
 };
 
 export default function RootLayout({
@@ -28,8 +31,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>
+    <html lang="zh-Hant" suppressHydrationWarning className="notranslate" translate="no">
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} notranslate`}
+        translate="no"
+      >
         {children}
       </body>
     </html>

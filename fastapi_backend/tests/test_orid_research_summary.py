@@ -353,9 +353,20 @@ async def test_research_overview_groups_by_condition(test_client, db_session):
         display_name="控制組學生",
         orid_condition="control",
     )
+    idle_student = User(
+        id=uuid.uuid4(),
+        email="idle_student@test.local",
+        hashed_password=ph.hash("StudentPass1"),
+        is_active=True,
+        is_superuser=False,
+        is_verified=True,
+        role="student",
+        display_name="尚未開始學生",
+        orid_condition="experimental",
+    )
     classroom = ClassRoom(name="研究班", year=2026, external_code="research-class")
     reading = Reading(title="第1週（暫定教材）", content="{}")
-    db_session.add_all([teacher, exp_student, ctrl_student, classroom, reading])
+    db_session.add_all([teacher, exp_student, ctrl_student, idle_student, classroom, reading])
     await db_session.flush()
 
     db_session.add_all(
@@ -363,6 +374,7 @@ async def test_research_overview_groups_by_condition(test_client, db_session):
             TeacherClassAssignment(teacher_id=teacher.id, class_id=classroom.id),
             StudentClassMembership(student_id=exp_student.id, class_id=classroom.id),
             StudentClassMembership(student_id=ctrl_student.id, class_id=classroom.id),
+            StudentClassMembership(student_id=idle_student.id, class_id=classroom.id),
         ]
     )
     exp_session = OridSession(user_id=exp_student.id, reading_id=reading.id, condition="experimental")
@@ -416,23 +428,32 @@ async def test_research_overview_groups_by_condition(test_client, db_session):
     assert r.status_code == 200, r.text
     data = r.json()
 
-    assert data["summary_cards"]["total_students"] == 2
-    assert data["summary_cards"]["experimental_count"] == 1
+    assert data["summary_cards"]["total_students"] == 3
+    assert data["summary_cards"]["experimental_count"] == 2
     assert data["summary_cards"]["control_count"] == 1
     assert data["summary_cards"]["submitted_count"] == 1
 
     by_condition = {row["condition"]: row for row in data["group_comparison"]}
-    assert by_condition["experimental"]["avg_word_count"] == 100
-    assert by_condition["experimental"]["submission_rate"] == 1.0
+    assert by_condition["experimental"]["student_count"] == 2
+    assert by_condition["experimental"]["avg_word_count"] == 50
+    assert by_condition["experimental"]["submission_rate"] == 0.5
     assert by_condition["control"]["avg_word_count"] == 40
     assert by_condition["control"]["submission_rate"] == 0.0
 
-    assert len(data["student_rows"]) == 2
+    assert len(data["student_rows"]) == 3
+    idle_row = next(row for row in data["student_rows"] if row["student_email"] == "idle_student@test.local")
+    assert idle_row["word_count"] == 0
+    assert idle_row["save_count"] == 0
+    assert idle_row["revision_count"] == 0
+    assert idle_row["guide_use_count"] == 0
+    assert idle_row["badge_count"] == 0
+    assert idle_row["is_submitted"] is False
 
     trend_week1 = [t for t in data["weekly_trends"] if t["week"] == 1]
     assert {t["condition"] for t in trend_week1} == {"experimental", "control"}
+    assert {t["condition"]: t for t in trend_week1}["experimental"]["avg_word_count"] == 50
 
-    # Research CSV export should include both students.
+    # Research CSV export should include the full class, including students with no summary row yet.
     csv_res = await test_client.get(
         f"/teacher/classes/{classroom.id}/research-export?week=1",
         headers=headers,
@@ -440,3 +461,4 @@ async def test_research_overview_groups_by_condition(test_client, db_session):
     assert csv_res.status_code == 200
     assert "exp_student@test.local" in csv_res.text
     assert "ctrl_student@test.local" in csv_res.text
+    assert "idle_student@test.local" in csv_res.text

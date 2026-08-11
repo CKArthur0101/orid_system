@@ -39,7 +39,7 @@ export const BADGE_CONFIG: Record<BadgeId, BadgeConfig> = {
   badge_start: {
     id: "badge_start",
     name: "下筆徽章",
-    unlockHint: "先在格子裡寫一些內容，並按一次「取得回饋」或看一次寫作提示，就可以獲得。",
+    unlockHint: "寫下一段內容，並使用一次寫作引導，就可以獲得。",
     earnedHint: "已獲得：你已經開始寫，也用過引導了！",
     modalTitle: "恭喜獲得下筆徽章！",
     modalText: "你已經開始寫下自己的想法，也使用了寫作引導。接下來把故事裡「誰做了什麼」寫清楚吧！",
@@ -48,8 +48,7 @@ export const BADGE_CONFIG: Record<BadgeId, BadgeConfig> = {
   badge_30: {
     id: "badge_30",
     name: "松果銅徽章",
-    unlockHint:
-      "在「觀察」格把故事裡誰、做了什麼寫清楚（不要只寫感想）。等到這格出現「✓ 已完成」或完成卡，就可以獲得。",
+    unlockHint: "完成「觀察」格：寫清楚故事裡的人物、事件或情節，就可以獲得。",
     earnedHint: "已獲得：你已經把故事裡的人物和事件說清楚了！",
     modalTitle: "恭喜獲得松果銅徽章！",
     modalText: "你已經把故事裡的人物和事件說清楚了。接下來可以寫寫看：你有什麼感受？為什麼？",
@@ -58,8 +57,7 @@ export const BADGE_CONFIG: Record<BadgeId, BadgeConfig> = {
   badge_60: {
     id: "badge_60",
     name: "松果銀徽章",
-    unlockHint:
-      "「觀察」「感受」「體會」三格都要寫到位：事件清楚、有感受與原因、有從故事學到的道理。三格都出現「✓ 已完成」就可以獲得。",
+    unlockHint: "完成「觀察、感受、體會」三格：寫出事件、感受原因，以及你的想法，就可以獲得。",
     earnedHint: "已獲得：你已經寫出事件、感受與體會了！",
     modalTitle: "恭喜獲得松果銀徽章！",
     modalText: "你已經寫出事件、感受，也說出從故事學到的道理。接下來可以寫一個生活裡做得到的小行動。",
@@ -68,8 +66,7 @@ export const BADGE_CONFIG: Record<BadgeId, BadgeConfig> = {
   badge_90: {
     id: "badge_90",
     name: "松果金徽章",
-    unlockHint:
-      "四格都完成：觀察（誰做了什麼）、感受（心情與原因）、體會（學到什麼）、行動（下次要怎麼做）。都出現「✓ 已完成」就可以獲得。",
+    unlockHint: "完成「觀察、感受、體會、行動」四格反思，就可以獲得。",
     earnedHint: "已獲得：你已經走完一整趟反思寫作！",
     modalTitle: "恭喜獲得松果金徽章！",
     modalText: "太棒了！你已經把觀察、感受、體會和行動都寫完了。",
@@ -79,8 +76,7 @@ export const BADGE_CONFIG: Record<BadgeId, BadgeConfig> = {
   badge_synthesis_start: {
     id: "badge_synthesis_start",
     name: "整合下筆章",
-    unlockHint:
-      "在「整合寫作」框裡寫幾句，並按一次「取得整合回饋」（或看一次整合寫作提示），就可以獲得。",
+    unlockHint: "開始整合寫作，並使用一次整合寫作引導，就可以獲得。",
     earnedHint: "已獲得：你已經開始把上週的想法收成一篇，也問過小幫手了！",
     modalTitle: "恭喜獲得整合下筆章！",
     modalText:

@@ -1,6 +1,7 @@
 import { login } from "@/components/actions/login-action";
 import { authJwtLogin } from "@/app/clientService";
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 
 jest.mock("../app/clientService", () => ({
   authJwtLogin: jest.fn(),
@@ -16,6 +17,10 @@ jest.mock("next/navigation", () => ({
 }));
 
 describe("login action", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   it("should call login service action with the correct input", async () => {
     const formData = new FormData();
     formData.set("username", "a@a.com");
@@ -23,12 +28,11 @@ describe("login action", () => {
 
     const mockSet = (await cookies()).set;
 
-    // Mock a successful login
     (authJwtLogin as jest.Mock).mockResolvedValue({
       data: { access_token: "1245token" },
     });
 
-    await login({}, formData);
+    await login(formData);
 
     expect(authJwtLogin).toHaveBeenCalledWith({
       body: {
@@ -49,68 +53,50 @@ describe("login action", () => {
         secure: false,
       }),
     );
+    expect(redirect).toHaveBeenCalledWith("/dashboard");
   });
 
-  it("should should return an error if the server validation fails", async () => {
+  it("redirects when backend rejects credentials", async () => {
     const formData = new FormData();
     formData.set("username", "invalid@invalid.com");
     formData.set("password", "Q12341414#");
 
-    // Mock a failed login
     (authJwtLogin as jest.Mock).mockResolvedValue({
       error: {
         detail: "LOGIN_BAD_CREDENTIALS",
       },
     });
 
-    const result = await login(undefined, formData);
+    await login(formData);
 
-    expect(authJwtLogin).toHaveBeenCalledWith({
-      body: {
-        username: "invalid@invalid.com",
-        password: "Q12341414#",
-      },
-    });
-
-    expect(result).toEqual({
-      server_validation_error: "LOGIN_BAD_CREDENTIALS",
-    });
-
+    expect(authJwtLogin).toHaveBeenCalled();
+    expect(redirect).toHaveBeenCalledWith(
+      "/login?error=auth&detail=LOGIN_BAD_CREDENTIALS",
+    );
     expect(cookies).not.toHaveBeenCalled();
   });
 
-  it("should should return an error if either the password or username is not sent", async () => {
+  it("redirects when username or password is missing", async () => {
     const formData = new FormData();
     formData.set("username", "");
     formData.set("password", "");
 
-    const result = await login({}, formData);
+    await login(formData);
 
-    expect(authJwtLogin).not.toHaveBeenCalledWith();
-
-    expect(result).toEqual({
-      errors: {
-        password: ["Password is required"],
-        username: ["Username is required"],
-      },
-    });
-
+    expect(authJwtLogin).not.toHaveBeenCalled();
+    expect(redirect).toHaveBeenCalledWith("/login?error=validation");
     expect(cookies).not.toHaveBeenCalled();
   });
 
-  it("should handle unexpected errors and return server error message", async () => {
-    // Mock the authJwtLogin to throw an error
-    const mockError = new Error("Network error");
-    (authJwtLogin as jest.Mock).mockRejectedValue(mockError);
+  it("redirects on unexpected errors", async () => {
+    (authJwtLogin as jest.Mock).mockRejectedValue(new Error("Network error"));
 
     const formData = new FormData();
     formData.append("username", "testuser");
     formData.append("password", "password123");
 
-    const result = await login(undefined, formData);
+    await login(formData);
 
-    expect(result).toEqual({
-      server_error: "An unexpected error occurred. Please try again later.",
-    });
+    expect(redirect).toHaveBeenCalledWith("/login?error=server");
   });
 });

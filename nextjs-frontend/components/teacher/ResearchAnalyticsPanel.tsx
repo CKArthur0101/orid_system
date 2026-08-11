@@ -16,7 +16,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Download, FlaskConical, PieChart as PieIcon, TableProperties, TrendingUp } from "lucide-react";
+import { FlaskConical, TableProperties, TrendingUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -92,14 +92,11 @@ type TeacherResearchOverview = {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const METRIC_OPTIONS = [
-  { key: "avg_word_count", label: "字數（RQ3）" },
-  { key: "avg_save_count", label: "儲存次數（RQ3）" },
-  { key: "avg_revision_count", label: "修改次數（RQ3）" },
-  { key: "avg_guide_use_count", label: "引導使用（RQ3）" },
-  { key: "avg_badge_count", label: "徽章數（參與／RQ3）" },
-  { key: "avg_orid_score", label: "AI 系統 ORID 分（探索）" },
-  { key: "avg_sel_score", label: "AI 系統 SEL 分（探索）" },
-  { key: "avg_total_score", label: "AI 系統總分（探索）" },
+  { key: "avg_word_count", label: "平均字數" },
+  { key: "avg_save_count", label: "草稿儲存次數" },
+  { key: "avg_revision_count", label: "修改次數" },
+  { key: "avg_guide_use_count", label: "引導資源使用" },
+  { key: "avg_badge_count", label: "徽章數" },
 ] as const;
 type MetricKey = (typeof METRIC_OPTIONS)[number]["key"];
 
@@ -138,7 +135,6 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
   const [rowWeekFilter, setRowWeekFilter] = useState<number | "all">("all");
   const [rowConditionFilter, setRowConditionFilter] = useState<"all" | "experimental" | "control">("all");
   const [rowTaskTypeFilter, setRowTaskTypeFilter] = useState<"all" | "orid_stage" | "synthesis">("all");
-  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     if (!classId) return;
@@ -210,32 +206,6 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
 
   const metricLabel = METRIC_OPTIONS.find((m) => m.key === metric)?.label ?? metric;
 
-  async function handleExport() {
-    if (!classId) return;
-    setExporting(true);
-    try {
-      const qs = week === "all" ? "" : `?week=${week}`;
-      const res = await fetch(`/api/teacher/classes/${classId}/research-export${qs}`, {
-        cache: "no-store",
-      });
-      if (!res.ok) return;
-      const blob = await res.blob();
-      const cd = res.headers.get("Content-Disposition") ?? "";
-      const match = /filename="?([^"]+)"?/.exec(cd);
-      const filename = match?.[1] ?? `research_week${week}.csv`;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } finally {
-      setExporting(false);
-    }
-  }
-
   if (loading) {
     return (
       <div className="flex h-64 items-center justify-center text-amber-800/60">載入研究資料中…</div>
@@ -248,13 +218,12 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
   return (
     <div className="space-y-6">
       <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm leading-relaxed text-amber-950/85">
-        <strong className="font-semibold">研究提醒：</strong>
-        RQ1／RQ2 正式依變項為<strong>人工 rubric</strong>評分；AI 系統分數僅供過程／探索參考。
-        RQ3（投入與修正）看下方歷程指標（字數、儲存、修改、引導使用、徽章、提交率）——屬<strong>寫作歷程資料</strong>，不是直接學習成效。
-        徽章為參與／階段完成指標。RQ4（科技接受度）請用課堂 Google 表單或紙本，不在本系統內填寫。
+        <strong className="font-semibold">指標說明：</strong>
+        本頁呈現學生寫作歷程、引導資源使用、徽章與提交情形。
+        引導資源使用：實驗組為 AI 回饋使用次數，控制組為固定提示與文本提問使用次數。
       </div>
       {/* Controls row */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-3">
           <span className="text-base font-medium text-amber-900/75">週次：</span>
           <Select value={String(week)} onValueChange={(v) => setWeek(v === "all" ? "all" : Number(v))}>
@@ -271,19 +240,10 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
             </SelectContent>
           </Select>
         </div>
-        <button
-          type="button"
-          onClick={() => void handleExport()}
-          disabled={exporting}
-          className="inline-flex items-center gap-2 rounded-xl border-2 border-amber-400/50 bg-[#fffcf7] px-4 py-2 text-sm font-semibold text-amber-900 shadow-sm transition hover:bg-amber-50 disabled:opacity-60"
-        >
-          <Download className="h-4 w-4" />
-          {exporting ? "匯出中…" : "匯出研究 CSV"}
-        </button>
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <StatCard
           icon={<FlaskConical className="h-5 w-5 text-[#3d7eb0]" />}
           iconBg="bg-[#eef6fc]"
@@ -301,22 +261,15 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
         <StatCard
           icon={<TrendingUp className="h-5 w-5 text-[#b8741f]" />}
           iconBg="bg-[#fdf5e8]"
-          label="平均引導使用次數"
+          label="平均引導資源使用"
           value={cards?.avg_guide_use_count ?? 0}
-          sub="AI 回饋或提示小幫手"
-        />
-        <StatCard
-          icon={<PieIcon className="h-5 w-5 text-[#6f58a8]" />}
-          iconBg="bg-[#f3effa]"
-          label="平均 AI 系統總分（探索）"
-          value={cards?.avg_total_score != null ? cards.avg_total_score : "—"}
-          sub="非正式依變項；滿分 90"
+          sub="AI 回饋或固定提示"
         />
       </div>
 
       {/* Metric switch */}
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-base font-medium text-amber-900/75">比較指標（RQ3 歷程／探索分）：</span>
+        <span className="text-base font-medium text-amber-900/75">比較指標：</span>
         {METRIC_OPTIONS.map((m) => (
           <button
             key={m.key}
@@ -487,9 +440,8 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
                     <th className="px-3 py-2 text-center">字數</th>
                     <th className="px-3 py-2 text-center">儲存</th>
                     <th className="px-3 py-2 text-center">修改</th>
-                    <th className="px-3 py-2 text-center">引導</th>
+                    <th className="px-3 py-2 text-center">引導資源</th>
                     <th className="px-3 py-2 text-center">徽章</th>
-                    <th className="px-3 py-2 text-center">AI 總分（探索）</th>
                     <th className="px-3 py-2 text-center">已提交</th>
                   </tr>
                 </thead>
@@ -520,13 +472,12 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
                       <td className="px-3 py-2 text-center">{r.revision_count}</td>
                       <td className="px-3 py-2 text-center">{r.guide_use_count}</td>
                       <td className="px-3 py-2 text-center">{r.badge_count}</td>
-                      <td className="px-3 py-2 text-center">{r.total_score ?? "—"}</td>
                       <td className="px-3 py-2 text-center">{r.is_submitted ? "✓" : "—"}</td>
                     </tr>
                   ))}
                   {!filteredStudentRows.length && (
                     <tr>
-                      <td colSpan={11} className="p-8 text-center text-amber-800/50">
+                      <td colSpan={10} className="p-8 text-center text-amber-800/50">
                         尚無符合條件的資料
                       </td>
                     </tr>

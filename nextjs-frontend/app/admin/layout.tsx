@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { LogOut } from "lucide-react";
 
-import { logout } from "@/components/actions/logout-action";
+import { logoutToLogin } from "@/lib/logout";
 import { cn } from "@/lib/utils";
 
 const NAV = [
@@ -67,7 +67,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             )}
             <button
               type="button"
-              onClick={() => logout()}
+              onClick={() => void logoutToLogin()}
               className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 hover:text-red-600"
             >
               <LogOut className="h-4 w-4" />

@@ -4,9 +4,9 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Home, LogOut } from "lucide-react";
-import { logout } from "@/components/actions/logout-action";
 import { DilabLogo } from "@/components/orid/DilabLogo";
 import { LeaveWritingConfirmModal } from "@/components/orid/LeaveWritingConfirmModal";
+import { logoutToLogin } from "@/lib/logout";
 
 const SHELL_CLASS = "mx-auto w-full max-w-[min(100vw-1.5rem,1920px)]";
 
@@ -50,7 +50,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       router.push("/dashboard");
       return;
     }
-    void logout();
+    void logoutToLogin();
   }
 
   function confirmLeave() {
@@ -61,7 +61,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       return;
     }
     if (intent === "logout") {
-      void logout();
+      void logoutToLogin();
     }
   }
 

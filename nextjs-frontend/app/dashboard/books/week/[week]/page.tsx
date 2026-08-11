@@ -735,13 +735,13 @@ export default function WeekBookPage() {
     ? oridPanelCollapsed
       ? "orid-synthesis-grid grid min-h-0 w-full flex-1 grid-cols-1 gap-2 overflow-hidden max-md:gap-2.5 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] md:gap-2 lg:gap-3"
       : "orid-synthesis-grid grid min-h-0 w-full flex-1 grid-cols-1 gap-2 overflow-hidden max-md:gap-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,1fr)] md:gap-2 lg:gap-3"
-    : "grid min-h-0 w-full flex-1 grid-cols-1 gap-2.5 overflow-hidden md:grid-cols-[1fr_1fr] md:gap-3";
+    : "grid min-h-0 w-full flex-1 grid-cols-1 gap-2.5 overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-3";
 
   const aiPartnerShellClass = showSynthesisColumn
     ? oridPanelCollapsed
       ? "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[50vh] md:order-2 md:col-start-2 md:row-start-1 md:h-full"
       : "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[50vh] md:order-3 md:col-start-3 md:row-start-1 md:h-full"
-    : "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[35vh] md:order-2 md:col-start-2 md:h-full md:row-start-1";
+    : "kid-shell order-3 flex min-h-[32vh] w-full min-w-0 flex-col overflow-hidden lg:order-2 lg:col-start-2 lg:h-full lg:min-h-0 lg:row-start-1";
 
   const isControl = isControlConditionValue(condition);
 
@@ -1468,9 +1468,10 @@ export default function WeekBookPage() {
                 {showSynthesisColumn ? (
                   <button
                     type="button"
-                    className="shrink-0 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 font-medium text-amber-900/80 hover:bg-amber-100"
+                    className="inline-flex min-h-[30px] shrink-0 items-center gap-1 rounded-full border-2 border-amber-500 bg-amber-100 px-3 py-1 text-xs font-bold text-amber-950 shadow-sm transition hover:bg-amber-200"
                     onClick={() => setOridPanelCollapsedPersist(true)}
                   >
+                    <span aria-hidden>←</span>
                     收起上週
                   </button>
                 ) : null}
@@ -1486,14 +1487,14 @@ export default function WeekBookPage() {
                 ].join(" ")}
               >
                 <div className="relative z-20 flex shrink-0 items-start justify-between gap-2 overflow-visible px-2.5 pb-1 pt-2 sm:px-3 md:px-2 md:pb-0.5 md:pt-1.5 lg:px-3 lg:pb-1 lg:pt-2">
-                  <div className="min-w-0 flex-1 pr-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className={`text-xs font-bold sm:text-sm ${activeTheme.titleColor}`}>
+                  <div className="min-w-0 flex-1 pr-1 sm:pr-2">
+                    <div className="flex min-w-0 flex-col gap-0.5">
+                      <div className={`break-words text-sm font-bold leading-snug sm:text-sm ${activeTheme.titleColor}`}>
                         {weekNum === 1 ? activeCardMeta.title : STAGE_TITLES[activeStage]}
                       </div>
-                    </div>
-                    <div className="text-[11px] leading-snug text-amber-900/65 sm:text-xs">
+                    <div className="break-words text-[11px] leading-snug text-amber-900/65 sm:text-xs">
                       {weekNum === 1 ? activeCardMeta.question : STAGE_WRITING_HINT[activeStage]}
+                    </div>
                     </div>
                     <span
                       className={[
@@ -1507,12 +1508,12 @@ export default function WeekBookPage() {
                     </span>
                   </div>
                   {/* 徽章在左、按鈕在右，同一橫列 */}
-                  <div className="flex shrink-0 flex-row items-center gap-2 overflow-visible">
-                    <BadgeDisplay earnedBadges={earnedBadges} size={32} />
+                  <div className="flex max-w-[48%] shrink-0 flex-row items-center justify-end gap-1.5 overflow-visible sm:max-w-[46%] lg:max-w-[54%] lg:gap-2">
+                    <BadgeDisplay earnedBadges={earnedBadges} size={showSynthesisColumn ? 28 : 32} />
                     {showSynthesisColumn ? (
                       <button
                         type="button"
-                        className="inline-flex shrink-0 items-center justify-center rounded-full border-2 border-amber-500 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-950 shadow-sm hover:bg-amber-100 sm:px-3.5 sm:text-sm"
+                        className="inline-flex min-h-[34px] shrink-0 items-center justify-center rounded-full border-2 border-amber-500 bg-amber-50 px-3 py-1 text-xs font-bold text-amber-950 shadow-sm hover:bg-amber-100 sm:px-3.5"
                         title="接到整合寫作框後面"
                         onClick={() => appendStageToSynthesis(activeStage)}
                       >
@@ -1650,9 +1651,15 @@ export default function WeekBookPage() {
               <span className="text-xs font-bold text-amber-950 md:text-sm">整合寫作</span>
               <button
                 type="button"
-                className="shrink-0 rounded-full border border-amber-200 bg-white/80 px-2.5 py-0.5 text-[10px] font-medium text-amber-900/80 hover:bg-amber-50 sm:text-xs"
+                className={[
+                  "inline-flex min-h-[32px] shrink-0 items-center gap-1.5 rounded-full border-2 px-3 py-1 text-xs font-bold shadow-sm transition",
+                  oridPanelCollapsed
+                    ? "border-emerald-500 bg-emerald-50 text-emerald-900 hover:bg-emerald-100"
+                    : "border-amber-500 bg-amber-100 text-amber-950 hover:bg-amber-200",
+                ].join(" ")}
                 onClick={() => setOridPanelCollapsedPersist(!oridPanelCollapsed)}
               >
+                <span aria-hidden>{oridPanelCollapsed ? "→" : "←"}</span>
                 {oridPanelCollapsed ? "展開上週" : "收起上週"}
               </button>
             </div>
