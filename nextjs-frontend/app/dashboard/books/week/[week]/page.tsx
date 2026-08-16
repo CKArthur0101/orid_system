@@ -16,6 +16,8 @@ import { buildCoachOpeningMessage } from "@/lib/orid/coach-opening";
 import { buildSynthesisOpeningMessage } from "@/lib/orid/synthesis-opening";
 import { isEvenWeek, isOddWeek, priorOddWeek } from "@/lib/orid/week-flow";
 import {
+  ORID_BADGE_ORDER,
+  SYNTHESIS_BADGE_ORDER,
   type BadgeId,
   calculateEarnedBadges,
   getNewlyEarnedBadges,
@@ -736,6 +738,7 @@ export default function WeekBookPage() {
       ? "orid-synthesis-grid grid min-h-0 w-full flex-1 grid-cols-1 gap-2 overflow-hidden max-md:gap-2.5 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] md:gap-2 lg:gap-3"
       : "orid-synthesis-grid grid min-h-0 w-full flex-1 grid-cols-1 gap-2 overflow-hidden max-md:gap-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,1fr)] md:gap-2 lg:gap-3"
     : "grid min-h-0 w-full flex-1 grid-cols-1 gap-2.5 overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-3";
+  const visibleBadgeIds = isEvenWeek(weekNum) ? SYNTHESIS_BADGE_ORDER : ORID_BADGE_ORDER;
 
   const aiPartnerShellClass = showSynthesisColumn
     ? oridPanelCollapsed
@@ -1509,7 +1512,11 @@ export default function WeekBookPage() {
                   </div>
                   {/* 徽章在左、按鈕在右，同一橫列 */}
                   <div className="flex max-w-[48%] shrink-0 flex-row items-center justify-end gap-1.5 overflow-visible sm:max-w-[46%] lg:max-w-[54%] lg:gap-2">
-                    <BadgeDisplay earnedBadges={earnedBadges} size={showSynthesisColumn ? 28 : 32} />
+                    <BadgeDisplay
+                      earnedBadges={earnedBadges}
+                      badgeIds={visibleBadgeIds}
+                      size={showSynthesisColumn ? 28 : 32}
+                    />
                     {showSynthesisColumn ? (
                       <button
                         type="button"

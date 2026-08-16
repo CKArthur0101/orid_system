@@ -35,6 +35,17 @@ export const BADGE_ORDER: BadgeId[] = [
   "badge_synthesis_start",
 ];
 
+export const ORID_BADGE_ORDER: BadgeId[] = [
+  "badge_start",
+  "badge_30",
+  "badge_60",
+  "badge_90",
+];
+
+export const SYNTHESIS_BADGE_ORDER: BadgeId[] = [
+  "badge_synthesis_start",
+];
+
 export const BADGE_CONFIG: Record<BadgeId, BadgeConfig> = {
   badge_start: {
     id: "badge_start",

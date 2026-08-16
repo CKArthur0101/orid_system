@@ -3,26 +3,18 @@ setlocal EnableExtensions DisableDelayedExpansion
 
 pushd "%~dp0" || exit /b 1
 
-set "ENV_FILE=.env.prod"
-set "PORT=3200"
+echo Starting ORID production frontend tunnel...
+echo This window waits for Docker and http://127.0.0.1:3200 before ngrok starts.
+echo Do not close it while students are using the site.
 
-if exist "%ENV_FILE%" (
-    for /f "usebackq tokens=1,* delims==" %%A in (`findstr /B /I "PROD_FRONTEND_PORT=" "%ENV_FILE%"`) do (
-        set "PORT=%%B"
-    )
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-ngrok-prod.ps1"
+set "ERR=%ERRORLEVEL%"
+
+if not "%ERR%"=="0" (
+    echo.
+    echo Startup failed. Leave this window open and check the message above.
+    pause
 )
-
-echo Starting ngrok for production frontend on http://localhost:%PORT%
-echo (Must match PROD_FRONTEND_PORT in %ENV_FILE%)
-
-where ngrok >nul 2>&1
-if errorlevel 1 (
-    echo ngrok not found in PATH. Install from https://ngrok.com/download
-    popd
-    exit /b 1
-)
-
-taskkill /IM ngrok.exe /F >nul 2>&1
-ngrok http %PORT%
 
 popd
+exit /b %ERR%

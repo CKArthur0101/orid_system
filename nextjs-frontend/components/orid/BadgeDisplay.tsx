@@ -5,6 +5,7 @@ import { BADGE_CONFIG, BADGE_ORDER, type BadgeId } from "@/lib/orid/badgeRules";
 
 interface BadgeDisplayProps {
   earnedBadges: BadgeId[];
+  badgeIds?: BadgeId[];
   size?: number;
   className?: string;
 }
@@ -26,7 +27,7 @@ function LockedBadgeCircle({ size }: { size: number }) {
   );
 }
 
-export function BadgeDisplay({ earnedBadges, size = 32, className }: BadgeDisplayProps) {
+export function BadgeDisplay({ earnedBadges, badgeIds = BADGE_ORDER, size = 32, className }: BadgeDisplayProps) {
   const [openTooltip, setOpenTooltip] = useState<BadgeId | null>(null);
   const [brokenIds, setBrokenIds] = useState<Set<BadgeId>>(new Set());
   const earnedSet = new Set(earnedBadges);
@@ -50,7 +51,7 @@ export function BadgeDisplay({ earnedBadges, size = 32, className }: BadgeDispla
       role="list"
       aria-label="反思徽章"
     >
-      {BADGE_ORDER.map((id) => {
+      {badgeIds.map((id) => {
         const config = BADGE_CONFIG[id];
         const earned = earnedSet.has(id);
         const isOpen = openTooltip === id;

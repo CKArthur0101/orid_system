@@ -92,11 +92,11 @@ type TeacherResearchOverview = {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const METRIC_OPTIONS = [
-  { key: "avg_word_count", label: "平均字數" },
-  { key: "avg_save_count", label: "草稿儲存次數" },
-  { key: "avg_revision_count", label: "修改次數" },
-  { key: "avg_guide_use_count", label: "引導資源使用" },
-  { key: "avg_badge_count", label: "徽章數" },
+  { key: "avg_word_count", label: "平均字數", unit: "字" },
+  { key: "avg_save_count", label: "草稿儲存次數", unit: "次" },
+  { key: "avg_revision_count", label: "修改次數", unit: "次" },
+  { key: "avg_guide_use_count", label: "引導資源使用", unit: "次" },
+  { key: "avg_badge_count", label: "徽章數", unit: "個" },
 ] as const;
 type MetricKey = (typeof METRIC_OPTIONS)[number]["key"];
 
@@ -123,6 +123,12 @@ const WEEK_OPTIONS = [1, 2, 3, 4, 5, 6];
 
 function numOrZero(v: number | null | undefined): number {
   return typeof v === "number" ? v : 0;
+}
+
+function formatChartValue(v: unknown): string {
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return String(v ?? "");
+  return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, "");
 }
 
 // ── Main panel ───────────────────────────────────────────────────────────────
@@ -204,7 +210,17 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
     { name: "未提交", value: completion.not_submitted },
   ];
 
-  const metricLabel = METRIC_OPTIONS.find((m) => m.key === metric)?.label ?? metric;
+  const metricMeta = METRIC_OPTIONS.find((m) => m.key === metric) ?? METRIC_OPTIONS[0];
+  const metricLabel = metricMeta.label;
+  const metricUnit = metricMeta.unit;
+  const metricTitle = `${metricLabel}（${metricUnit}）`;
+  const metricUnitNote = `數值為每位學生每週平均；單位：${metricUnit}`;
+  const isBadgeMetric = metric === "avg_badge_count";
+  const badgeAxisMax = isBadgeMetric && typeof week === "number" && week % 2 === 0 ? 1 : isBadgeMetric ? 4 : undefined;
+  const badgeAxisTicks = badgeAxisMax === 1 ? [0, 0.25, 0.5, 0.75, 1] : undefined;
+  const metricHelpText = isBadgeMetric
+    ? "徽章為平均獲得個數；奇數週 ORID 徽章上限 4 個，偶數週整合寫作徽章上限 1 個，跨週比較請留意任務不同。"
+    : metricUnitNote;
 
   if (loading) {
     return (
@@ -221,6 +237,7 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
         <strong className="font-semibold">指標說明：</strong>
         本頁呈現學生寫作歷程、引導資源使用、徽章與提交情形。
         引導資源使用：實驗組為 AI 回饋使用次數，控制組為固定提示與文本提問使用次數。
+        圖表數值皆為平均值；字數單位為「字」，儲存、修改與引導資源使用單位為「次」，徽章單位為「個」。
       </div>
       {/* Controls row */}
       <div className="flex flex-wrap items-center gap-3">
@@ -291,16 +308,25 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card className={TEACHER_CARD}>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base text-amber-950">組別比較 — {metricLabel}</CardTitle>
+            <CardTitle className="text-base text-amber-950">組別比較 — {metricTitle}</CardTitle>
             <p className="text-sm text-amber-800/60">實驗組（AI 引導）vs. 控制組（固定提示）</p>
+            <p className="text-xs text-amber-800/50">{metricHelpText}</p>
           </CardHeader>
           <CardContent className="h-[280px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={groupBarData} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0e4cc" />
                 <XAxis dataKey="condition" tick={{ fontSize: 12, fill: "#7a5a2e" }} />
-                <YAxis tick={{ fontSize: 12, fill: "#7a5a2e" }} />
-                <Tooltip contentStyle={{ borderRadius: 12, borderColor: "#f0d9a8" }} />
+                <YAxis
+                  tick={{ fontSize: 12, fill: "#7a5a2e" }}
+                  domain={badgeAxisMax ? [0, badgeAxisMax] : undefined}
+                  ticks={badgeAxisTicks}
+                  tickFormatter={(value) => formatChartValue(value)}
+                />
+                <Tooltip
+                  contentStyle={{ borderRadius: 12, borderColor: "#f0d9a8" }}
+                  formatter={(value) => [`${formatChartValue(value)} ${metricUnit}`, metricLabel]}
+                />
                 <Bar dataKey="value" radius={[8, 8, 0, 0]}>
                   {groupBarData.map((entry, idx) => (
                     <Cell key={idx} fill={entry.fill} />
@@ -313,8 +339,9 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
 
         <Card className={TEACHER_CARD}>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base text-amber-950">六週趨勢 — {metricLabel}</CardTitle>
+            <CardTitle className="text-base text-amber-950">六週趨勢 — {metricTitle}</CardTitle>
             <p className="text-sm text-amber-800/60">依週次比較兩組變化</p>
+            <p className="text-xs text-amber-800/50">{metricHelpText}</p>
           </CardHeader>
           <CardContent className="h-[280px]">
             <ResponsiveContainer width="100%" height="100%">
@@ -325,11 +352,19 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
                   tickFormatter={(w) => `第${w}週`}
                   tick={{ fontSize: 12, fill: "#7a5a2e" }}
                 />
-                <YAxis tick={{ fontSize: 12, fill: "#7a5a2e" }} />
+                <YAxis
+                  tick={{ fontSize: 12, fill: "#7a5a2e" }}
+                  domain={badgeAxisMax ? [0, badgeAxisMax] : undefined}
+                  ticks={badgeAxisTicks}
+                  tickFormatter={(value) => formatChartValue(value)}
+                />
                 <Tooltip
                   contentStyle={{ borderRadius: 12, borderColor: "#f0d9a8" }}
                   labelFormatter={(w) => `第 ${w} 週`}
-                  formatter={(value, name) => [value, CONDITION_LABEL[String(name)] ?? String(name)]}
+                  formatter={(value, name) => [
+                    `${formatChartValue(value)} ${metricUnit}`,
+                    CONDITION_LABEL[String(name)] ?? String(name),
+                  ]}
                 />
                 <Legend formatter={(name) => CONDITION_LABEL[String(name)] ?? String(name)} />
                 <Line
