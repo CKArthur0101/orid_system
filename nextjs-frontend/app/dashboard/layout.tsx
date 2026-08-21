@@ -4,13 +4,16 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Home, LogOut } from "lucide-react";
+import { BadgeDisplay } from "@/components/orid/BadgeDisplay";
 import { DilabLogo } from "@/components/orid/DilabLogo";
 import { LeaveWritingConfirmModal } from "@/components/orid/LeaveWritingConfirmModal";
+import { BADGE_ORDER, type BadgeId } from "@/lib/orid/badgeRules";
 import { logoutToLogin } from "@/lib/logout";
 
 const SHELL_CLASS = "mx-auto w-full max-w-[min(100vw-1.5rem,1920px)]";
 
 type LeaveIntent = "home" | "logout";
+type TopBarBadges = { earnedBadges: BadgeId[]; badgeIds: BadgeId[] };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -19,6 +22,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const isDashboardHome = pathname === "/dashboard";
   const [greeting, setGreeting] = useState<string | null>(null);
   const [leaveIntent, setLeaveIntent] = useState<LeaveIntent | null>(null);
+  const [topBarBadges, setTopBarBadges] = useState<TopBarBadges | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,6 +44,29 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!lockWeekWritingLayout) {
+      setTopBarBadges(null);
+      return;
+    }
+
+    function handleBadgeUpdate(event: Event) {
+      const detail = (event as CustomEvent<Partial<TopBarBadges>>).detail ?? {};
+      const earnedBadges = Array.isArray(detail.earnedBadges)
+        ? (detail.earnedBadges.filter(Boolean) as BadgeId[])
+        : [];
+      const badgeIds = Array.isArray(detail.badgeIds)
+        ? (detail.badgeIds.filter(Boolean) as BadgeId[])
+        : BADGE_ORDER;
+      setTopBarBadges({ earnedBadges, badgeIds });
+    }
+
+    window.addEventListener("orid:badge-display", handleBadgeUpdate);
+    return () => {
+      window.removeEventListener("orid:badge-display", handleBadgeUpdate);
+    };
+  }, [lockWeekWritingLayout]);
 
   function requestLeave(intent: LeaveIntent) {
     if (lockWeekWritingLayout) {
@@ -125,10 +152,22 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </nav>
           </div>
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-            {greeting ? (
-              <span className="max-w-[9rem] truncate text-xs text-amber-900 sm:max-w-[14rem] sm:text-sm">
-                🌰 {greeting}
-              </span>
+            {(greeting || (lockWeekWritingLayout && topBarBadges)) ? (
+              <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
+                {lockWeekWritingLayout && topBarBadges ? (
+                  <BadgeDisplay
+                    earnedBadges={topBarBadges.earnedBadges}
+                    badgeIds={topBarBadges.badgeIds}
+                    size={42}
+                    className="hidden sm:flex"
+                  />
+                ) : null}
+                {greeting ? (
+                  <span className="max-w-[9rem] truncate text-xs text-amber-900 sm:max-w-[14rem] sm:text-sm">
+                    🌰 {greeting}
+                  </span>
+                ) : null}
+              </div>
             ) : null}
             <button
               type="button"

@@ -63,7 +63,7 @@ def _revision_target_for_stage(stage: str) -> str:
     if s == "I":
         return "請回到 I 體會格，補生活連結或學到的想法"
     if s == "D":
-        return "請回到 D 行動格，補具體對象、情境與做法"
+        return "請回到 D 行動格，想一想：你要對誰做？什麼時候做？怎麼做？"
     return "請回到 O 觀察格，補角色、事件或情節"
 
 
@@ -74,7 +74,7 @@ def _revision_question_for_stage(stage: str) -> str:
     if s == "I":
         return "這讓你想到什麼？"
     if s == "D":
-        return "你會在什麼時候怎麼做？"
+        return "你要對誰做？什麼時候做？怎麼做？"
     return "故事裡誰做了什麼？"
 
 

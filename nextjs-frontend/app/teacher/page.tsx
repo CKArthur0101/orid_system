@@ -445,7 +445,6 @@ export default function TeacherDashboardPage() {
         <div className="flex min-w-0 items-start gap-3 sm:gap-4">
           <div className="min-w-0">
             <h1 className="text-2xl font-bold text-amber-950 sm:text-3xl">AI–ORID 教師儀表板</h1>
-            <p className="mt-0.5 text-sm text-amber-800/65">班級學習進度一覽 · 與學生系統同款暖色風格</p>
           </div>
           <TeacherDashboardHeaderDecor />
         </div>
@@ -603,10 +602,10 @@ export default function TeacherDashboardPage() {
                 </CardHeader>
                 <CardContent className="p-0">
                   <div className="max-h-[360px] overflow-auto">
-                    <table className="w-full text-base">
+                    <table className="w-full min-w-[560px] text-base">
                       <thead className="sticky top-0 bg-amber-50/95">
                         <tr className="text-left text-amber-800/60">
-                          <th className="px-4 py-2.5">學生</th>
+                          <th className="whitespace-nowrap px-4 py-2.5">學生</th>
                           <th className="px-4 py-2.5">階段</th>
                           <th className="px-4 py-2.5 text-center">寫作</th>
                           <th className="px-4 py-2.5 text-center">回饋 ok</th>
@@ -627,10 +626,10 @@ export default function TeacherDashboardPage() {
                                 setMainTab("tracking");
                               }}
                             >
-                              <td className="px-4 py-2.5 font-medium text-amber-950">
+                              <td className="whitespace-nowrap px-4 py-2.5 font-medium text-amber-950">
                                 {studentLabel(row)}
                                 {needsAttention && (
-                                  <span className="ml-1.5 text-base text-orange-600">需關注</span>
+                                  <span className="ml-1.5 whitespace-nowrap text-base text-orange-600">需關注</span>
                                 )}
                               </td>
                               <td className="px-4 py-2.5">

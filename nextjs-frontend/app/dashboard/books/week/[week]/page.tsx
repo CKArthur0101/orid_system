@@ -4,7 +4,6 @@ import { useParams } from "next/navigation";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { BookHelperAvatar } from "@/components/orid/BookIllustration";
-import { BadgeDisplay } from "@/components/orid/BadgeDisplay";
 import { BadgeModal } from "@/components/orid/BadgeModal";
 import { FeedbackGuideCard } from "@/components/orid/FeedbackGuideCard";
 import { OridWeekHero } from "@/components/orid/OridWeekHero";
@@ -181,6 +180,13 @@ const STAGE_TITLES: Record<StageKey, string> = {
   R: STAGE_MISSION_META.R.oridTitle,
   I: STAGE_MISSION_META.I.oridTitle,
   D: STAGE_MISSION_META.D.oridTitle,
+};
+
+const STAGE_COPY_LABELS: Record<StageKey, string> = {
+  O: "複製觀察",
+  R: "複製感受",
+  I: "複製體會",
+  D: "複製行動",
 };
 
 const STAGE_WRITING_HINT: Record<StageKey, string> = {
@@ -740,6 +746,17 @@ export default function WeekBookPage() {
     : "grid min-h-0 w-full flex-1 grid-cols-1 gap-2.5 overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-3";
   const visibleBadgeIds = isEvenWeek(weekNum) ? SYNTHESIS_BADGE_ORDER : ORID_BADGE_ORDER;
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const detail = { earnedBadges, badgeIds: visibleBadgeIds };
+    const dispatchBadgeDisplay = () => {
+      window.dispatchEvent(new CustomEvent("orid:badge-display", { detail }));
+    };
+    dispatchBadgeDisplay();
+    const retryId = window.setTimeout(dispatchBadgeDisplay, 0);
+    return () => window.clearTimeout(retryId);
+  }, [earnedBadges, visibleBadgeIds]);
+
   const aiPartnerShellClass = showSynthesisColumn
     ? oridPanelCollapsed
       ? "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[50vh] md:order-2 md:col-start-2 md:row-start-1 md:h-full"
@@ -1199,6 +1216,38 @@ export default function WeekBookPage() {
     window.setTimeout(() => setCopyFlash(null), 2200);
   }
 
+  function insertControlGuideText(text: string) {
+    if (!isControl) return;
+    const clean = String(text || "").trim();
+    if (!clean) return;
+    setFbError(null);
+    let nextWriting: OridWritingV1 | null = null;
+    if (isEvenWeek(weekNum) && w2Phase === "synthesis") {
+      const cur = String(writingData.synthesis_draft ?? "").trimEnd();
+      const next = cur ? `${cur}\n${clean}` : clean;
+      nextWriting = { ...writingData, synthesis_draft: next };
+      setWritingData(nextWriting);
+      setCopyFlash("已把固定句型放進整合寫作");
+    } else if (!oridReadOnly) {
+      const cur = String(writingData.stages[activeStage]?.d1 ?? "").trimEnd();
+      const next = cur ? `${cur}\n${clean}` : clean;
+      nextWriting = {
+        ...writingData,
+        stages: {
+          ...writingData.stages,
+          [activeStage]: { ...writingData.stages[activeStage], d1: next },
+        },
+      };
+      setWritingData(nextWriting);
+      setFocusStage(activeStage);
+      setCopyFlash("已把固定句型放進寫作格");
+    }
+    if (nextWriting) {
+      void runPromptUsage({ writingSnapshot: nextWriting, stage: activeStage });
+    }
+    window.setTimeout(() => setCopyFlash(null), 1800);
+  }
+
   async function runSynthesisFeedback() {
     if (!sessionId || !isEvenWeek(weekNum) || isControl) return;
 
@@ -1277,11 +1326,13 @@ export default function WeekBookPage() {
     }
   }
 
-  async function runPromptUsage() {
+  async function runPromptUsage(options?: { writingSnapshot?: OridWritingV1; stage?: StageKey }) {
     if (!sessionId) return;
+    const snapshot = options?.writingSnapshot ?? writingData;
+    const stage = options?.stage ?? focusStage;
     const wordCount = isEvenWeek(weekNum)
-      ? String(writingData.synthesis_draft ?? "").trim().length
-      : String(writingData.stages[focusStage]?.d1 ?? "").trim().length;
+      ? String(snapshot.synthesis_draft ?? "").trim().length
+      : String(snapshot.stages[stage]?.d1 ?? "").trim().length;
     try {
       const r = await fetch("/api/orid/prompt-usage", {
         method: "POST",
@@ -1290,7 +1341,7 @@ export default function WeekBookPage() {
         body: JSON.stringify({
           session_id: sessionId,
           week: weekNum,
-          stage: focusStage,
+          stage,
           word_count: wordCount,
           prompt_view_count: 1,
         }),
@@ -1307,7 +1358,7 @@ export default function WeekBookPage() {
         if (newOnes.length > 0) {
           setBadgeModalQueue((prev) => [...prev, ...newOnes.filter((b) => !prev.includes(b))]);
         }
-        await persistWritingSnapshot(writingData, totalScore, merged);
+        await persistWritingSnapshot(snapshot, totalScore, merged);
       }
     } catch {
       // silently ignore prompt usage logging errors
@@ -1510,13 +1561,7 @@ export default function WeekBookPage() {
                       {activeStageStatus === "passed" ? "✓ 已完成" : STAGE_STATUS_TEXT[activeStageStatus]}
                     </span>
                   </div>
-                  {/* 徽章在左、按鈕在右，同一橫列 */}
                   <div className="flex max-w-[48%] shrink-0 flex-row items-center justify-end gap-1.5 overflow-visible sm:max-w-[46%] lg:max-w-[54%] lg:gap-2">
-                    <BadgeDisplay
-                      earnedBadges={earnedBadges}
-                      badgeIds={visibleBadgeIds}
-                      size={showSynthesisColumn ? 28 : 32}
-                    />
                     {showSynthesisColumn ? (
                       <button
                         type="button"
@@ -1568,6 +1613,16 @@ export default function WeekBookPage() {
                       value={oridDisplay.stages[activeStage].d1}
                       readOnly={oridReadOnly}
                       onFocus={() => setFocusStage(activeStage)}
+                      onDrop={
+                        oridReadOnly
+                          ? undefined
+                          : (e) => {
+                              const droppedText = e.dataTransfer.getData("text/plain").trim();
+                              if (!droppedText || !isControl) return;
+                              e.preventDefault();
+                              insertControlGuideText(droppedText);
+                            }
+                      }
                       onChange={
                         oridReadOnly
                           ? undefined
@@ -1678,10 +1733,10 @@ export default function WeekBookPage() {
                     key={sk}
                     type="button"
                     className="rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 text-[11px] font-bold text-amber-950 hover:bg-amber-100"
-                    title={`把 ${sk} 接到整合寫作後面`}
+                    title={`把${STAGE_TITLES[sk]}段落接到整合寫作後面`}
                     onClick={() => appendStageToSynthesis(sk)}
                   >
-                    複製 {sk}
+                    {STAGE_COPY_LABELS[sk]}
                   </button>
                 ))}
               </div>
@@ -1691,6 +1746,12 @@ export default function WeekBookPage() {
                 className="min-h-0 w-full flex-1 resize-none rounded-xl border border-amber-100 bg-[#fffcf7] p-2.5 text-base leading-relaxed outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-300/30 md:p-3 md:text-sm lg:text-base"
                 placeholder="依序寫：故事裡的事 → 感受與原因 → 學到什麼 → 以後會怎麼做……"
                 value={writingData.synthesis_draft ?? ""}
+                onDrop={(e) => {
+                  const droppedText = e.dataTransfer.getData("text/plain").trim();
+                  if (!droppedText || !isControl) return;
+                  e.preventDefault();
+                  insertControlGuideText(droppedText);
+                }}
                 onChange={(e) => {
                   const nextDraft = e.target.value;
                   setWritingData((prev) => {
@@ -1770,6 +1831,7 @@ export default function WeekBookPage() {
                   <WritingPromptHelper
                     focusStage={focusStage}
                     onPromptViewed={() => void runPromptUsage()}
+                    onInsertText={insertControlGuideText}
                     synthesisMode
                     openingText={synthesisOpeningText}
                     week={weekNum}
@@ -1936,6 +1998,7 @@ export default function WeekBookPage() {
                 <WritingPromptHelper
                   focusStage={focusStage}
                   onPromptViewed={() => void runPromptUsage()}
+                  onInsertText={insertControlGuideText}
                   week={weekNum}
                 />
               ) : (
