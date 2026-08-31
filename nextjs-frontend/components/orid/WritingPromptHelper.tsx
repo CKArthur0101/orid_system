@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
 import Image from "next/image";
 import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { PersimmonBullet } from "./PersimmonBullet";
@@ -14,6 +14,9 @@ import {
 
 type StageKey = "O" | "R" | "I" | "D";
 type HelperMode = "prompt" | "sentence" | "check";
+type TouchDragState = { text: string; x: number; y: number };
+
+const INSERT_LABEL_PREFIX = /^(先寫開頭|再接感受|再寫體會|最後寫行動)\s*[：:]\s*/;
 
 interface WritingPromptHelperProps {
   focusStage: StageKey;
@@ -53,6 +56,10 @@ const TOPIC_TITLES: Record<StageKey, string[]> = {
 
 const SYNTHESIS_TOPIC_TITLES = ["故事事件", "感受原因", "學到什麼", "以後行動"];
 
+function textForWritingBox(text: string): string {
+  return text.replace(INSERT_LABEL_PREFIX, "").trim();
+}
+
 export function WritingPromptHelper({
   focusStage,
   onPromptViewed,
@@ -70,7 +77,16 @@ export function WritingPromptHelper({
   const [mode, setMode] = useState<HelperMode>("prompt");
   const [pageIndex, setPageIndex] = useState(0);
   const [insertMsg, setInsertMsg] = useState<string | null>(null);
+  const [touchDrag, setTouchDrag] = useState<TouchDragState | null>(null);
   const loggedViewRef = useRef(false);
+  const suppressClickRef = useRef(false);
+  const touchDragRef = useRef<{
+    text: string;
+    startX: number;
+    startY: number;
+    pointerId: number;
+    dragging: boolean;
+  } | null>(null);
 
   const sentencePages = pages.filter((page) => page.track === "orid");
   const promptPages = pages.filter((page) => page.track !== "orid");
@@ -129,19 +145,62 @@ export function WritingPromptHelper({
     logViewOnce();
   }
 
-  function sentenceOptions(): ControlGuidePage[] {
-    if (sentencePages.length === 0) return [];
-    if (mode === "sentence") return sentencePages;
-    const first = sentencePages[pageIndex % sentencePages.length];
-    const second = sentencePages[(pageIndex + 1) % sentencePages.length];
-    return first.text === second.text ? [first] : [first, second];
+  function sentenceOptions(): string[] {
+    if (mode !== "sentence" || sentencePages.length === 0) return [];
+    const matched = sentencePages[pageIndex % sentencePages.length];
+    return matched ? [matched.text, ...(matched.supportingTexts ?? [])] : [];
   }
 
   function insertText(text: string) {
-    onInsertText?.(text);
+    onInsertText?.(textForWritingBox(text));
     setInsertMsg("已放進寫作格");
     logViewOnce();
     window.setTimeout(() => setInsertMsg(null), 1600);
+  }
+
+  function startTouchDrag(event: PointerEvent<HTMLButtonElement>, text: string) {
+    if (event.pointerType === "mouse") return;
+    const insertText = textForWritingBox(text);
+    touchDragRef.current = {
+      text: insertText,
+      startX: event.clientX,
+      startY: event.clientY,
+      pointerId: event.pointerId,
+      dragging: false,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function moveTouchDrag(event: PointerEvent<HTMLButtonElement>) {
+    const drag = touchDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+
+    const moved = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+    if (!drag.dragging && moved < 10) return;
+
+    drag.dragging = true;
+    event.preventDefault();
+    setTouchDrag({ text: drag.text, x: event.clientX, y: event.clientY });
+  }
+
+  function endTouchDrag(event: PointerEvent<HTMLButtonElement>) {
+    const drag = touchDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+
+    touchDragRef.current = null;
+    setTouchDrag(null);
+
+    if (!drag.dragging) return;
+    event.preventDefault();
+    suppressClickRef.current = true;
+    window.setTimeout(() => {
+      suppressClickRef.current = false;
+    }, 0);
+    const target = document.elementFromPoint(event.clientX, event.clientY);
+    const textarea = target instanceof Element ? target.closest("textarea") : null;
+    if (textarea instanceof HTMLTextAreaElement) {
+      insertText(drag.text);
+    }
   }
 
   if (!current) return null;
@@ -158,7 +217,11 @@ export function WritingPromptHelper({
               {synthesisMode ? "整合寫作提示" : "寫作提示小幫手"}
             </div>
             <div className="text-[10px] text-amber-900/60 md:text-[11px]">
-              選一個主題，再挑一句固定句型放進寫作格
+              {mode === "sentence"
+                ? "選一個固定句型，可拖到寫作格"
+                : mode === "check"
+                  ? "寫完後，逐項確認內容"
+                  : "先讀問題，再想清楚要寫什麼"}
             </div>
           </div>
         </div>
@@ -264,35 +327,70 @@ export function WritingPromptHelper({
           ) : (
             <div className="flex min-h-0 flex-1 flex-col justify-start gap-3 overflow-y-auto pr-0.5">
               <div className="mb-2 text-[11px] font-bold text-amber-900 md:text-xs">
-                {mode === "sentence" ? "✏️ 固定句型卡" : `想一想：${topicTitles[pageIndex] ?? current.badge}`}
+                {mode === "sentence"
+                  ? `✏️ 固定句型：${topicTitles[pageIndex] ?? current.badge}`
+                  : `想一想：${topicTitles[pageIndex] ?? current.badge}`}
               </div>
               <div className="flex items-start gap-2 rounded-2xl border border-sky-200 bg-sky-50/90 p-3">
                 <PersimmonBullet size={18} className="mt-0.5 shrink-0" />
                 <p className="text-sm leading-relaxed text-amber-950 md:text-[15px] md:leading-relaxed">
-                  {current.text}
+                  {mode === "sentence" ? "選一個適合的句型，填入自己的故事和想法。" : current.text}
                 </p>
               </div>
-              <div className="space-y-2">
-                <div className="text-[11px] font-bold text-amber-900 md:text-xs">可以選一句放進寫作格</div>
-                {sentenceOptions().map((page, idx) => (
-                  <button
-                    key={`${page.text}-${idx}`}
-                    type="button"
-                    draggable
-                    onDragStart={(event) => {
-                      event.dataTransfer.setData("text/plain", page.text);
-                      logViewOnce();
-                    }}
-                    onClick={() => insertText(page.text)}
-                    className="flex w-full items-start gap-2 rounded-xl border border-amber-200 bg-amber-50/90 px-3 py-2 text-left text-sm font-semibold leading-relaxed text-amber-950 transition hover:bg-amber-100"
-                  >
-                    <PersimmonBullet size={16} className="mt-0.5 shrink-0" />
-                    <span className="min-w-0 flex-1">{page.text}</span>
-                    <Plus className="mt-0.5 h-4 w-4 shrink-0 text-amber-800" aria-hidden />
-                  </button>
-                ))}
-                {insertMsg ? <div className="text-xs font-semibold text-emerald-700">{insertMsg}</div> : null}
-              </div>
+              {mode === "prompt" ? (
+                <div className="space-y-2">
+                  <div className="text-[11px] font-bold text-amber-900 md:text-xs">再想一想</div>
+                  {(current.supportingTexts ?? []).map((text, idx) => (
+                    <div
+                      key={`${text}-${idx}`}
+                      className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50/75 px-3 py-2.5"
+                    >
+                      <span className="mt-0.5 shrink-0 text-xs font-bold text-amber-600" aria-hidden>
+                        {idx + 1}
+                      </span>
+                      <p className="text-xs leading-relaxed text-amber-950 md:text-sm">{text}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="text-[11px] font-bold text-amber-900 md:text-xs">
+                    選一個句型拖到寫作格
+                  </div>
+                  {sentenceOptions().map((text, idx) => (
+                    <button
+                      key={`${text}-${idx}`}
+                      type="button"
+                      draggable
+                      title="拖到寫作格，或按加號加入"
+                      onDragStart={(event) => {
+                        event.dataTransfer.setData("text/plain", textForWritingBox(text));
+                        logViewOnce();
+                      }}
+                      onPointerDown={(event) => startTouchDrag(event, text)}
+                      onPointerMove={moveTouchDrag}
+                      onPointerUp={endTouchDrag}
+                      onPointerCancel={() => {
+                        touchDragRef.current = null;
+                        setTouchDrag(null);
+                      }}
+                      onClick={(event) => {
+                        if (suppressClickRef.current) {
+                          event.preventDefault();
+                          return;
+                        }
+                        insertText(text);
+                      }}
+                      className="flex w-full cursor-grab touch-none items-start gap-2 rounded-xl border border-amber-200 bg-amber-50/90 px-3 py-2 text-left text-sm font-semibold leading-relaxed text-amber-950 transition hover:bg-amber-100 active:cursor-grabbing"
+                    >
+                      <PersimmonBullet size={16} className="mt-0.5 shrink-0" />
+                      <span className="min-w-0 flex-1">{text}</span>
+                      <Plus className="mt-0.5 h-4 w-4 shrink-0 text-amber-800" aria-hidden />
+                    </button>
+                  ))}
+                  {insertMsg ? <div className="text-xs font-semibold text-emerald-700">{insertMsg}</div> : null}
+                </div>
+              )}
               <p className="mt-3 text-[10px] text-amber-900/50 md:text-[11px]">
                 {atEnd
                   ? synthesisMode
@@ -336,6 +434,15 @@ export function WritingPromptHelper({
           <ChevronRight className="h-4 w-4 shrink-0" aria-hidden />
         </button>
       </div>
+      {touchDrag ? (
+        <div
+          className="pointer-events-none fixed z-[300] max-w-[18rem] rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-bold leading-relaxed text-amber-950 shadow-xl"
+          style={{ left: touchDrag.x + 12, top: touchDrag.y + 12 }}
+          aria-hidden
+        >
+          {touchDrag.text}
+        </div>
+      ) : null}
     </div>
   );
 }

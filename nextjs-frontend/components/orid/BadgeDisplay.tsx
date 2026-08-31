@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { BADGE_CONFIG, BADGE_ORDER, type BadgeId } from "@/lib/orid/badgeRules";
 
 interface BadgeDisplayProps {
@@ -30,10 +30,33 @@ function LockedBadgeCircle({ size }: { size: number }) {
 export function BadgeDisplay({ earnedBadges, badgeIds = BADGE_ORDER, size = 32, className }: BadgeDisplayProps) {
   const [openTooltip, setOpenTooltip] = useState<BadgeId | null>(null);
   const [brokenIds, setBrokenIds] = useState<Set<BadgeId>>(new Set());
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const earnedSet = new Set(earnedBadges);
+
+  useEffect(() => {
+    if (!openTooltip) return;
+
+    function closeWhenOutside(event: globalThis.PointerEvent) {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (rootRef.current?.contains(target)) return;
+      setOpenTooltip(null);
+    }
+
+    document.addEventListener("pointerdown", closeWhenOutside);
+    return () => document.removeEventListener("pointerdown", closeWhenOutside);
+  }, [openTooltip]);
 
   function toggleTooltip(id: BadgeId) {
     setOpenTooltip((prev) => (prev === id ? null : id));
+  }
+
+  function openHover(id: BadgeId, event: PointerEvent) {
+    if (event.pointerType === "mouse") setOpenTooltip(id);
+  }
+
+  function closeHover(event: PointerEvent) {
+    if (event.pointerType === "mouse") setOpenTooltip(null);
   }
 
   function markBroken(id: BadgeId) {
@@ -47,6 +70,7 @@ export function BadgeDisplay({ earnedBadges, badgeIds = BADGE_ORDER, size = 32, 
 
   return (
     <div
+      ref={rootRef}
       className={["flex shrink-0 flex-nowrap items-center gap-1.5", className].join(" ")}
       role="list"
       aria-label="反思徽章"
@@ -72,8 +96,8 @@ export function BadgeDisplay({ earnedBadges, badgeIds = BADGE_ORDER, size = 32, 
                 "hover:ring-amber-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400",
               ].join(" ")}
               style={{ width: size, height: size }}
-              onMouseEnter={() => setOpenTooltip(id)}
-              onMouseLeave={() => setOpenTooltip(null)}
+              onPointerEnter={(event) => openHover(id, event)}
+              onPointerLeave={closeHover}
               onClick={() => toggleTooltip(id)}
             >
               {earned && !imgBroken ? (
@@ -110,8 +134,8 @@ export function BadgeDisplay({ earnedBadges, badgeIds = BADGE_ORDER, size = 32, 
             {isOpen && (
               <div
                 className="pointer-events-auto absolute right-0 top-full z-[200] mt-1.5 w-56 rounded-xl border border-amber-200 bg-white p-2.5 text-[11px] leading-snug shadow-xl sm:w-64"
-                onMouseEnter={() => setOpenTooltip(id)}
-                onMouseLeave={() => setOpenTooltip(null)}
+                onPointerEnter={(event) => openHover(id, event)}
+                onPointerLeave={closeHover}
               >
                 <div className="mb-1 font-bold text-amber-950">{config.name}</div>
                 {earned ? (

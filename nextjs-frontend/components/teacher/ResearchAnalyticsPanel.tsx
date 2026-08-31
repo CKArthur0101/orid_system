@@ -465,7 +465,7 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
           </CardHeader>
           <CardContent className="p-0">
             <div className="max-h-[360px] overflow-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[760px] text-sm">
                 <thead className="sticky top-0 bg-amber-50/95">
                   <tr className="text-left text-amber-800/60">
                     <th className="px-3 py-2">學生</th>

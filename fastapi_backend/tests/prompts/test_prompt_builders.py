@@ -355,6 +355,10 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "書裡完全沒有的詞" in narration_system
     assert "RASF-Anchor" in narration_system
     assert "填空" in narration_system
+    assert "不要把事件答案寫給學生" in narration_system
+    assert "照寫進去" not in narration_system
+    assert "把柿子藏起來" in narration_system
+    assert "不可再要求補" in narration_system
     assert "故事覆蓋" in narration_system or "書裡情節" in narration_system or "去看／掃故事摘要" in narration_system
     assert "Markdown" in narration_system or "純文字" in narration_system
     assert "先肯定再引導" in narration_system
@@ -650,8 +654,51 @@ def test_apply_o_key_event_gaps_replaces_generic_o_when_events_missing():
         suggestions=["先挑書裡一件你稿子上還沒寫到的事，用三句話寫出誰、做了什麼、後來怎麼了"],
     )
     blob = m[0] + s[0]
-    assert "倉庫" in blob or "柿子葉" in blob or "樹枝" in blob or "砍" in blob or "獨占" in blob or "柿子蒂" in blob
+    assert "故事一開始" in blob
+    assert not any(word in blob for word in ("倉庫", "柿子葉", "樹枝", "砍樹", "柿子蒂"))
     assert "中間衝突" not in m[0]
+
+
+def test_apply_o_key_event_gaps_guides_vague_change_without_revealing_answer():
+    draft = "故事中，阿松爺爺一開始不太願意分享柿子。後來發生了一些事情，讓他慢慢開始改變。"
+    m, s = apply_o_key_event_gaps(
+        stage="O",
+        strength="high",
+        student_text=draft,
+        key_events=[
+            "阿松爺爺急忙把柿子全藏進倉庫。",
+            "阿松爺爺一急之下砍樹，最後只剩樹樁。",
+        ],
+        missing=["再補故事裡的一件事。"],
+        suggestions=["寫出接著發生什麼。"],
+    )
+    blob = m[0] + s[0]
+    assert "中間發生什麼還不清楚" in m[0]
+    assert "接著發生了哪一件事" in s[0]
+    assert not any(word in blob for word in ("藏", "倉庫", "砍樹", "樹樁"))
+
+
+def test_apply_o_key_event_gaps_does_not_repeat_hiding_event():
+    draft = (
+        "故事中，阿松爺爺一開始不太願意分享柿子，他把柿子藏起來，不想讓別人拿走。"
+        "後來發生了一些事情，讓他慢慢開始改變。"
+    )
+    m, s = apply_o_key_event_gaps(
+        stage="O",
+        strength="high",
+        student_text=draft,
+        key_events=[
+            "阿松爺爺急忙把柿子全藏進倉庫。",
+            "阿松爺爺一急之下砍樹，最後只剩樹樁。",
+        ],
+        missing=["再補故事裡的一件事。"],
+        suggestions=["寫出接著發生什麼。"],
+    )
+    blob = m[0] + s[0]
+    assert "最後的改變還沒有說清楚" in m[0]
+    assert "故事最後發生了什麼" in s[0]
+    assert "藏" not in blob
+    assert "倉庫" not in blob
 
 
 def test_apply_o_key_event_gaps_skips_grounding_priority_missing():
@@ -726,5 +773,5 @@ def test_prompt_versions_cover_active_surfaces():
         "orid_checker",
     }.issubset(PROMPT_VERSIONS.keys())
     assert PROMPT_VERSIONS["genai_feedback"] == "wf_v11"
-    assert PROMPT_VERSIONS["feedback_narration"] == "fn_v11"
+    assert PROMPT_VERSIONS["feedback_narration"] == "fn_v12"
     assert PROMPT_VERSIONS["synthesis_coach"] == "sc_v12"

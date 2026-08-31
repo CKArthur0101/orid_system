@@ -531,7 +531,7 @@ export default function TeacherDashboardPage() {
                 iconBg="bg-[#fdf5e8]"
                 label="回饋通過率"
                 value={`${feedbackOkPct}%`}
-                sub="四格皆獲 ok 回饋"
+                sub="四格皆獲達標"
               />
               <StatCard
                 icon={<MessageSquare className="h-5 w-5 text-[#6f58a8]" />}

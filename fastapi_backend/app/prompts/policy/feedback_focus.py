@@ -240,6 +240,10 @@ _O_PASS_ARC_EARLY: tuple[str, ...] = (
     "自己吃",
     "不想分",
     "不分享",
+    "不願意分享",
+    "不太願意分享",
+    "不肯分享",
+    "不讓別人拿",
     "大口吃",
     "流口水",
     "炫耀",
@@ -477,27 +481,42 @@ def thin_stage_coaching(stage: str, student_text: str) -> tuple[str, str]:
         has_early, has_mid, has_late = o_draft_arc_flags(t)
         if has_early and has_mid and not has_late:
             return (
-                "你前面寫到不分享和柿子蒂了，故事後面還有砍樹、後悔或撒種子這些重要轉折，請再補一段。",
-                "阿松爺爺後來對柿子樹做了什麼？結果怎樣？",
+                "你已經寫到故事開頭和中間，最後的改變還沒有說清楚。",
+                "想一想：故事最後發生了什麼？",
             )
         if has_early and has_late and not has_mid:
             return (
-                "開頭和結尾有了，中間還缺一段（例如只給柿子蒂、藏進倉庫），請再補清楚。",
-                "哎唷奶奶來了之後，阿松爺爺中間還做了什麼？",
+                "你已經寫到故事開頭和最後，中間發生什麼還不清楚。",
+                "想一想：故事中間又發生了什麼？",
             )
         if has_mid and has_late and not has_early:
             return (
-                "中間和後面有了，開頭衝突（不分享／獨占柿子）再寫一句會更完整。",
-                "故事一開始，阿松爺爺對柿子是怎麼做的？",
+                "你已經寫到故事中間和最後，開頭發生什麼還不清楚。",
+                "想一想：故事一開始是誰做了什麼？",
             )
         if len(t) < 60:
+            if has_early:
+                return (
+                    "你已經寫出故事開頭，中間發生什麼還不清楚。",
+                    "想一想：接著發生了哪一件事？",
+                )
+            if has_mid:
+                return (
+                    "你寫到故事中間的事了，但開頭還不清楚。",
+                    "想一想：故事一開始是誰做了什麼？",
+                )
+            if has_late:
+                return (
+                    "你寫到故事最後的事了，但開頭還不清楚。",
+                    "想一想：故事一開始是誰做了什麼？",
+                )
             return (
-                "目前還偏短，請把開頭、中間、結尾各寫一點，O 才算把故事說清楚。",
-                "可以先寫：一開始……，後來……，最後……。",
+                "目前還看不出故事先發生什麼。",
+                "想一想：故事一開始是誰做了什麼？",
             )
         return (
-            "請把故事的開頭、中間、結尾都寫到一點，O 才算達標。",
-            "哪一段還沒寫？開頭衝突、中間發展，還是結尾轉折？",
+            "人物和事情都有了，再把其中一件事說清楚一點。",
+            "回到 O 觀察格，補一句：故事裡，＿＿做了＿＿。",
         )
 
     if s == "R":
@@ -907,62 +926,12 @@ def apply_o_key_event_gaps(
     if not isinstance(key_events, list) or not key_events:
         return missing, suggestions
 
-    compact_s = _compact_zh(student_text)
-    if len(compact_s) < 18:
+    if len(_compact_zh(student_text)) < 18:
         return missing, suggestions
 
-    hints: list[str] = []
-    for raw in key_events:
-        ev = str(raw).strip()
-        if len(ev) < 10:
-            continue
-        ev_c = ev.replace(" ", "")
-        if ev_c and ev_c in compact_s:
-            continue
-        clauses = _clauses_from_event_line(ev)
-        if not clauses and len(ev) >= 10:
-            clauses = [ev[: min(36, len(ev))]]
-        miss_candidates = [c for c in clauses if c and c not in compact_s]
-        if not miss_candidates:
-            continue
-        best = max(miss_candidates, key=lambda c: (_story_event_kw_score(c), len(c)))
-        cand = best.strip()[:42]
-        if cand and cand not in hints:
-            hints.append(cand)
-        if len(hints) >= 4:
-            break
-
-    if len(hints) < 2 and not _o_feedback_looks_generic_coaching(missing, suggestions):
-        return missing, suggestions
-    if not hints:
-        return missing, suggestions
-
-    hints.sort(key=_story_event_kw_score, reverse=True)
-    hints = hints[:3]
-
-    mprev = (missing[0] if missing else "").strip()
-    if mprev:
-        covered = 0
-        for h in hints:
-            frag = h[:12] if len(h) >= 12 else h
-            if len(frag) >= 4 and frag in mprev:
-                covered += 1
-        if covered >= len(hints):
-            return missing, suggestions
-
-    joined = "；".join(f"「{h}」" for h in hints[:3])
-    miss = f"書裡還有這些情節你幾乎還沒寫進稿子：{joined}。先挑最容易接的一句補在合適的位置就好。"
-    if len(miss) > 200:
-        miss = miss[:197] + "…"
-
-    if len(hints) >= 2:
-        sug = (
-            f"先加一小句接在「藏柿子／柿子蒂」附近，寫到「{hints[0]}」；"
-            f"再加一小句寫「{hints[1]}」；最後用「然後／隔天／最後」把順序讀一次，看讀者跟不跟得上。"
-        )
-    else:
-        sug = f"先加一小句寫「{hints[0]}」，再用分號接到你已經寫好的段落，讀者就比較跟得上。"
-
+    # Keep concrete book events internal. Student-facing feedback only names
+    # the missing story position, which also avoids semantic repeat requests.
+    miss, sug = thin_stage_coaching("O", student_text)
     return [_child_friendly_text(miss)], [_child_friendly_text(sug)]
 
 

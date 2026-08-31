@@ -3,6 +3,7 @@ import Link from "next/link";
 import { SYSTEM_ILLUSTRATIONS } from "@/lib/orid-system-art";
 import { OridStageDots, type StageState } from "@/components/orid/OridStageDots";
 import type { OridStageKey } from "@/lib/orid-stage-theme";
+import { ORID_BADGE_ORDER, SYNTHESIS_BADGE_ORDER } from "@/lib/orid/badgeRules";
 
 interface WeekSelectionCardProps {
   week: number;
@@ -22,7 +23,10 @@ function CardBody({
   stageStates,
 }: WeekSelectionCardProps) {
   const thumbSrc = coverThumb ?? SYSTEM_ILLUSTRATIONS.reading;
-  const hasBadges = Boolean(earnedBadges && earnedBadges.length > 0);
+  const expectedBadgeIds = week % 2 === 0 ? SYNTHESIS_BADGE_ORDER : ORID_BADGE_ORDER;
+  const earnedBadgeSet = new Set(earnedBadges ?? []);
+  const earnedBadgeCount = expectedBadgeIds.filter((id) => earnedBadgeSet.has(id)).length;
+  const hasBadges = earnedBadgeCount > 0;
 
   return (
     <>
@@ -55,7 +59,7 @@ function CardBody({
           <div className="flex flex-wrap items-center gap-2">
             {hasBadges ? (
               <span className="rounded-full border border-emerald-400/40 bg-emerald-100/80 px-2.5 py-0.5 text-xs font-bold text-emerald-800">
-                🏅 × {earnedBadges!.length}
+                🏅 × {earnedBadgeCount}
               </span>
             ) : (
               <span className="rounded-full border border-amber-400/35 bg-amber-50/80 px-2.5 py-0.5 text-xs font-semibold text-amber-800">

@@ -3331,6 +3331,11 @@ async def writing_coach_chat(
             # Trim to single missing / single next step before narration
             fb_missing = fb_missing[:1]
             fb_sug = fb_sug[:1]
+            # O narration only needs the student's own anchor plus the already
+            # sanitized missing/suggestion fields. Keep retrieved book events
+            # internal so the second LLM cannot reveal an unwritten answer.
+            narration_draft_next_step = None if stage_ctx == "O" else fb_rubric.get("draft_next_step")
+            narration_rag_context = None if stage_ctx == "O" else fb_rubric.get("rag_context")
             summary = json.dumps(
                 {
                     "ok": fb_ok,
@@ -3342,15 +3347,15 @@ async def writing_coach_chat(
                     "rubric_focus": fb_rubric.get("rubric_focus"),
                     "rubric_level_estimate": fb_rubric.get("rubric_level_estimate"),
                     "student_anchor_quote": fb_rubric.get("student_anchor_quote"),
-                    "draft_next_step": fb_rubric.get("draft_next_step"),
-                    "rag_context": fb_rubric.get("rag_context"),
+                    "draft_next_step": narration_draft_next_step,
+                    "rag_context": narration_rag_context,
                     "rasf": build_rasf_narration_context(
                         stage=stage_ctx,
                         book_pack=book_pack,
                         rubric_focus=fb_rubric.get("rubric_focus"),
                         rubric_level_estimate=fb_rubric.get("rubric_level_estimate"),
                         student_anchor_quote=fb_rubric.get("student_anchor_quote"),
-                        draft_next_step=fb_rubric.get("draft_next_step"),
+                        draft_next_step=narration_draft_next_step,
                     ),
                 },
                 ensure_ascii=False,

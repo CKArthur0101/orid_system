@@ -33,6 +33,21 @@ describe("control-guide-pages parameterization", () => {
     expect(getSynthesisGuidePages("book1").length).toBeGreaterThan(0);
     expect(getSynthesisGuidePages("book2").length).toBeGreaterThan(0);
   });
+
+  test("each topic has one main item and two fixed supporting items", () => {
+    const oddWeekPages = getControlGuidePages("O", "book1");
+    const synthesisPages = getSynthesisGuidePages("book1");
+
+    for (const pages of [oddWeekPages, synthesisPages]) {
+      const prompts = pages.filter((page) => page.track === "sel");
+      const sentenceFrames = pages.filter((page) => page.track === "orid");
+
+      expect(prompts).toHaveLength(4);
+      expect(sentenceFrames).toHaveLength(4);
+      expect(prompts.every((page) => page.supportingTexts?.length === 2)).toBe(true);
+      expect(sentenceFrames.every((page) => page.supportingTexts?.length === 2)).toBe(true);
+    }
+  });
 });
 
 describe("buildSynthesisOpeningMessage condition wording", () => {
