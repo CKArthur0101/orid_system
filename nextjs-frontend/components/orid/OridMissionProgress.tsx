@@ -1,6 +1,7 @@
 import type { MissionStageKey } from "@/lib/orid-mission-copy";
 import { PersimmonBullet } from "@/components/orid/PersimmonBullet";
 import { ORID_STAGE_THEME, STAGE_STATUS_BADGE } from "@/lib/orid-stage-theme";
+import { isOddWeek } from "@/lib/orid/week-flow";
 
 type StageMissionStatus = "not_started" | "drafting" | "feedback" | "passed";
 
@@ -66,7 +67,7 @@ export function OridMissionProgress({
   /** 平板兩欄版面：略縮進度列，不影響大螢幕 */
   tabletTight?: boolean;
 }) {
-  const usePersimmon = week === 1;
+  const usePersimmon = isOddWeek(week ?? 0);
   const bulletSize = compact ? 14 : tabletTight ? 14 : usePersimmon ? 18 : 16;
   const tight = compact || tabletTight;
 

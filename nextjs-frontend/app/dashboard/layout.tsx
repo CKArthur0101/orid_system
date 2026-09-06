@@ -9,6 +9,7 @@ import { DilabLogo } from "@/components/orid/DilabLogo";
 import { LeaveWritingConfirmModal } from "@/components/orid/LeaveWritingConfirmModal";
 import { BADGE_ORDER, type BadgeId } from "@/lib/orid/badgeRules";
 import { logoutToLogin } from "@/lib/logout";
+import { STUDENT_HOME, isStudentWeekWritingPath } from "@/lib/student-routes";
 
 const SHELL_CLASS = "mx-auto w-full max-w-[min(100vw-1.5rem,1920px)]";
 
@@ -18,8 +19,8 @@ type TopBarBadges = { earnedBadges: BadgeId[]; badgeIds: BadgeId[] };
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const lockWeekWritingLayout = pathname?.startsWith("/dashboard/books/week/") ?? false;
-  const isDashboardHome = pathname === "/dashboard";
+  const lockWeekWritingLayout = isStudentWeekWritingPath(pathname);
+  const isDashboardHome = pathname === STUDENT_HOME;
   const [greeting, setGreeting] = useState<string | null>(null);
   const [leaveIntent, setLeaveIntent] = useState<LeaveIntent | null>(null);
   const [topBarBadges, setTopBarBadges] = useState<TopBarBadges | null>(null);
@@ -74,7 +75,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       return;
     }
     if (intent === "home") {
-      router.push("/dashboard");
+      router.push(STUDENT_HOME);
       return;
     }
     void logoutToLogin();
@@ -84,7 +85,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     const intent = leaveIntent;
     setLeaveIntent(null);
     if (intent === "home") {
-      router.push("/dashboard");
+      router.push(STUDENT_HOME);
       return;
     }
     if (intent === "logout") {
@@ -118,7 +119,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 </span>
               </button>
             ) : (
-              <Link href="/dashboard" className="flex min-w-0 shrink items-center gap-2.5">
+              <Link href={STUDENT_HOME} className="flex min-w-0 shrink items-center gap-2.5">
                 <DilabLogo height={28} className="hidden sm:block" />
                 <DilabLogo height={24} className="sm:hidden" />
                 <span className="truncate text-sm font-bold text-amber-950 sm:text-base">
@@ -132,7 +133,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   type="button"
                   onClick={() => requestLeave("home")}
                   className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition ${
-                    pathname === "/dashboard" ? "orid-nav-link-active" : "orid-nav-link"
+                    pathname === STUDENT_HOME ? "orid-nav-link-active" : "orid-nav-link"
                   }`}
                 >
                   <Home className="h-4 w-4" />
@@ -140,9 +141,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 </button>
               ) : (
                 <Link
-                  href="/dashboard"
+                  href={STUDENT_HOME}
                   className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition ${
-                    pathname === "/dashboard" ? "orid-nav-link-active" : "orid-nav-link"
+                    pathname === STUDENT_HOME ? "orid-nav-link-active" : "orid-nav-link"
                   }`}
                 >
                   <Home className="h-4 w-4" />

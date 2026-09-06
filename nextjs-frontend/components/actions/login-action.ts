@@ -6,6 +6,7 @@ import { authJwtLogin } from "@/app/clientService";
 import { redirect } from "next/navigation";
 import { loginSchema } from "@/lib/definitions";
 import { getErrorMessage } from "@/lib/utils";
+import { STUDENT_HOME } from "@/lib/student-routes";
 
 const API_BASE_URL = process.env.API_BASE_URL ?? "http://backend:8000";
 
@@ -26,7 +27,7 @@ export async function login(formData: FormData) {
 
   const { username, password } = validatedFields.data;
 
-  let redirectTo = "/dashboard";
+  let redirectTo = STUDENT_HOME;
 
   try {
     const { data, error } = await authJwtLogin({

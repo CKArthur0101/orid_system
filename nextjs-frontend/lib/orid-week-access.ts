@@ -4,7 +4,7 @@
 export const ORID_TOTAL_WEEKS = 6;
 
 /** 已開放週次上限（含）：1..ORID_UNLOCKED_WEEKS 可進入。 */
-export const ORID_UNLOCKED_WEEKS = 2;
+export const ORID_UNLOCKED_WEEKS = 4;
 
 export function oridWeekIsAccessible(week: number): boolean {
   return Number.isFinite(week) && week >= 1 && week <= ORID_UNLOCKED_WEEKS;

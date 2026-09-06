@@ -2,6 +2,7 @@ import type { MissionStageKey } from "@/lib/orid-mission-copy";
 import { BookIllustration } from "@/components/orid/BookIllustration";
 import { ORID_STAGE_THEME } from "@/lib/orid-stage-theme";
 import { getBookWeekArt } from "@/lib/orid-book-art";
+import { isOddWeek } from "@/lib/orid/week-flow";
 import { OridMissionProgress } from "@/components/orid/OridMissionProgress";
 
 type StageMissionStatus = "not_started" | "drafting" | "feedback" | "passed";
@@ -42,8 +43,9 @@ export function OridWeekHero({
   className?: string;
 }) {
   const focusTheme = ORID_STAGE_THEME[focusStage];
-  const subtitle =
-    weekNum === 1 ? "第 1 週｜完成四個反思小任務" : `第 ${weekNum} 週｜先寫作（左）→ 回饋夥伴（右）`;
+  const subtitle = isOddWeek(weekNum)
+    ? `第 ${weekNum} 週｜完成四個反思小任務`
+    : `第 ${weekNum} 週｜先寫作（左）→ 回饋夥伴（右）`;
   const hasBookArt = !!getBookWeekArt(weekNum);
 
   return (
@@ -112,7 +114,7 @@ export function OridWeekHero({
               ) : null}
             </div>
           </div>
-          {weekNum <= 2 ? (
+          {isOddWeek(weekNum) || !compact ? (
             <div
                 className={[
                 "mt-1 min-w-0 overflow-x-auto rounded-xl border border-amber-100 bg-white/85 xl:mt-1.5",

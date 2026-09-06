@@ -53,7 +53,7 @@ describe("login action", () => {
         secure: false,
       }),
     );
-    expect(redirect).toHaveBeenCalledWith("/dashboard");
+    expect(redirect).toHaveBeenCalledWith("/home");
   });
 
   it("redirects when backend rejects credentials", async () => {

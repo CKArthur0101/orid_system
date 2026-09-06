@@ -4,6 +4,7 @@ import { SYSTEM_ILLUSTRATIONS } from "@/lib/orid-system-art";
 import { OridStageDots, type StageState } from "@/components/orid/OridStageDots";
 import type { OridStageKey } from "@/lib/orid-stage-theme";
 import { ORID_BADGE_ORDER, SYNTHESIS_BADGE_ORDER } from "@/lib/orid/badgeRules";
+import { studentWeekPath } from "@/lib/student-routes";
 
 interface WeekSelectionCardProps {
   week: number;
@@ -108,7 +109,7 @@ export function WeekSelectionCard(props: WeekSelectionCardProps) {
 
   return (
     <Link
-      href={`/dashboard/books/week/${props.week}`}
+      href={studentWeekPath(props.week)}
       className={`${shellClass} cursor-pointer hover:scale-[1.01]`}
     >
       <CardBody {...props} />

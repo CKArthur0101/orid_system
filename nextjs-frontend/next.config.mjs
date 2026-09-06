@@ -2,6 +2,20 @@ import ForkTsCheckerWebpackPlugin from 'fork-ts-checker-webpack-plugin';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  async redirects() {
+    return [
+      {
+        source: "/dashboard",
+        destination: "/home",
+        permanent: false,
+      },
+      {
+        source: "/dashboard/books/week/:week",
+        destination: "/week/:week",
+        permanent: false,
+      },
+    ];
+  },
   webpack: (config, { isServer }) => {
     if (!isServer) {
       config.plugins.push(

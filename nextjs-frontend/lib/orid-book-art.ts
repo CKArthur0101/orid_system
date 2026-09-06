@@ -18,6 +18,22 @@ export const BOOK_WEEK_ART: Record<
     title: "阿松爺爺的柿子樹",
     alt: "阿松爺爺的柿子樹故事插圖",
   },
+  3: {
+    scene: "/images/orid/week3/week3-zhu-family-scene.png",
+    helper: "/images/orid/week3/week3-squirrel-helper.png",
+    persimmonBullet: "/images/orid/week1/week1-persimmon-bullet.png",
+    coverThumb: "/images/orid/week3/week3-zhu-family-scene.png",
+    title: "朱家故事",
+    alt: "朱家故事插圖",
+  },
+  4: {
+    scene: "/images/orid/week3/week3-zhu-family-scene.png",
+    helper: "/images/orid/week3/week3-squirrel-helper.png",
+    persimmonBullet: "/images/orid/week1/week1-persimmon-bullet.png",
+    coverThumb: "/images/orid/week3/week3-squirrel-helper.png",
+    title: "朱家故事（整合寫作）",
+    alt: "朱家故事插圖",
+  },
 };
 
 export function getBookWeekArt(week: number) {

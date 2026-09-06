@@ -94,10 +94,13 @@ export function WritingPromptHelper({
   const activePages = mode === "sentence" ? sentencePages : promptTopics;
   const checklistItems = synthesisMode ? SYNTHESIS_CHECKLIST : STAGE_CHECKLIST[focusStage];
   const topicTitles = synthesisMode ? SYNTHESIS_TOPIC_TITLES : TOPIC_TITLES[focusStage];
+  const _bookIdKey = String(resolvedBookId).trim().toLowerCase();
   const helperImageSrc =
-    String(resolvedBookId).trim().toLowerCase() === "book1" || String(resolvedBookId).trim() === "1"
+    _bookIdKey === "book1" || _bookIdKey === "1"
       ? "/images/orid/week1/week1-grandpa-thinking-clean.png"
-      : "/images/orid/system/system-thinking.png";
+      : _bookIdKey === "book2" || _bookIdKey === "2"
+        ? "/images/orid/week3/week3-zhu-mama-helper.png"
+        : "/images/orid/system/system-thinking.png";
 
   useEffect(() => {
     setMode("prompt");

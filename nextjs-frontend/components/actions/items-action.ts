@@ -5,6 +5,7 @@ import { readItem, deleteItem, createItem } from "@/app/clientService";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { itemSchema } from "@/lib/definitions";
+import { STUDENT_HOME } from "@/lib/student-routes";
 
 export async function fetchItems(page: number = 1, size: number = 10) {
   const cookieStore = await cookies();
@@ -51,7 +52,7 @@ export async function removeItem(id: string) {
   if (error) {
     return { message: error };
   }
-  revalidatePath("/dashboard");
+  revalidatePath(STUDENT_HOME);
 }
 
 export async function addItem(prevState: {}, formData: FormData) {
@@ -88,5 +89,5 @@ export async function addItem(prevState: {}, formData: FormData) {
   if (error) {
     return { message: `${error.detail}` };
   }
-  redirect(`/dashboard`);
+  redirect(STUDENT_HOME);
 }

@@ -9,6 +9,8 @@ export type SystemIllustrationKey = keyof typeof SYSTEM_ILLUSTRATIONS;
 export const DASHBOARD_ART = {
   weeklyReadingIcon: "/images/orid/dashboard/weekly-reading-icon.png",
   week1CardThumb: "/images/orid/dashboard/week1-card-thumb.png",
+  week3CardThumb: "/images/orid/week3/week3-zhu-family-scene.png",
+  week4CardThumb: "/images/orid/week3/week3-squirrel-helper.png",
 } as const;
 
 /** Per-week book metadata. Weeks without a title show a placeholder. */
@@ -24,6 +26,16 @@ export const WEEK_BOOK_META: Record<
   2: {
     title: "整合寫作",
     coverThumb: SYSTEM_ILLUSTRATIONS.reading,
+  },
+  3: {
+    title: "朱家故事",
+    coverThumb: DASHBOARD_ART.week3CardThumb,
+    accentColor: "#ea580c",
+  },
+  4: {
+    title: "整合寫作",
+    coverThumb: DASHBOARD_ART.week4CardThumb,
+    accentColor: "#ea580c",
   },
 };
 

@@ -46,7 +46,7 @@ export async function proxy(request: NextRequest) {
 
     if (pathname.startsWith("/admin")) {
       if (role !== "admin") {
-        return NextResponse.redirect(new URL("/dashboard", request.url));
+        return NextResponse.redirect(new URL("/home", request.url));
       }
       return NextResponse.next();
     }
@@ -56,7 +56,7 @@ export async function proxy(request: NextRequest) {
         return NextResponse.redirect(new URL("/admin/users", request.url));
       }
       if (role !== "teacher") {
-        return NextResponse.redirect(new URL("/dashboard", request.url));
+        return NextResponse.redirect(new URL("/home", request.url));
       }
     }
 
@@ -71,6 +71,9 @@ export const config = {
     "/register",
     "/password-recovery",
     "/password-recovery/:path*",
+    "/home",
+    "/home/:path*",
+    "/week/:path*",
     "/dashboard/:path*",
     "/teacher/:path*",
     "/admin/:path*",
