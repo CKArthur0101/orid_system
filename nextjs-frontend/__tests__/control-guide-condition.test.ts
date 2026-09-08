@@ -19,14 +19,37 @@ describe("control-guide-pages parameterization", () => {
     expect(texts).toContain("阿松爺爺");
   });
 
-  test("book2/book3 fall back to generic (no Book-1 names)", () => {
-    for (const bookId of ["book2", "book3", "generic"] as const) {
-      const texts = getControlGuidePages("I", bookId)
-        .map((p) => p.text)
-        .join("\n");
+  test("book2 has character-grounded prompts (朱家人物), not book1 names", () => {
+    const texts = getControlGuidePages("O", "book2").map((p) => p.text).join("\n");
+    expect(texts).toContain("朱太太");
+    expect(texts).not.toContain("阿松爺爺");
+    expect(texts).not.toContain("哎唷奶奶");
+  });
+
+  test("book3 has character-grounded prompts (獅子), not book1 or book2 names", () => {
+    const allStages: Array<"O" | "R" | "I" | "D"> = ["O", "R", "I", "D"];
+    for (const stage of allStages) {
+      const texts = getControlGuidePages(stage, "book3").map((p) => p.text).join("\n");
+      expect(texts).toContain("獅子");
       expect(texts).not.toContain("阿松爺爺");
       expect(texts).not.toContain("哎唷奶奶");
+      expect(texts).not.toContain("朱太太");
+      expect(texts).not.toContain("朱先生");
+      // 確認無 SEL 術語、rubric、分數等字樣出現在控制組提示卡
+      expect(texts).not.toContain("SEL");
+      expect(texts).not.toContain("rubric");
+      expect(texts).not.toContain("分數");
     }
+  });
+
+  test("generic still works as fallback (no specific book character names)", () => {
+    const texts = getControlGuidePages("I", "generic")
+      .map((p) => p.text)
+      .join("\n");
+    expect(texts).not.toContain("阿松爺爺");
+    expect(texts).not.toContain("哎唷奶奶");
+    expect(texts).not.toContain("朱太太");
+    expect(texts).not.toContain("獅子");
   });
 
   test("synthesis pages remain available", () => {
