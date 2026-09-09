@@ -54,7 +54,7 @@ export const BADGE_CONFIG: Record<BadgeId, BadgeConfig> = {
     earnedHint: "已獲得：你已經開始寫，也用過引導了！",
     modalTitle: "恭喜獲得下筆徽章！",
     modalText: "你已經開始寫下自己的想法，也使用了寫作引導。接下來把故事裡「誰做了什麼」寫清楚吧！",
-    svgPath: "/images/orid/badges/badge_persimmon_start.svg",
+    svgPath: "/images/orid/badges/badge_persimmon_start.png",
   },
   badge_30: {
     id: "badge_30",
@@ -63,7 +63,7 @@ export const BADGE_CONFIG: Record<BadgeId, BadgeConfig> = {
     earnedHint: "已獲得：你已經把故事裡的人物和事件說清楚了！",
     modalTitle: "恭喜獲得柿子銅徽章！",
     modalText: "你已經把故事裡的人物和事件說清楚了。接下來可以寫寫看：你有什麼感受？為什麼？",
-    svgPath: "/images/orid/badges/badge_persimmon_bronze.svg",
+    svgPath: "/images/orid/badges/badge_persimmon_bronze.png",
   },
   badge_60: {
     id: "badge_60",
@@ -72,7 +72,7 @@ export const BADGE_CONFIG: Record<BadgeId, BadgeConfig> = {
     earnedHint: "已獲得：你已經寫出事件、感受與體會了！",
     modalTitle: "恭喜獲得柿子銀徽章！",
     modalText: "你已經寫出事件、感受，也說出從故事學到的道理。接下來可以寫一個生活裡做得到的小行動。",
-    svgPath: "/images/orid/badges/badge_persimmon_silver.svg",
+    svgPath: "/images/orid/badges/badge_persimmon_silver.png",
   },
   badge_90: {
     id: "badge_90",
@@ -81,7 +81,7 @@ export const BADGE_CONFIG: Record<BadgeId, BadgeConfig> = {
     earnedHint: "已獲得：你已經走完一整趟反思寫作！",
     modalTitle: "恭喜獲得柿子金徽章！",
     modalText: "太棒了！你已經把觀察、感受、體會和行動都寫完了。",
-    svgPath: "/images/orid/badges/badge_persimmon_gold.svg",
+    svgPath: "/images/orid/badges/badge_persimmon_gold.png",
   },
   // Even-week integration task badge — independent track from badge_30/60/90.
   badge_synthesis_start: {
@@ -92,7 +92,7 @@ export const BADGE_CONFIG: Record<BadgeId, BadgeConfig> = {
     modalTitle: "恭喜獲得整合下筆章！",
     modalText:
       "你已經開始把上週的觀察、感受、體會和行動收成一篇文章，也使用了整合寫作的引導。接下來可以照建議調整一個地方，讓文章更順。",
-    svgPath: "/images/orid/badges/badge_persimmon_start.svg",
+    svgPath: "/images/orid/badges/badge_persimmon_start.png",
   },
 };
 
