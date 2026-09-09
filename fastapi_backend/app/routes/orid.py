@@ -114,7 +114,7 @@ from app.prompts.policy.scaffold_guard import (
     scaffold_feedback_example,
     scaffold_feedback_suggestions,
 )
-from app.content.rubrics import WEEK1_ORID_RUBRIC, WEEK1_SEL_RUBRIC, WEEK3_ORID_RUBRIC, WEEK3_SEL_RUBRIC
+from app.content.rubrics import WEEK1_ORID_RUBRIC, WEEK1_SEL_RUBRIC, WEEK3_ORID_RUBRIC, WEEK3_SEL_RUBRIC, WEEK5_ORID_RUBRIC, WEEK5_SEL_RUBRIC
 from app.prompts.policy.turn_destination import (
     CONTROL_O_META_MISSING,
     CONTROL_O_META_SUGGESTION,
@@ -748,8 +748,102 @@ BOOK_PACK_BY_WEEK: dict[int, dict[str, Any]] = {
     4: None,  # resolved dynamically via book_unit_from_week → week 3 pack
 }
 
-# Week 4 is the synthesis week for book 2; resolve it to the same pack as week 3
+    # Week 4 is the synthesis week for book 2; resolve it to the same pack as week 3
 BOOK_PACK_BY_WEEK[4] = BOOK_PACK_BY_WEEK[3]
+
+BOOK_PACK_BY_WEEK[5] = {
+    "schema": "book_pack_v1",
+    "version": 1,
+    "rag_source": "file",
+    "embedding_bundle_id": "book3",
+    "full_text_path": "/app/shared-data/book_pack_book3.json",
+    "book_title": "不會寫字的獅子",
+    "grade": "國小五年級",
+    "core_theme": ["表達自己的想法", "學習與成長", "理解他人與被理解", "面對困難不放棄", "用合適的方式溝通"],
+    "characters": [
+        {"name": "獅子", "role": "主角；一開始不會寫字，也不在乎，後來為了表達心意而想學寫字。"},
+        {"name": "母獅子", "role": "獅子喜歡的對象；會看書，也引導獅子說出自己真正的想法。"},
+        {"name": "猴子", "role": "幫獅子寫信的動物之一，但寫出的內容像自己的想法。"},
+        {"name": "其他動物", "role": "包含河馬、金龜子、長頸鹿、鱷魚、禿鷹等，幫獅子寫信或讀信，但內容都不是獅子真正想說的話。"},
+    ],
+    "setting": ["森林裡", "母獅子看書的樹下", "獅子向母獅子表達心意的地方"],
+    "key_events": [
+        "獅子一開始不會寫字，但他覺得自己會露出牙齒和大聲咆哮就夠了。",
+        "獅子看見一隻美麗的母獅子在樹上看書，想要親近她。",
+        "獅子因為自己不會寫字，所以請猴子幫他寫信。",
+        "獅子發現猴子寫的信不是自己想說的話，生氣地把信撕掉。",
+        "獅子接著請河馬、金龜子、長頸鹿等動物幫忙，但每封信都像動物自己的想法。",
+        "獅子一次又一次失望，越來越生氣，因為沒有一封信能表達他的想法。",
+        "母獅子聽見獅子的叫聲，問他為什麼這麼生氣。",
+        "獅子承認自己不會寫字，母獅子牽著他開始學認字。",
+    ],
+    "story_excerpts": [
+        {"page": 2, "text": "這隻獅子不會寫字。不過，他並不在乎。"},
+        {"page": 4, "text": "有一天，獅子看見一隻非常美麗的母獅子，坐在樹上看書。"},
+        {"page": 9, "text": "「不對！才不是這樣！」獅子大叫。"},
+        {"page": 28, "text": "「你為什麼不自己寫呢？」"},
+        {"page": 29, "text": "母獅子露出微笑，點點頭。然後，牽著獅子開始學認字……"},
+        {"page": 30, "text": "「我不會寫信，因為……我不會寫字。」"},
+    ],
+    "orid_prompt_bank": {
+        "O": [
+            "獅子一開始會不會寫字？他一開始在不在乎這件事？",
+            "獅子看見母獅子在做什麼？這件事讓他想做什麼？",
+            "獅子請哪些動物幫他寫信或讀信？",
+            "猴子或河馬寫出來的信，和獅子想說的話有什麼不同？",
+            "故事中獅子把信撕掉，是因為發生了什麼事？",
+            "故事最後，母獅子對獅子做了什麼？",
+        ],
+        "R": [
+            "看到獅子不會寫字卻想寫信給母獅子，你有什麼感覺？",
+            "當獅子發現別人寫的信不是自己想說的話時，你覺得他可能有什麼心情？",
+            "如果你是獅子，一直沒辦法把心裡的話說清楚，你會有什麼感覺？",
+            "看到母獅子願意聽獅子說話，你有什麼感覺？",
+            "故事最後獅子開始學認字，你覺得這個結尾給你什麼感覺？",
+        ],
+        "I": [
+            "你覺得這個故事想告訴我們，為什麼要學會表達自己的想法？",
+            "為什麼不同動物幫獅子寫出來的信，都不像獅子真正想說的話？",
+            "你覺得請別人幫忙和自己學會表達，有什麼不同？",
+            "獅子一開始覺得不會寫字沒關係，後來為什麼改變了？",
+            "你覺得母獅子問「你為什麼不自己寫呢？」這句話有什麼意思？",
+        ],
+        "D": [
+            "如果以後你有重要的話想說，你可以怎麼做，讓別人更了解你？",
+            "如果你遇到自己不會的事情，你可以像獅子一樣怎麼開始學習？",
+            "當別人沒有說出你真正的想法時，你可以怎麼溫和地說明？",
+            "讀完這個故事後，你想在哪一件事情上更勇敢地學習？",
+        ],
+    },
+    "writing_guide": {
+        "O": "請寫出故事中誰做了什麼事，盡量把開頭、中間和結尾說清楚。",
+        "R": "請寫出你看到這些事情時的感覺，也可以說說為什麼會有這種感覺。",
+        "I": "請想一想故事想告訴我們什麼，也可以連結自己的生活經驗。",
+        "D": "請寫出讀完故事後，你以後可以做的一個具體行動。",
+    },
+    "writing_rubric": WEEK5_ORID_RUBRIC,
+    "sel_rubric": WEEK5_SEL_RUBRIC,
+    "grounding_facts": {
+        "note_for_ai": "供 AI 內部 grounding 用，不直接引用給學生",
+        "correct_facts": [
+            "獅子一開始不會寫字，也不在乎（第 2 頁）",
+            "猴子寫信的內容是邀請母獅子爬樹吃香蕉，不是獅子真正想說的話",
+            "河馬寫信的內容是邀請母獅子在河裡泡澡吃水草，不是獅子的想法",
+            "母獅子問「你為什麼不自己寫呢？」（第 28 頁）",
+            "獅子承認不會寫字（第 30 頁）",
+            "故事結尾是母獅子牽著獅子開始學認字，不是已經學會（第 29 頁）",
+        ],
+        "common_errors": [
+            {"student_may_write": "獅子一開始很想學寫字", "correct": "獅子一開始不會寫字，也不在乎"},
+            {"student_may_write": "母獅子討厭獅子", "correct": "母獅子最後願意聽獅子說話並陪他學認字"},
+            {"student_may_write": "動物們故意害獅子", "correct": "動物們是幫忙寫信，但各自把自己的生活方式寫進去"},
+            {"student_may_write": "獅子最後已經完全會寫字", "correct": "故事最後是母獅子牽著獅子開始學認字（是開始學習，不是已經精通）"},
+        ],
+    },
+}
+
+# Week 6 is the synthesis week for book 3; resolve it to the same pack as week 5
+BOOK_PACK_BY_WEEK[6] = BOOK_PACK_BY_WEEK[5]
 
 
 def _default_reading_content_for_week(week: int) -> str:

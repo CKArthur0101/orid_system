@@ -308,6 +308,204 @@ WEEK3_ORID_RUBRIC: dict[str, Any] = {
 }
 
 
+# ── Week 5 (《不會寫字的獅子》) ─────────────────────────────────────────────
+
+WEEK5_ORID_RUBRIC: dict[str, Any] = {
+    "schema": "writing_rubric_v1",
+    "version": 1,
+    "purpose": "primary_orid_feedback_and_research_scoring",
+    "score_range": "1-4",
+    "scoring_formula": "triangular_cumulative_v1",
+    "scoring_note": (
+        "level n → n*(n+1)/2 pts (1→1, 2→3, 3→6, 4→10); "
+        "ORID max 40, SEL max 50, total max 90"
+    ),
+    "total_score": (
+        "ORID(O1+R1+I1+D1) max 40 + "
+        "SEL(SEL_SA+SEL_SOA+SEL_RS+SEL_RD) max 50 = 90"
+    ),
+    "ok_rule": "level_3_or_4_true_level_1_or_2_false",
+    "student_bands": {
+        "1": "開始寫",
+        "2": "差一點",
+        "3": "不錯",
+        "4": "很好",
+    },
+    "by_stage": {
+        "O": [
+            {
+                "id": "O1",
+                "name": "事實描述",
+                "focus": "依故事寫人物、事件與大致順序",
+                "levels": [
+                    {"label": "1 起步", "desc": "只寫出很少內容，或內容和故事關係不清楚。"},
+                    {"label": "2 接近", "desc": "有寫到故事中的人物或事件，但內容較零散，缺少重要經過。"},
+                    {"label": "3 達標", "desc": "能寫出主要人物和重要事件，並大致說清楚事情的先後順序。"},
+                    {"label": "4 精進", "desc": "能清楚寫出獅子從不在乎寫字、想寫信、請動物幫忙、發現信不對，到最後開始學認字的經過。"},
+                ],
+            }
+        ],
+        "R": [
+            {
+                "id": "R1",
+                "name": "感受與原因",
+                "focus": "表達感受並說明原因（連回故事）",
+                "levels": [
+                    {"label": "1 起步", "desc": "只寫出簡單感覺，沒有說明原因。"},
+                    {"label": "2 接近", "desc": "有寫出感覺，但原因和故事情節連結較少。"},
+                    {"label": "3 達標", "desc": "能寫出自己的感覺，並說明這個感覺和故事事件的關係。"},
+                    {"label": "4 精進", "desc": "能結合具體情節說明感受，例如看到獅子一直被誤解會替他著急，看到母獅子願意聽他說話會覺得溫暖。"},
+                ],
+            }
+        ],
+        "I": [
+            {
+                "id": "I1",
+                "name": "道理與連結",
+                "focus": "說出道理／啟發並用故事支持",
+                "levels": [
+                    {"label": "1 起步", "desc": "只寫出很簡單的道理，或和故事關係不明顯。"},
+                    {"label": "2 接近", "desc": "有寫出故事可能的意思，但說明還不夠清楚。"},
+                    {"label": "3 達標", "desc": "能說明故事帶來的想法，並和表達、學習或生活經驗做連結。"},
+                    {"label": "4 精進", "desc": "能從獅子請別人寫信卻無法表達自己，連結到每個人都需要學會說出真正想法，也能想到自己的生活例子。"},
+                ],
+            }
+        ],
+        "D": [
+            {
+                "id": "D1",
+                "name": "具體行動",
+                "focus": "提出生活中可執行的具體行動",
+                "levels": [
+                    {"label": "1 起步", "desc": "只寫出很籠統的行動，例如我要加油，沒有說明怎麼做。"},
+                    {"label": "2 接近", "desc": "有寫出想做的事，但行動還不夠具體。"},
+                    {"label": "3 達標", "desc": "能寫出一個自己做得到的具體行動。"},
+                    {"label": "4 精進", "desc": "能寫出清楚又可實行的行動，例如遇到不會寫或不會說的事情時，先把想法列出來，再請老師或同學幫忙修改，而不是完全請別人代替自己表達。"},
+                ],
+            }
+        ],
+    },
+}
+
+
+WEEK5_SEL_RUBRIC: dict[str, Any] = {
+    "schema": "sel_rubric_v1",
+    "version": 1,
+    "purpose": "auxiliary_guidance_and_research_scoring",
+    "framework": "CASEL_five_competencies",
+    "scoring_formula": "triangular_cumulative_v1",
+    "scoring_note": (
+        "Same formula as ORID: level n → n*(n+1)/2 pts; "
+        "SEL max 50 (SEL_SA+SEL_SOA+SEL_RS+SEL_RD). "
+        "Does not decide feedback_ok."
+    ),
+    "student_language_policy": (
+        "Do not mention SEL dimension names to students; "
+        "convert them into concrete questions. "
+        "Prefer student bands: 差一點／不錯／很好."
+    ),
+    "by_stage": {
+        "O": [],
+        "R": [
+            {
+                "id": "SEL_SA",
+                "name": "自我覺察",
+                "focus": "辨認並表達自己的感受與想法",
+                "student_prompts": [
+                    "故事中哪一個地方讓你有這種感覺？",
+                    "你的感覺可以再說得更清楚一點嗎？",
+                ],
+                "levels": [
+                    {"label": "1 起步", "desc": "幾乎沒有表達感受或想法，或只使用很籠統的詞語。"},
+                    {"label": "2 接近", "desc": "能寫出一種感受或想法，但較少說明為什麼。"},
+                    {"label": "3 達標", "desc": "能清楚說出自己的感受或想法，並說明與故事事件的關係。"},
+                    {"label": "4 精進", "desc": "能更細緻描述感受或想法，並理解自己為何有這種反應或變化。"},
+                ],
+            },
+            {
+                "id": "SEL_SOA",
+                "name": "社會覺察",
+                "focus": "理解角色或他人的感受、想法與立場",
+                "student_prompts": [
+                    "你覺得獅子當時可能在想什麼？",
+                    "如果你是獅子，你可能會有什麼感覺？",
+                ],
+                "levels": [
+                    {"label": "1 起步", "desc": "只從自己的角度描述，較少注意角色或他人的感受。"},
+                    {"label": "2 接近", "desc": "有提到角色或他人的感受，但說明較簡單。"},
+                    {"label": "3 達標", "desc": "能理解角色可能的感受或想法，並能連結故事事件說明原因。"},
+                    {"label": "4 精進", "desc": "能比較不同角色的立場，或說明角色行為背後可能的原因。"},
+                ],
+            },
+        ],
+        "I": [
+            {
+                "id": "SEL_SOA",
+                "name": "社會覺察",
+                "focus": "理解角色或他人的感受、想法與立場",
+                "student_prompts": [
+                    "為什麼其他動物無法替獅子表達真正的想法？",
+                    "母獅子最後願意陪獅子學認字，你覺得她心裡可能有什麼想法？",
+                ],
+                "levels": [
+                    {"label": "1 起步", "desc": "只從自己的角度描述，較少注意角色或他人的感受。"},
+                    {"label": "2 接近", "desc": "有提到角色或他人的感受，但說明較簡單。"},
+                    {"label": "3 達標", "desc": "能理解角色可能的感受或想法，並能連結故事事件說明原因。"},
+                    {"label": "4 精進", "desc": "能比較不同角色的立場，或說明角色行為背後可能的原因。"},
+                ],
+            },
+            {
+                "id": "SEL_RS",
+                "name": "人際技巧",
+                "focus": "與他人互動時合適的說法或做法",
+                "student_prompts": [
+                    "如果你有想法想表達，你會怎麼讓別人理解你？",
+                    "你怎麼知道別人真正想說的是什麼？",
+                ],
+                "levels": [
+                    {"label": "1 起步", "desc": "沒有提到與他人如何互動。"},
+                    {"label": "2 接近", "desc": "有提到別人，但做法或說法不清楚。"},
+                    {"label": "3 達標", "desc": "能提出一個對他人清楚、友善、做得到的互動做法。"},
+                    {"label": "4 精進", "desc": "能考慮對方感受，並說明怎麼說或怎麼做才較不傷人、較能合作。"},
+                ],
+            },
+        ],
+        "D": [
+            {
+                "id": "SEL_RD",
+                "name": "負責任的決定",
+                "focus": "合適、可行、對自己或他人有幫助的決定或行動",
+                "student_prompts": [
+                    "如果你遇到類似情況，你可以在什麼時候、對誰、怎麼做？",
+                    "這個行動對你或別人有什麼幫助？",
+                ],
+                "levels": [
+                    {"label": "1 起步", "desc": "只寫出想改變，但沒有具體決定或做法。"},
+                    {"label": "2 接近", "desc": "有提出行動方向，但行動較模糊或不容易執行。"},
+                    {"label": "3 達標", "desc": "能提出一個具體、可做到的決定或行動。"},
+                    {"label": "4 精進", "desc": "能說明情境、對象、做法，並考慮行動可能帶來的影響。"},
+                ],
+            },
+            {
+                "id": "SEL_SM",
+                "name": "自我管理",
+                "focus": "遇到挫折時，能想到可做到的調節方式",
+                "student_prompts": [
+                    "當你說不清楚或做不到時，你可以先做什麼讓自己不那麼沮喪？",
+                    "你怎麼提醒自己繼續嘗試，而不是放棄？",
+                ],
+                "levels": [
+                    {"label": "1 起步", "desc": "完全沒有「先停一下／換做法」的想法。"},
+                    {"label": "2 接近", "desc": "有模糊想法，但不知道具體怎麼做。"},
+                    {"label": "3 達標", "desc": "能提出一個具體、做得到的小策略。"},
+                    {"label": "4 精進", "desc": "策略具體，能說明何時用、對自己有什麼幫助。"},
+                ],
+            },
+        ],
+    },
+}
+
+
 WEEK3_SEL_RUBRIC: dict[str, Any] = {
     "schema": "sel_rubric_v1",
     "version": 1,

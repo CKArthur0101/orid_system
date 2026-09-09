@@ -8,9 +8,12 @@ export type SystemIllustrationKey = keyof typeof SYSTEM_ILLUSTRATIONS;
 
 export const DASHBOARD_ART = {
   weeklyReadingIcon: "/images/orid/dashboard/weekly-reading-icon.png",
-  week1CardThumb: "/images/orid/dashboard/week1-card-thumb.png",
+  week1CardThumb: "/images/orid/week1/week1-persimmon-scene.png",
+  week2CardThumb: "/images/orid/week1/week2-synthesis-cover.png",
   week3CardThumb: "/images/orid/week3/week3-zhu-family-scene.png",
-  week4CardThumb: "/images/orid/week3/week3-squirrel-helper.png",
+  week4CardThumb: "/images/orid/week3/week4-zhu-family-synthesis.png",
+  week5CardThumb: "/images/orid/week5/week5-lion-scene.png",
+  week6CardThumb: "/images/orid/week5/week6-lion-synthesis.png",
 } as const;
 
 /** Per-week book metadata. Weeks without a title show a placeholder. */
@@ -25,7 +28,8 @@ export const WEEK_BOOK_META: Record<
   },
   2: {
     title: "整合寫作",
-    coverThumb: SYSTEM_ILLUSTRATIONS.reading,
+    coverThumb: DASHBOARD_ART.week2CardThumb,
+    accentColor: "#d97706",
   },
   3: {
     title: "朱家故事",
@@ -36,6 +40,16 @@ export const WEEK_BOOK_META: Record<
     title: "整合寫作",
     coverThumb: DASHBOARD_ART.week4CardThumb,
     accentColor: "#ea580c",
+  },
+  5: {
+    title: "不會寫字的獅子",
+    coverThumb: DASHBOARD_ART.week5CardThumb,
+    accentColor: "#b45309",
+  },
+  6: {
+    title: "整合寫作",
+    coverThumb: DASHBOARD_ART.week6CardThumb,
+    accentColor: "#b45309",
   },
 };
 

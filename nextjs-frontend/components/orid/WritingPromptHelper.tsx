@@ -100,7 +100,9 @@ export function WritingPromptHelper({
       ? "/images/orid/week1/week1-grandpa-thinking-clean.png"
       : _bookIdKey === "book2" || _bookIdKey === "2"
         ? "/images/orid/week3/week3-zhu-mama-helper.png"
-        : "/images/orid/system/system-thinking.png";
+        : _bookIdKey === "book3" || _bookIdKey === "3"
+          ? "/images/orid/week5/week5-lion-helper.png"
+          : "/images/orid/system/system-thinking.png";
 
   useEffect(() => {
     setMode("prompt");
