@@ -1,16 +1,24 @@
 "use client";
 
 import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { BADGE_CONFIG, BADGE_ORDER, type BadgeId } from "@/lib/orid/badgeRules";
+import {
+  BADGE_ORDER,
+  getBadgeConfigForBook,
+  type BadgeId,
+} from "@/lib/orid/badgeRules";
 
 interface BadgeDisplayProps {
   earnedBadges: BadgeId[];
   badgeIds?: BadgeId[];
+  /** book1 / book2 / book3 — selects badge art set */
+  bookId?: string | null;
+  /** Academic week; used when bookId omitted */
+  week?: number | null;
   size?: number;
   className?: string;
 }
 
-/** 未解鎖徽章：統一灰色圓圈樣式，不載入 SVG（避免破圖） */
+/** 未解鎖徽章：統一灰色圓圈樣式，不載入圖片（避免破圖） */
 function LockedBadgeCircle({ size }: { size: number }) {
   const inner = Math.max(12, size - 8);
   return (
@@ -27,7 +35,14 @@ function LockedBadgeCircle({ size }: { size: number }) {
   );
 }
 
-export function BadgeDisplay({ earnedBadges, badgeIds = BADGE_ORDER, size = 32, className }: BadgeDisplayProps) {
+export function BadgeDisplay({
+  earnedBadges,
+  badgeIds = BADGE_ORDER,
+  bookId,
+  week,
+  size = 32,
+  className,
+}: BadgeDisplayProps) {
   const [openTooltip, setOpenTooltip] = useState<BadgeId | null>(null);
   const [brokenIds, setBrokenIds] = useState<Set<BadgeId>>(new Set());
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -76,7 +91,7 @@ export function BadgeDisplay({ earnedBadges, badgeIds = BADGE_ORDER, size = 32, 
       aria-label="反思徽章"
     >
       {badgeIds.map((id) => {
-        const config = BADGE_CONFIG[id];
+        const config = getBadgeConfigForBook(id, bookId, week);
         const earned = earnedSet.has(id);
         const isOpen = openTooltip === id;
         const imgBroken = brokenIds.has(id);

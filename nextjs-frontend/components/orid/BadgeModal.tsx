@@ -1,15 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import { BADGE_CONFIG, type BadgeId } from "@/lib/orid/badgeRules";
+import { getBadgeConfigForBook, type BadgeId } from "@/lib/orid/badgeRules";
 
 interface BadgeModalProps {
   badgeId: BadgeId;
+  bookId?: string | null;
+  week?: number | null;
   onClose: () => void;
 }
 
-export function BadgeModal({ badgeId, onClose }: BadgeModalProps) {
-  const config = BADGE_CONFIG[badgeId];
+export function BadgeModal({ badgeId, bookId, week, onClose }: BadgeModalProps) {
+  const config = getBadgeConfigForBook(badgeId, bookId, week);
   const [imgBroken, setImgBroken] = useState(false);
   if (!config) return null;
 

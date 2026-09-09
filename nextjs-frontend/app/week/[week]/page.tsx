@@ -748,14 +748,19 @@ export default function WeekBookPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const detail = { earnedBadges, badgeIds: visibleBadgeIds };
+    const detail = {
+      earnedBadges,
+      badgeIds: visibleBadgeIds,
+      week: weekNum,
+      bookId: weekNum <= 2 ? "book1" : weekNum <= 4 ? "book2" : "book3",
+    };
     const dispatchBadgeDisplay = () => {
       window.dispatchEvent(new CustomEvent("orid:badge-display", { detail }));
     };
     dispatchBadgeDisplay();
     const retryId = window.setTimeout(dispatchBadgeDisplay, 0);
     return () => window.clearTimeout(retryId);
-  }, [earnedBadges, visibleBadgeIds]);
+  }, [earnedBadges, visibleBadgeIds, weekNum]);
 
   const aiPartnerShellClass = showSynthesisColumn
     ? oridPanelCollapsed
@@ -2114,6 +2119,7 @@ export default function WeekBookPage() {
       {badgeModalQueue.length > 0 && (
         <BadgeModal
           badgeId={badgeModalQueue[0]}
+          week={weekNum}
           onClose={() => setBadgeModalQueue((prev) => prev.slice(1))}
         />
       )}

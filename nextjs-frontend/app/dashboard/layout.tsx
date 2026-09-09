@@ -14,7 +14,12 @@ import { STUDENT_HOME, isStudentWeekWritingPath } from "@/lib/student-routes";
 const SHELL_CLASS = "mx-auto w-full max-w-[min(100vw-1.5rem,1920px)]";
 
 type LeaveIntent = "home" | "logout";
-type TopBarBadges = { earnedBadges: BadgeId[]; badgeIds: BadgeId[] };
+type TopBarBadges = {
+  earnedBadges: BadgeId[];
+  badgeIds: BadgeId[];
+  bookId?: string | null;
+  week?: number | null;
+};
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -60,7 +65,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       const badgeIds = Array.isArray(detail.badgeIds)
         ? (detail.badgeIds.filter(Boolean) as BadgeId[])
         : BADGE_ORDER;
-      setTopBarBadges({ earnedBadges, badgeIds });
+      setTopBarBadges({
+        earnedBadges,
+        badgeIds,
+        bookId: detail.bookId ?? null,
+        week: typeof detail.week === "number" ? detail.week : null,
+      });
     }
 
     window.addEventListener("orid:badge-display", handleBadgeUpdate);
@@ -159,6 +169,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   <BadgeDisplay
                     earnedBadges={topBarBadges.earnedBadges}
                     badgeIds={topBarBadges.badgeIds}
+                    bookId={topBarBadges.bookId}
+                    week={topBarBadges.week}
                     size={42}
                     className="hidden sm:flex"
                   />

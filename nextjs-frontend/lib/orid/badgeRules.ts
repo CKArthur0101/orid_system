@@ -10,6 +10,8 @@ export type BadgeId =
   | "badge_90"
   | "badge_synthesis_start";
 
+export type BadgeBookId = "book1" | "book2" | "book3";
+
 export type OridStageKey = "O" | "R" | "I" | "D";
 
 export interface BadgeConfig {
@@ -23,7 +25,7 @@ export interface BadgeConfig {
   modalTitle: string;
   /** Modal body on first earn */
   modalText: string;
-  /** Path to SVG asset */
+  /** Path to image asset (PNG) */
   svgPath: string;
 }
 
@@ -45,6 +47,79 @@ export const ORID_BADGE_ORDER: BadgeId[] = [
 export const SYNTHESIS_BADGE_ORDER: BadgeId[] = [
   "badge_synthesis_start",
 ];
+
+const BOOK1_BADGE_IMAGES: Record<BadgeId, string> = {
+  badge_start: "/images/orid/badges/badge_persimmon_start.png",
+  badge_30: "/images/orid/badges/badge_persimmon_bronze.png",
+  badge_60: "/images/orid/badges/badge_persimmon_silver.png",
+  badge_90: "/images/orid/badges/badge_persimmon_gold.png",
+  badge_synthesis_start: "/images/orid/badges/badge_persimmon_start.png",
+};
+
+const BOOK2_BADGE_IMAGES: Record<BadgeId, string> = {
+  badge_start: "/images/orid/badges/badge_pig_start.png",
+  badge_30: "/images/orid/badges/badge_pig_bronze.png",
+  badge_60: "/images/orid/badges/badge_pig_silver.png",
+  badge_90: "/images/orid/badges/badge_pig_gold.png",
+  badge_synthesis_start: "/images/orid/badges/badge_pig_start.png",
+};
+
+/** book3 falls back to book1 art until lion badges are finalized. */
+const BADGE_IMAGES_BY_BOOK: Record<BadgeBookId, Record<BadgeId, string>> = {
+  book1: BOOK1_BADGE_IMAGES,
+  book2: BOOK2_BADGE_IMAGES,
+  book3: BOOK1_BADGE_IMAGES,
+};
+
+const BOOK2_BADGE_NAMES: Partial<Record<BadgeId, { name: string; modalTitle: string }>> = {
+  badge_start: { name: "下筆豬頭章", modalTitle: "恭喜獲得下筆徽章！" },
+  badge_30: { name: "豬頭銅徽章", modalTitle: "恭喜獲得豬頭銅徽章！" },
+  badge_60: { name: "豬頭銀徽章", modalTitle: "恭喜獲得豬頭銀徽章！" },
+  badge_90: { name: "豬頭金徽章", modalTitle: "恭喜獲得豬頭金徽章！" },
+  badge_synthesis_start: { name: "整合下筆章", modalTitle: "恭喜獲得整合下筆章！" },
+};
+
+export function resolveBadgeBookId(
+  bookId?: string | null,
+  week?: number | null,
+): BadgeBookId {
+  const key = String(bookId || "").trim().toLowerCase();
+  if (key === "book1" || key === "1") return "book1";
+  if (key === "book2" || key === "2") return "book2";
+  if (key === "book3" || key === "3") return "book3";
+  if (typeof week === "number" && Number.isFinite(week) && week >= 1) {
+    const unit = Math.ceil(week / 2);
+    if (unit === 1) return "book1";
+    if (unit === 2) return "book2";
+    if (unit === 3) return "book3";
+  }
+  return "book1";
+}
+
+export function getBadgeImagePath(
+  badgeId: BadgeId,
+  bookId?: string | null,
+  week?: number | null,
+): string {
+  const book = resolveBadgeBookId(bookId, week);
+  return BADGE_IMAGES_BY_BOOK[book][badgeId] ?? BADGE_CONFIG[badgeId].svgPath;
+}
+
+/** Config with book-specific image + display name when available. */
+export function getBadgeConfigForBook(
+  badgeId: BadgeId,
+  bookId?: string | null,
+  week?: number | null,
+): BadgeConfig {
+  const base = BADGE_CONFIG[badgeId];
+  const book = resolveBadgeBookId(bookId, week);
+  const names = book === "book2" ? BOOK2_BADGE_NAMES[badgeId] : undefined;
+  return {
+    ...base,
+    ...(names ?? {}),
+    svgPath: getBadgeImagePath(badgeId, book, week),
+  };
+}
 
 export const BADGE_CONFIG: Record<BadgeId, BadgeConfig> = {
   badge_start: {
