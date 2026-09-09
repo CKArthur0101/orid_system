@@ -45,7 +45,7 @@ export const BOOK_WEEK_ART: Record<
   5: {
     scene: "/images/orid/week5/week5-lion-scene.png",
     helper: "/images/orid/week5/week5-lion-helper.png",
-    persimmonBullet: "/images/orid/week1/week1-persimmon-bullet.png",
+    persimmonBullet: "/images/orid/week5/week5-lion-bullet.png",
     coverThumb: "/images/orid/week5/week5-lion-scene.png",
     title: "不會寫字的獅子",
     alt: "不會寫字的獅子故事插圖",
@@ -53,7 +53,7 @@ export const BOOK_WEEK_ART: Record<
   6: {
     scene: "/images/orid/week5/week6-lion-synthesis.png",
     helper: "/images/orid/week5/week5-lion-helper.png",
-    persimmonBullet: "/images/orid/week1/week1-persimmon-bullet.png",
+    persimmonBullet: "/images/orid/week5/week5-lion-bullet.png",
     coverThumb: "/images/orid/week5/week6-lion-synthesis.png",
     title: "不會寫字的獅子（整合寫作）",
     alt: "不會寫字的獅子整合寫作插圖",

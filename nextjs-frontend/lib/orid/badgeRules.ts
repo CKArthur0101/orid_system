@@ -64,11 +64,18 @@ const BOOK2_BADGE_IMAGES: Record<BadgeId, string> = {
   badge_synthesis_start: "/images/orid/badges/badge_pig_start.png",
 };
 
-/** book3 falls back to book1 art until lion badges are finalized. */
+const BOOK3_BADGE_IMAGES: Record<BadgeId, string> = {
+  badge_start: "/images/orid/badges/badge_lion_start.png",
+  badge_30: "/images/orid/badges/badge_lion_bronze.png",
+  badge_60: "/images/orid/badges/badge_lion_silver.png",
+  badge_90: "/images/orid/badges/badge_lion_gold.png",
+  badge_synthesis_start: "/images/orid/badges/badge_lion_start.png",
+};
+
 const BADGE_IMAGES_BY_BOOK: Record<BadgeBookId, Record<BadgeId, string>> = {
   book1: BOOK1_BADGE_IMAGES,
   book2: BOOK2_BADGE_IMAGES,
-  book3: BOOK1_BADGE_IMAGES,
+  book3: BOOK3_BADGE_IMAGES,
 };
 
 const BOOK2_BADGE_NAMES: Partial<Record<BadgeId, { name: string; modalTitle: string }>> = {
@@ -76,6 +83,14 @@ const BOOK2_BADGE_NAMES: Partial<Record<BadgeId, { name: string; modalTitle: str
   badge_30: { name: "豬頭銅徽章", modalTitle: "恭喜獲得豬頭銅徽章！" },
   badge_60: { name: "豬頭銀徽章", modalTitle: "恭喜獲得豬頭銀徽章！" },
   badge_90: { name: "豬頭金徽章", modalTitle: "恭喜獲得豬頭金徽章！" },
+  badge_synthesis_start: { name: "整合下筆章", modalTitle: "恭喜獲得整合下筆章！" },
+};
+
+const BOOK3_BADGE_NAMES: Partial<Record<BadgeId, { name: string; modalTitle: string }>> = {
+  badge_start: { name: "下筆獅子章", modalTitle: "恭喜獲得下筆徽章！" },
+  badge_30: { name: "獅子銅徽章", modalTitle: "恭喜獲得獅子銅徽章！" },
+  badge_60: { name: "獅子銀徽章", modalTitle: "恭喜獲得獅子銀徽章！" },
+  badge_90: { name: "獅子金徽章", modalTitle: "恭喜獲得獅子金徽章！" },
   badge_synthesis_start: { name: "整合下筆章", modalTitle: "恭喜獲得整合下筆章！" },
 };
 
@@ -113,7 +128,12 @@ export function getBadgeConfigForBook(
 ): BadgeConfig {
   const base = BADGE_CONFIG[badgeId];
   const book = resolveBadgeBookId(bookId, week);
-  const names = book === "book2" ? BOOK2_BADGE_NAMES[badgeId] : undefined;
+  const names =
+    book === "book2"
+      ? BOOK2_BADGE_NAMES[badgeId]
+      : book === "book3"
+        ? BOOK3_BADGE_NAMES[badgeId]
+        : undefined;
   return {
     ...base,
     ...(names ?? {}),
