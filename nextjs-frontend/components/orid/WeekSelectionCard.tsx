@@ -3,7 +3,11 @@ import Link from "next/link";
 import { SYSTEM_ILLUSTRATIONS } from "@/lib/orid-system-art";
 import { OridStageDots, type StageState } from "@/components/orid/OridStageDots";
 import type { OridStageKey } from "@/lib/orid-stage-theme";
-import { ORID_BADGE_ORDER, SYNTHESIS_BADGE_ORDER } from "@/lib/orid/badgeRules";
+import {
+  ORID_BADGE_ORDER,
+  SYNTHESIS_BADGE_ORDER,
+  getHomeMedalImagePath,
+} from "@/lib/orid/badgeRules";
 import { studentWeekPath } from "@/lib/student-routes";
 
 interface WeekSelectionCardProps {
@@ -59,11 +63,22 @@ function CardBody({
         {!locked ? (
           <div className="flex flex-wrap items-center gap-2">
             {hasBadges ? (
-              <span className="rounded-full border border-emerald-400/40 bg-emerald-100/80 px-2.5 py-0.5 text-xs font-bold text-emerald-800">
-                🏅 × {earnedBadgeCount}
+              <span className="inline-flex items-center gap-2 rounded-full border-2 border-amber-400/50 bg-amber-50/80 py-1.5 pl-1.5 pr-3.5 text-base font-bold text-amber-800 sm:gap-2.5 sm:py-2 sm:pl-2 sm:pr-4 sm:text-lg">
+                <Image
+                  src={getHomeMedalImagePath(undefined, week)}
+                  alt=""
+                  width={48}
+                  height={48}
+                  className="h-11 w-11 object-contain drop-shadow-sm sm:h-12 sm:w-12"
+                  aria-hidden
+                />
+                <span>× {earnedBadgeCount}</span>
               </span>
             ) : (
-              <span className="rounded-full border border-amber-400/35 bg-amber-50/80 px-2.5 py-0.5 text-xs font-semibold text-amber-800">
+              <span
+                className="rounded-full border-2 border-[#5c3215] px-3.5 py-1.5 text-sm font-semibold text-[#fff8f0] sm:px-4 sm:py-2 sm:text-base"
+                style={{ backgroundColor: "#7a431d" }}
+              >
                 已開放 →
               </span>
             )}

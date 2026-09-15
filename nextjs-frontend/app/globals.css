@@ -80,6 +80,57 @@
     @apply min-h-[44px] rounded-2xl border-2 border-amber-300 bg-[#faf5eb] px-4 py-2.5 text-sm font-semibold text-amber-900 shadow-sm transition-all hover:bg-amber-50 disabled:opacity-50 sm:text-base;
   }
 
+  /* DILab brown 3D pressable buttons */
+  .kid-btn-3d {
+    @apply inline-flex min-h-[40px] cursor-pointer items-center justify-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-bold transition-all sm:min-h-[44px] sm:px-5 sm:py-2 sm:text-sm;
+    @apply disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none disabled:translate-y-0;
+  }
+
+  .kid-btn-3d-primary {
+    @apply kid-btn-3d text-[#fff8f0];
+    background: linear-gradient(180deg, #8b5328 0%, #7a431d 55%, #6a3918 100%);
+    border: 2px solid #5c3215;
+    box-shadow:
+      0 4px 0 #4a2810,
+      0 6px 10px rgba(74, 40, 16, 0.28);
+  }
+
+  .kid-btn-3d-primary:hover:not(:disabled) {
+    background: linear-gradient(180deg, #96602f 0%, #854a20 55%, #743f1b 100%);
+  }
+
+  .kid-btn-3d-primary:active:not(:disabled) {
+    transform: translateY(3px);
+    box-shadow:
+      0 1px 0 #4a2810,
+      0 2px 4px rgba(74, 40, 16, 0.22);
+  }
+
+  .kid-btn-3d-secondary {
+    @apply kid-btn-3d text-[#7a431d];
+    background: linear-gradient(180deg, #fffaf3 0%, #f3e8d8 100%);
+    border: 2px solid #c4a574;
+    box-shadow:
+      0 3px 0 #a67c4a,
+      0 5px 8px rgba(122, 67, 29, 0.15);
+  }
+
+  .kid-btn-3d-secondary:hover:not(:disabled) {
+    background: linear-gradient(180deg, #fffdf9 0%, #f7efe3 100%);
+  }
+
+  .kid-btn-3d-secondary:active:not(:disabled) {
+    transform: translateY(2px);
+    box-shadow:
+      0 1px 0 #a67c4a,
+      0 2px 4px rgba(122, 67, 29, 0.12);
+  }
+
+  .kid-btn-3d-block {
+    @apply w-full rounded-2xl text-sm sm:text-base;
+    min-height: 48px;
+  }
+
   .kid-btn-feedback-o {
     @apply inline-flex min-h-[40px] shrink-0 cursor-pointer items-center justify-center rounded-full border-2 border-sky-600 bg-sky-100 px-3.5 py-1.5 text-xs font-bold text-sky-950 shadow-sm transition-all hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-[44px] sm:px-5 sm:py-2 sm:text-sm;
   }

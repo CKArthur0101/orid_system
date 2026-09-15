@@ -36,7 +36,7 @@ export function LeaveWritingConfirmModal({
         </h2>
         <p className="mt-2 text-center text-sm leading-relaxed text-amber-900/80">
           離開寫作畫面之前，記得先按下方的
-          <span className="font-semibold text-amber-950">「儲存我的寫作」</span>
+          <span className="font-semibold text-amber-950">「儲存」</span>
           ，才不會弄丟你寫好的內容喔！
         </p>
 

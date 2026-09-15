@@ -142,9 +142,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 <button
                   type="button"
                   onClick={() => requestLeave("home")}
-                  className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition ${
-                    pathname === STUDENT_HOME ? "orid-nav-link-active" : "orid-nav-link"
-                  }`}
+                  className={`${
+                    pathname === STUDENT_HOME ? "kid-btn-3d-primary" : "kid-btn-3d-secondary"
+                  } !min-h-[36px] !gap-1.5 !px-3 !py-1.5 !text-sm`}
                 >
                   <Home className="h-4 w-4" />
                   首頁
@@ -152,9 +152,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               ) : (
                 <Link
                   href={STUDENT_HOME}
-                  className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition ${
-                    pathname === STUDENT_HOME ? "orid-nav-link-active" : "orid-nav-link"
-                  }`}
+                  className={`${
+                    pathname === STUDENT_HOME ? "kid-btn-3d-primary" : "kid-btn-3d-secondary"
+                  } !min-h-[36px] !gap-1.5 !px-3 !py-1.5 !text-sm`}
                 >
                   <Home className="h-4 w-4" />
                   首頁
@@ -185,7 +185,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <button
               type="button"
               onClick={() => requestLeave("logout")}
-              className="flex items-center gap-1.5 rounded-lg border border-transparent px-3 py-1.5 text-sm text-amber-900/75 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+              className="kid-btn-3d-secondary !min-h-[36px] !gap-1.5 !px-3 !py-1.5 !text-sm"
             >
               <LogOut className="h-4 w-4" />
               <span className="hidden sm:inline">登出</span>

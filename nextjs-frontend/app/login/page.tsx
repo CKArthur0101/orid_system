@@ -88,7 +88,7 @@ export default async function Page({
             </div>
 
             <div className="pt-1">
-              <button type="submit" className="kid-btn-primary w-full">
+              <button type="submit" className="kid-btn-3d-primary kid-btn-3d-block">
                 登入
               </button>
             </div>

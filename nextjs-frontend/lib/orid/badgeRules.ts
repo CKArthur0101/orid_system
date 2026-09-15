@@ -120,6 +120,20 @@ export function getBadgeImagePath(
   return BADGE_IMAGES_BY_BOOK[book][badgeId] ?? BADGE_CONFIG[badgeId].svgPath;
 }
 
+/** Home week-card medal counter icon (book-themed 🏅 replacement). */
+const HOME_MEDAL_BY_BOOK: Record<BadgeBookId, string> = {
+  book1: "/images/orid/badges/home_medal_book1.png",
+  book2: "/images/orid/badges/home_medal_book2.png",
+  book3: "/images/orid/badges/home_medal_book3.png",
+};
+
+export function getHomeMedalImagePath(
+  bookId?: string | null,
+  week?: number | null,
+): string {
+  return HOME_MEDAL_BY_BOOK[resolveBadgeBookId(bookId, week)];
+}
+
 /** Config with book-specific image + display name when available. */
 export function getBadgeConfigForBook(
   badgeId: BadgeId,

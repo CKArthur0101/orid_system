@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useParams } from "next/navigation";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -1527,7 +1528,7 @@ export default function WeekBookPage() {
                 {showSynthesisColumn ? (
                   <button
                     type="button"
-                    className="inline-flex min-h-[30px] shrink-0 items-center gap-1 rounded-full border-2 border-amber-500 bg-amber-100 px-3 py-1 text-xs font-bold text-amber-950 shadow-sm transition hover:bg-amber-200"
+                    className="kid-btn-3d-secondary !min-h-[30px] !px-3 !py-1 !text-xs"
                     onClick={() => setOridPanelCollapsedPersist(true)}
                   >
                     <span aria-hidden>←</span>
@@ -1570,31 +1571,21 @@ export default function WeekBookPage() {
                     {showSynthesisColumn ? (
                       <button
                         type="button"
-                        className="inline-flex min-h-[34px] shrink-0 items-center justify-center rounded-full border-2 border-amber-500 bg-amber-50 px-3 py-1 text-xs font-bold text-amber-950 shadow-sm hover:bg-amber-100 sm:px-3.5"
+                        className="kid-btn-3d-secondary shrink-0 !min-h-[34px] !px-3 !py-1 !text-xs sm:!px-3.5"
                         title="接到整合寫作框後面"
                         onClick={() => appendStageToSynthesis(activeStage)}
                       >
                         複製
                       </button>
                     ) : null}
-                    {showStageFeedbackButtons && !isControl ? (
+                    {!(isEvenWeek(weekNum) && w2Phase === "orid_review") ? (
                       <button
                         type="button"
-                        className={[
-                          "inline-flex shrink-0 items-center justify-center rounded-full border-2 px-3.5 py-1.5 text-xs font-bold shadow-sm transition-all sm:px-4 sm:py-2 sm:text-sm",
-                          "disabled:cursor-not-allowed disabled:opacity-50",
-                          activeStage === "O"
-                            ? "border-sky-600 bg-sky-100 text-sky-950 hover:bg-sky-200"
-                            : activeStage === "R"
-                              ? "border-amber-600 bg-amber-100 text-amber-950 hover:bg-amber-200"
-                              : activeStage === "I"
-                                ? "border-emerald-600 bg-emerald-100 text-emerald-950 hover:bg-emerald-200"
-                                : "border-violet-600 bg-violet-100 text-violet-950 hover:bg-violet-200",
-                        ].join(" ")}
-                        disabled={!sessionId || fbLoading}
-                        onClick={() => runFeedback(activeStage)}
+                        className="kid-btn-3d-secondary shrink-0"
+                        disabled={!sessionId || !readingId || writingSubmitting}
+                        onClick={() => saveWriting("submit")}
                       >
-                        {fbLoading ? "回饋中…" : "取得回饋"}
+                        {writingSubmitting ? "儲存中…" : "儲存"}
                       </button>
                     ) : null}
                   </div>
@@ -1680,22 +1671,36 @@ export default function WeekBookPage() {
                 {isEvenWeek(weekNum) && w2Phase === "orid_review" ? (
                   <button
                     type="button"
-                    className="kid-btn-primary w-full"
+                    className="kid-btn-3d-primary kid-btn-3d-block"
                     disabled={!sessionId || !readingId || writingSubmitting}
                     onClick={() => void submitWeek2PhaseToSynthesis()}
                   >
                     ⏭️ 進入整合寫作
                   </button>
-                ) : (
+                ) : showStageFeedbackButtons && !isControl ? (
                   <button
                     type="button"
-                    className="kid-btn-primary w-full"
-                    disabled={!sessionId || !readingId || writingSubmitting}
-                    onClick={() => saveWriting("submit")}
+                    className="kid-btn-3d-primary kid-btn-3d-block"
+                    disabled={!sessionId || fbLoading}
+                    onClick={() => runFeedback(activeStage)}
                   >
-                    {writingSubmitting ? "儲存中…" : "🌰 儲存我的寫作"}
+                    {fbLoading ? (
+                      "回饋中…"
+                    ) : (
+                      <>
+                        <Image
+                          src="/images/orid/badges/feedback_btn_icon.png"
+                          alt=""
+                          width={40}
+                          height={40}
+                          className="h-8 w-8 object-contain sm:h-9 sm:w-9 md:h-10 md:w-10"
+                          aria-hidden
+                        />
+                        取得回饋
+                      </>
+                    )}
                   </button>
-                )}
+                ) : null}
               </div>
               {fbError && <div className="mt-1.5 whitespace-pre-wrap text-xs text-red-600 sm:text-sm">{fbError}</div>}
               {copyFlash && <div className="mt-1.5 text-xs font-medium text-emerald-700 sm:text-sm">{copyFlash}</div>}
@@ -1716,19 +1721,24 @@ export default function WeekBookPage() {
           >
             <div className="kid-section-header-partner flex items-center justify-between gap-2 px-2 py-2 md:px-2.5 md:py-2 lg:px-4 lg:py-3">
               <span className="text-xs font-bold text-amber-950 md:text-sm">整合寫作</span>
-              <button
-                type="button"
-                className={[
-                  "inline-flex min-h-[32px] shrink-0 items-center gap-1.5 rounded-full border-2 px-3 py-1 text-xs font-bold shadow-sm transition",
-                  oridPanelCollapsed
-                    ? "border-emerald-500 bg-emerald-50 text-emerald-900 hover:bg-emerald-100"
-                    : "border-amber-500 bg-amber-100 text-amber-950 hover:bg-amber-200",
-                ].join(" ")}
-                onClick={() => setOridPanelCollapsedPersist(!oridPanelCollapsed)}
-              >
-                <span aria-hidden>{oridPanelCollapsed ? "→" : "←"}</span>
-                {oridPanelCollapsed ? "展開上週" : "收起上週"}
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  className="kid-btn-3d-secondary shrink-0 !min-h-[32px] !px-3 !py-1 !text-xs"
+                  disabled={!sessionId || !readingId || writingSubmitting}
+                  onClick={() => saveWriting("submit")}
+                >
+                  {writingSubmitting ? "儲存中…" : "儲存"}
+                </button>
+                <button
+                  type="button"
+                  className="kid-btn-3d-secondary shrink-0 !min-h-[32px] !px-3 !py-1 !text-xs"
+                  onClick={() => setOridPanelCollapsedPersist(!oridPanelCollapsed)}
+                >
+                  <span aria-hidden>{oridPanelCollapsed ? "→" : "←"}</span>
+                  {oridPanelCollapsed ? "展開上週" : "收起上週"}
+                </button>
+              </div>
             </div>
             {oridPanelCollapsed ? (
               <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-amber-100 px-2 py-1.5">
@@ -1786,15 +1796,27 @@ export default function WeekBookPage() {
               {!isControl ? (
                 <button
                   type="button"
-                  className="kid-btn-primary shrink-0"
+                  className="kid-btn-3d-primary kid-btn-3d-block shrink-0"
                   disabled={!sessionId || fbLoading}
                   onClick={() => void runSynthesisFeedback()}
                 >
-                  {fbLoading
-                    ? "…"
-                    : writingData.synthesis_round1_completed
-                      ? "取得整合回饋（第二輪）"
-                      : "取得整合回饋"}
+                  {fbLoading ? (
+                    "…"
+                  ) : (
+                    <>
+                      <Image
+                        src="/images/orid/badges/feedback_btn_icon.png"
+                        alt=""
+                        width={40}
+                        height={40}
+                        className="h-8 w-8 object-contain sm:h-9 sm:w-9 md:h-10 md:w-10"
+                        aria-hidden
+                      />
+                      {writingData.synthesis_round1_completed
+                        ? "取得整合回饋（第二輪）"
+                        : "取得整合回饋"}
+                    </>
+                  )}
                 </button>
               ) : null}
             </div>

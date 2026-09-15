@@ -424,7 +424,7 @@ export function WritingPromptHelper({
           type="button"
           onClick={goPrev}
           disabled={mode === "check" || atStart}
-          className="flex min-h-[44px] flex-1 items-center justify-center gap-1 rounded-xl border-2 border-amber-200 bg-[#faf5eb] text-xs font-semibold text-amber-900 transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-40 md:text-sm"
+          className="kid-btn-3d-secondary min-h-[44px] flex-1 !rounded-xl !text-xs md:!text-sm"
         >
           <ChevronLeft className="h-4 w-4 shrink-0" aria-hidden />
           上一張
@@ -433,7 +433,7 @@ export function WritingPromptHelper({
           type="button"
           onClick={goNext}
           disabled={mode === "check" || atEnd}
-          className="flex min-h-[44px] flex-[1.15] items-center justify-center gap-1 rounded-xl bg-gradient-to-r from-amber-600 to-orange-700 text-xs font-semibold text-white shadow-sm transition hover:from-amber-500 hover:to-orange-600 disabled:cursor-not-allowed disabled:opacity-40 md:text-sm"
+          className="kid-btn-3d-primary min-h-[44px] flex-[1.15] !rounded-xl !text-xs md:!text-sm"
         >
           下一張
           <ChevronRight className="h-4 w-4 shrink-0" aria-hidden />
