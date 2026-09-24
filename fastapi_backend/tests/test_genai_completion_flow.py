@@ -103,6 +103,40 @@ class TestFormatGenaiCompletedFeedbackReply:
             assert "再想一想：" not in reply
             assert "試著補一句：" not in reply
 
+    @pytest.mark.parametrize(
+        ("stage", "completion_text", "next_stage_text"),
+        [
+            ("O", "O 觀察這一段可以了", "R 感受段"),
+            ("R", "R 感受這一段可以了", "I 體會段"),
+            ("I", "I 體會這一段可以了", "D 行動段"),
+            ("D", "D 行動這一段可以了", "確認其他段落的完成狀態"),
+        ],
+    )
+    def test_uses_child_friendly_segment_language(
+        self, stage: str, completion_text: str, next_stage_text: str
+    ) -> None:
+        reply = format_genai_completed_feedback_reply(stage=stage, praise="你把想法寫清楚了。")
+        assert completion_text in reply
+        assert next_stage_text in reply
+        assert "這一格" not in reply
+        assert "四格都完成" not in reply
+
+    def test_d_only_claims_all_complete_when_all_stage_passes_are_known(self) -> None:
+        partial = format_genai_completed_feedback_reply(
+            stage="D",
+            praise="你寫出具體行動了。",
+            completed_stages={"D"},
+        )
+        complete = format_genai_completed_feedback_reply(
+            stage="D",
+            praise="你寫出具體行動了。",
+            completed_stages={"O", "R", "I", "D"},
+        )
+
+        assert "四段都完成了" not in partial
+        assert "O 觀察段、R 感受段、I 體會段尚未完成" in partial
+        assert "四段都完成了" in complete
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Control group isolation: format_control_feedback_reply stays as revision
@@ -141,6 +175,30 @@ class TestControlFeedbackIsolation:
             student_draft="阿松爺爺把柿子送給大家",
         )
         assert "本階段完成：" not in reply
+
+    @pytest.mark.parametrize(
+        ("stage", "target"),
+        [
+            ("O", "O 觀察段"),
+            ("R", "R 感受段"),
+            ("I", "I 體會段"),
+            ("D", "D 行動段"),
+        ],
+    )
+    def test_revision_reply_points_to_a_segment(self, stage: str, target: str) -> None:
+        reply = format_control_feedback_reply(
+            ok=False,
+            missing=["現在只要補上一個重點。"],
+            suggestions=["請補一句。"],
+            stage=stage,
+            praise="你已經開始寫了，方向對。",
+            student_draft="我先寫了一句。",
+        )
+        assert target in reply
+        assert "觀察格" not in reply
+        assert "感受格" not in reply
+        assert "體會格" not in reply
+        assert "行動格" not in reply
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -429,33 +429,53 @@ _D_CONCRETE_MARKERS: tuple[str, ...] = (
 _D_GENERIC_ACTION: tuple[str, ...] = ("幫忙", "幫助", "變好", "改進", "努力", "更好", "加油")
 
 
+def d_draft_is_obvious_empty_wish(student_text: str) -> bool:
+    """High-precision guard for D drafts that contain no observable action."""
+    compact = re.sub(r"[\s，。！？、；：,.!?;:]", "", (student_text or "").strip())
+    if not compact:
+        return True
+    return bool(
+        re.fullmatch(
+            r"(?:以後|下次|從今以後)?我(?:會|要|想要|打算)?(?:更|多)?(?:好|努力|加油|改進|變好|做好|有耐心|體諒別人|體諒家人)",
+            compact,
+        )
+    )
+
+
+def d_student_idea_anchor(student_text: str) -> str:
+    """Extract the student's own D idea for a personalized next-step question."""
+    text = re.sub(r"\s+", "", (student_text or "").strip())
+    text = re.sub(r"[，。！？、；：,.!?;:]+$", "", text)
+    text = re.sub(r"^(?:以後|下次|從今以後)", "", text)
+    text = re.sub(r"^我(?:會|要|想要|打算)", "", text)
+    return text[:18] or "這個想法"
+
+
 def d_draft_meets_pass_bar(student_text: str) -> bool:
-    """D pass: concrete when/who/how; ban bare 「我會去幫忙」."""
+    """D pass: a feasible situation, recipient, and first action, not word count."""
     t = (student_text or "").strip()
     compact = re.sub(r"\s+", "", t)
-    if len(compact) < 40:
+    if not compact:
         return False
-    if not any(m in t for m in _D_ACTION_MARKERS):
+    action_start = re.search(r"我會|我要|我打算|我先", t)
+    if not action_start:
         return False
-    if not any(m in t for m in _D_SITUATION_MARKERS):
+    if not any(m in t for m in ("如果", "下次", "遇到", "當", "時候", "看到", "放學", "吃完")):
         return False
-    has_concrete = any(m in t for m in _D_CONCRETE_MARKERS) or (
-        "先" in t and "再" in t
+    has_recipient = any(m in t for m in ("同學", "朋友", "家人", "媽媽", "爸爸", "老師", "弟弟", "妹妹", "他", "她", "大家"))
+    has_household_task = bool(re.search(r"(?:自己的|家裡的|家中的).{0,6}(?:碗|玩具|床|衣服|書包)", t))
+    if not (has_recipient or has_household_task):
+        return False
+    action = t[action_start.end():]
+    return bool(
+        re.search(
+            r"借|問|分給|送給|輪流|陪|提醒|道歉|說對不起|整理|洗碗|掃地|收拾|"
+            r"幫.{0,6}(?:拿|做|搬|寫)|分享.{0,8}(?:玩具|零食|筆|書)|"
+            r"(?:把|將).{1,12}(?:拿到|收到|收好|放到|放回)|"
+            r"(?:收好|收起|鋪好)(?:自己的|家裡的|家中的).{0,6}(?:玩具|床|衣服|書包)",
+            action,
+        )
     )
-    if not has_concrete:
-        # Generic-only help slogans
-        if any(g in t for g in _D_GENERIC_ACTION) and len(compact) < 65:
-            return False
-        return False
-    # Still block ultra-generic even with 如果/遇到
-    if (
-        any(g in t for g in ("幫忙", "幫助"))
-        and not any(m in t for m in _D_CONCRETE_MARKERS if m not in ("再",))
-        and "先" not in t
-        and len(compact) < 60
-    ):
-        return False
-    return True
 
 
 def stage_draft_meets_pass_bar(stage: str, student_text: str) -> bool:
@@ -479,9 +499,14 @@ def thin_stage_coaching(stage: str, student_text: str) -> tuple[str, str]:
 
     if s == "O":
         has_early, has_mid, has_late = o_draft_arc_flags(t)
+        if has_early and has_mid and has_late and len(t) < 60:
+            return (
+                "你已經寫到故事的開頭、中間和後面的轉折，結尾的變化還沒有說清楚。",
+                "想一想：樹被砍掉以後，故事最後又發生了什麼？",
+            )
         if has_early and has_mid and not has_late:
             return (
-                "你已經寫到故事開頭和中間，最後的改變還沒有說清楚。",
+                "你已經寫到故事開頭和中間，結尾的轉折還沒有說清楚。",
                 "想一想：故事最後發生了什麼？",
             )
         if has_early and has_late and not has_mid:
@@ -516,7 +541,7 @@ def thin_stage_coaching(stage: str, student_text: str) -> tuple[str, str]:
             )
         return (
             "人物和事情都有了，再把其中一件事說清楚一點。",
-            "回到 O 觀察格，補一句：故事裡，＿＿做了＿＿。",
+            "回到 O 觀察段，補一句：故事裡，＿＿做了＿＿。",
         )
 
     if s == "R":
@@ -675,6 +700,26 @@ def normalize_feedback_focus(
             m0 = GENAI_META_MISSING_FALLBACK
             if "摘要" not in s0 and "摘錄" not in s0:
                 s0 = "先翻到故事摘要，挑一句「誰做了什麼」，照那句的精神寫成你的第一段。"
+
+    # Keep the action prompt aligned with the diagnosed story position. A
+    # generic grounding fallback can survive after a false book-mismatch claim
+    # is scrubbed, producing contradictory cards such as「缺結尾」but「補一件
+    # 真的事情」. Once the missing point is positional, ask about that position.
+    if (stage or "").strip().upper() == "O" and any(
+        cue in s0
+        for cue in (
+            "補上故事裡真的發生",
+            "補上故事裡真實發生",
+            "補一件故事裡真的發生",
+            "誰做了什麼",
+        )
+    ):
+        if "結尾" in m0:
+            _miss, s0 = thin_stage_coaching("O", student_text)
+        elif "中間" in m0:
+            s0 = "想一想：故事中間又發生了什麼？"
+        elif "開頭" in m0:
+            s0 = "想一想：故事一開始是誰做了什麼？"
 
     return [_child_friendly_text(m0)], [_child_friendly_text(s0)]
 
@@ -933,6 +978,347 @@ def apply_o_key_event_gaps(
     # the missing story position, which also avoids semantic repeat requests.
     miss, sug = thin_stage_coaching("O", student_text)
     return [_child_friendly_text(miss)], [_child_friendly_text(sug)]
+
+
+_O_BOOK_POSITION_GUIDANCE: dict[str, dict[str, tuple[str, str]]] = {
+    "阿松爺爺的柿子樹": {
+        "opening": (
+            "故事開頭發生的事還沒有說清楚。",
+            "請回到 O 觀察段，想一想：故事一開始，阿松爺爺怎麼對待柿子？",
+        ),
+        "middle": (
+            "故事中間的變化還沒有說清楚。",
+            "請回到 O 觀察段，想一想：阿松爺爺把柿子藏起來後，接著發生了什麼？",
+        ),
+        "ending": (
+            "你已經寫到故事的開頭、中間和後面的轉折，結尾的變化還沒有說清楚。",
+            "請回到 O 觀察段，想一想：樹被砍掉以後，故事最後又發生了什麼？",
+        ),
+    },
+    "朱家故事": {
+        "opening": (
+            "故事開頭發生的事還沒有說清楚。",
+            "請回到 O 觀察段，想一想：故事一開始，朱太太每天在忙什麼？",
+        ),
+        "middle": (
+            "故事中間的變化還沒有說清楚。",
+            "請回到 O 觀察段，想一想：朱太太不在家後，朱先生和孩子們遇到了什麼事？",
+        ),
+        "ending": (
+            "故事結尾一家人的變化還沒有說清楚。",
+            "請回到 O 觀察段，想一想：朱太太回家後，一家人最後有什麼改變？",
+        ),
+    },
+    "不會寫字的獅子": {
+        "opening": (
+            "故事開頭發生的事還沒有說清楚。",
+            "請回到 O 觀察段，想一想：故事一開始，獅子為什麼需要別人幫他寫信？",
+        ),
+        "middle": (
+            "故事中間的變化還沒有說清楚。",
+            "請回到 O 觀察段，想一想：動物們寫的信為什麼讓獅子一次又一次生氣？",
+        ),
+        "ending": (
+            "故事結尾獅子的變化還沒有說清楚。",
+            "請回到 O 觀察段，想一想：母獅子聽見獅子的話後，故事最後發生了什麼？",
+        ),
+    },
+}
+
+_O_BOOK_ARC_MARKERS: dict[str, dict[str, tuple[str, ...]]] = {
+    "阿松爺爺的柿子樹": {
+        "opening": ("獨占", "獨佔", "自己吃", "不分享", "不給別人", "想吃他也不給", "霸著"),
+        "middle": ("柿子蒂", "陀螺", "藏", "倉庫", "葉子", "樹枝", "採下"),
+        "turn": ("砍樹", "砍掉", "樹被砍", "樹樁", "哭", "後悔"),
+        "ending": ("種子", "撒種", "一起吃", "請大家吃", "開始分享", "分給大家"),
+    },
+    "朱家故事": {
+        "opening": ("叫媽媽", "催媽媽", "拿早飯", "準備早飯", "做家事", "洗碗", "燙衣"),
+        "middle": ("媽媽離開", "朱太太離開", "媽媽不在", "找不到朱太太", "你們是豬", "像豬圈", "家裡很亂"),
+        "turn": ("朱太太回來", "朱太太走進門", "媽媽回來", "求她留下", "哀求"),
+        "ending": ("一起做家事", "一起做晚飯", "分工", "幫忙洗碗", "幫忙鋪床", "修好車", "修車"),
+    },
+    "不會寫字的獅子": {
+        "opening": ("不會寫字", "不識字", "不會寫信", "母獅子", "看書"),
+        "middle": ("猴子", "代寫", "幫他寫信", "其他動物", "不是他想說", "不是自己的想法"),
+        "turn": ("撕掉", "撕信", "生氣", "承認不會寫", "說出自己"),
+        "ending": ("學認字", "學寫字", "開始學", "教他認字", "牽著他"),
+    },
+}
+
+
+def _diagnose_o_book_position(book_title: str, student_text: str) -> str:
+    """Return a stable O gap from book events, independent of model wording."""
+    text = re.sub(r"\s+", "", student_text or "")
+    if not text:
+        return ""
+    for known_title, arcs in _O_BOOK_ARC_MARKERS.items():
+        if known_title not in book_title:
+            continue
+        hit = {
+            name: any(re.sub(r"\s+", "", marker) in text for marker in markers)
+            for name, markers in arcs.items()
+        }
+        if not hit["opening"]:
+            return "opening"
+        if not hit["middle"]:
+            return "middle"
+        if not hit["turn"] or not hit["ending"]:
+            return "ending"
+        return "complete"
+    return ""
+
+
+def align_o_feedback_to_book_event(
+    *,
+    stage: str,
+    book_pack: dict | None,
+    student_text: str = "",
+    missing: list[str],
+    suggestions: list[str],
+) -> tuple[list[str], list[str]]:
+    """Make O diagnosis and action prompt share one book-specific event focus."""
+    if (stage or "").strip().upper() != "O" or not missing:
+        return missing, suggestions
+
+    m0 = str(missing[0] or "").strip()
+    if any(cue in m0 for cue in ("不在書裡", "書裡沒有", "不是書裡", "對齊教材")):
+        return missing, suggestions
+
+    title = str((book_pack or {}).get("book_title") or "").strip()
+    position = _diagnose_o_book_position(title, student_text)
+    if position == "complete":
+        return missing, suggestions
+    if not position:
+        if any(
+            cue in m0
+            for cue in (
+                "結尾",
+                "最後一段",
+                "最後的變化",
+                "故事最後",
+                "最後又怎麼",
+                "砍掉以後",
+                "砍樹以後",
+            )
+        ):
+            position = "ending"
+        elif "中間" in m0:
+            position = "middle"
+        elif any(cue in m0 for cue in ("開頭", "一開始")):
+            position = "opening"
+    if not position:
+        return missing, suggestions
+
+    for known_title, guidance in _O_BOOK_POSITION_GUIDANCE.items():
+        if known_title in title:
+            diagnosed, action = guidance[position]
+            return [_child_friendly_text(diagnosed)], [_child_friendly_text(action)]
+    return missing, suggestions
+
+
+_R_BOOK_SCENE_LABELS: dict[str, tuple[tuple[tuple[str, ...], str], ...]] = {
+    "阿松爺爺的柿子樹": (
+        (("藏", "倉庫"), "看到阿松爺爺把柿子藏起來"),
+        (("不分享", "不願分享", "不給別人", "獨占", "獨佔"), "看到阿松爺爺不願意分享柿子"),
+        (("砍樹", "砍掉", "樹樁"), "看到阿松爺爺把樹砍掉"),
+        (("種子", "撒種", "一起吃"), "看到大家一起吃柿子、撒種子"),
+    ),
+    "朱家故事": (
+        (("催媽媽", "叫媽媽", "拿早飯"), "看到家人一直催朱太太做事"),
+        (("媽媽離開", "朱太太離開", "媽媽不在"), "看到朱太太離開家"),
+        (("像豬圈", "家裡很亂"), "看到家裡變得像豬圈"),
+        (("一起做家事", "分工", "修車"), "看到一家人開始一起分擔家事"),
+    ),
+    "不會寫字的獅子": (
+        (("不會寫字", "不識字"), "看到獅子不會寫字"),
+        (("猴子", "代寫", "幫他寫信"), "看到獅子請其他動物幫忙寫信"),
+        (("撕信", "撕掉", "生氣"), "看到獅子因為信不是自己的想法而生氣"),
+        (("學認字", "學寫字", "開始學"), "看到獅子開始學認字"),
+    ),
+}
+
+
+def _r_feeling_in_text(student_text: str) -> str:
+    text = student_text or ""
+    for feeling in _R_FEELING_MARKERS:
+        if feeling in text and feeling not in {"覺得", "心情很糟", "很糟"}:
+            return feeling
+    return "這種感覺"
+
+
+def _r_grounded_scene_label(book_pack: dict | None, student_text: str) -> str:
+    title = str((book_pack or {}).get("book_title") or "").strip()
+    text = re.sub(r"\s+", "", student_text or "")
+    for known_title, entries in _R_BOOK_SCENE_LABELS.items():
+        if known_title not in title:
+            continue
+        for markers, label in entries:
+            if any(re.sub(r"\s+", "", marker) in text for marker in markers):
+                return label
+    return ""
+
+
+def align_r_feedback_to_rubric(
+    *,
+    stage: str,
+    book_pack: dict | None,
+    student_text: str,
+    missing: list[str],
+    suggestions: list[str],
+) -> tuple[list[str], list[str]]:
+    """Align R feedback to one rubric gap: feeling, book scene, or explanation."""
+    if (stage or "").strip().upper() != "R":
+        return missing, suggestions
+
+    feeling = _r_feeling_in_text(student_text)
+    m0 = str(missing[0] if missing else "").strip()
+    if missing_looks_book_grounding_priority(m0):
+        return missing, [
+            _child_friendly_text(
+                f"請回到 R 感受段，先選一個書裡真的畫面，再說那一幕為什麼讓你{feeling}。"
+            )
+        ]
+
+    scene = _r_grounded_scene_label(book_pack, student_text)
+    has_reason_connector = "因為" in (student_text or "")
+    if scene and has_reason_connector:
+        return (
+            [
+                _child_friendly_text(
+                    f"你已經寫出感受，也找到故事畫面；現在再說清楚為什麼這一幕讓你{feeling}。"
+                )
+            ],
+            [
+                _child_friendly_text(
+                    f"請回到 R 感受段，想一想：{scene}，你為什麼會覺得{feeling}？"
+                )
+            ],
+        )
+    return missing, suggestions
+
+
+_I_BOOK_SCENE_LABELS: dict[str, tuple[tuple[tuple[str, ...], str], ...]] = {
+    "阿松爺爺的柿子樹": (
+        (("一起吃", "拿出柿子", "分享柿子", "撒種", "種子"), "阿松爺爺最後願意拿出柿子和大家一起分享"),
+        (("藏", "倉庫", "不分享", "獨占", "獨佔"), "阿松爺爺把柿子藏起來、不願意分享"),
+        (("砍樹", "砍掉", "樹樁"), "阿松爺爺衝動砍樹後只剩下樹樁"),
+    ),
+    "朱家故事": (
+        (("一起做家事", "分工", "幫忙洗碗", "幫忙鋪床"), "朱家人最後開始一起分擔家事"),
+        (("媽媽離開", "朱太太離開", "像豬圈", "家裡很亂"), "朱太太離開後，家裡變得一團亂"),
+    ),
+    "不會寫字的獅子": (
+        (("不是他想說", "不是自己的想法", "代寫"), "別的動物寫不出獅子真正想說的話"),
+        (("學認字", "學寫字", "開始學"), "獅子最後願意開始學認字"),
+        (("撕信", "撕掉", "生氣"), "獅子因為信無法表達自己而生氣"),
+    ),
+}
+
+
+def _i_lesson_in_text(student_text: str) -> str:
+    text = (student_text or "").strip()
+    match = re.search(r"我學到(.{1,24}?)(?:，|。|；|因為|$)", text)
+    if match:
+        return match.group(1).strip()
+    for marker in ("要分享", "幫助別人", "互相幫忙", "分工", "學會表達", "勇敢學習"):
+        if marker in text:
+            return marker
+    return "這個道理"
+
+
+def _i_grounded_scene_label(book_pack: dict | None, student_text: str) -> str:
+    title = str((book_pack or {}).get("book_title") or "").strip()
+    text = re.sub(r"\s+", "", student_text or "")
+    for known_title, entries in _I_BOOK_SCENE_LABELS.items():
+        if known_title not in title:
+            continue
+        for markers, label in entries:
+            if any(re.sub(r"\s+", "", marker) in text for marker in markers):
+                return label
+    return ""
+
+
+def align_i_feedback_to_rubric(
+    *,
+    stage: str,
+    book_pack: dict | None,
+    student_text: str,
+    missing: list[str],
+    suggestions: list[str],
+) -> tuple[list[str], list[str]]:
+    """Align I feedback to its actual gap without forcing a life example."""
+    if (stage or "").strip().upper() != "I":
+        return missing, suggestions
+
+    lesson = _i_lesson_in_text(student_text)
+    m0 = str(missing[0] if missing else "").strip()
+    if missing_looks_book_grounding_priority(m0):
+        fabricated = _QUOTE_SPAN_RE.search(m0)
+        wrong_span = fabricated.group(1).strip() if fabricated else "這個情節"
+        return (
+            [f"「{wrong_span}」不是書裡發生的事；你寫的「{lesson}」可以保留。"],
+            [
+                f"請回到 I 體會段，先選一個書裡真的畫面，再說它為什麼讓你想到{lesson}。"
+            ],
+        )
+
+    scene = _i_grounded_scene_label(book_pack, student_text)
+    if scene and "因為" in (student_text or ""):
+        return (
+            [
+                f"你已經寫出「{lesson}」，也找到故事畫面；現在再說清楚這個改變為什麼讓你覺得{lesson}很重要。"
+            ],
+            [
+                f"請回到 I 體會段，想一想：{scene}，為什麼能讓你明白{lesson}？"
+            ],
+        )
+    if lesson != "這個道理" and not scene:
+        if "因為" in (student_text or ""):
+            return (
+                [f"你已經寫出「{lesson}」和一個理由；現在找一件書裡發生的事，說明為什麼{lesson}。"],
+                [f"請回到 I 體會段，想一想：故事裡哪一件事能支持你說的「{lesson}」？"],
+            )
+        return (
+            [f"你已經寫出「{lesson}」；現在想想，是故事裡哪一件事讓你有這個想法？"],
+            [f"請回到 I 體會段，想一想：故事裡哪一件事讓你想到{lesson}？"],
+        )
+    return missing, suggestions
+
+
+def align_d_feedback_to_rubric(
+    *,
+    stage: str,
+    student_text: str,
+    missing: list[str],
+    suggestions: list[str],
+) -> tuple[list[str], list[str]]:
+    """Ask for the first missing D-rubric element, without adding new requirements."""
+    if (stage or "").strip().upper() != "D":
+        return missing, suggestions
+    text = (student_text or "").strip()
+    if not text or d_draft_meets_pass_bar(text):
+        return missing, suggestions
+    if not any(mark in text for mark in ("我會", "我要", "我打算", "我先")):
+        return (
+            ["你已經寫出自己的想法；D 行動段還要說出下次你會做什麼。"],
+            ["請回到 D 行動段，想一想：下次遇到類似情況，你會先做哪一個小動作？"],
+        )
+    if d_draft_is_obvious_empty_wish(text):
+        idea = d_student_idea_anchor(text)
+        return (
+            [f"你已經寫出「{idea}」這個想法；現在再把它變成一個做得到的小行動。"],
+            [f"請回到 D 行動段，想一想：下次遇到什麼事情時，你會先做什麼來實現「{idea}」？"],
+        )
+    # For normal level-1/2 drafts, preserve the model's rubric-based semantic
+    # diagnosis. Replacing it with a keyword-specific question recreates the
+    # vocabulary whitelist that rejects valid, novel student ideas.
+    if missing and suggestions:
+        return missing[:1], suggestions[:1]
+    return (
+        ["你已經想到要行動；再說清楚遇到什麼情況時，會先做哪件事。"],
+        ["請回到 D 行動段，想一想：下次遇到類似情況，你會先做哪一個小動作？"],
+    )
 
 
 _QUOTE_SPAN_RE = re.compile(r"「([^」]{2,48})」")

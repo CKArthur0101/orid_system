@@ -59,12 +59,12 @@ def _default_example_line(stage: str, anchor: str = "") -> str:
 def _revision_target_for_stage(stage: str) -> str:
     s = (stage or "O").strip().upper()
     if s == "R":
-        return "請回到 R 感受格，補感受原因"
+        return "請回到 R 感受段，補上感受的原因"
     if s == "I":
-        return "請回到 I 體會格，補生活連結或學到的想法"
+        return "請回到 I 體會段，補上學到的想法或自己的經驗"
     if s == "D":
-        return "請回到 D 行動格，想一想：你要對誰做？什麼時候做？怎麼做？"
-    return "請回到 O 觀察格，補角色、事件或情節"
+        return "請回到 D 行動段，補上一個自己做得到的行動"
+    return "請回到 O 觀察段，補上故事裡真的發生的一件事"
 
 
 def _revision_question_for_stage(stage: str) -> str:
@@ -201,8 +201,30 @@ def format_control_feedback_reply(
         else:
             line3 = f"{base_line3}\n例如：{ex}"
 
-    target = _revision_target_for_stage(s_up)
-    line3 = f"{target}。{_revision_question_for_stage(s_up)}\n例如：{scaffold_for_stage(s_up)}"
+    locked_book_event_prompt = (
+        s_up in {"O", "R", "I", "D"}
+        and s0.startswith(f"請回到 {s_up} ")
+        and (
+            s0.endswith("？")
+            or (
+                s_up == "R"
+                and "先選一個書裡真的畫面" in s0
+                and "為什麼" in s0
+            )
+            or (
+                s_up == "I"
+                and "書裡真的畫面" in s0
+                and "為什麼" in s0
+            )
+        )
+    )
+    if locked_book_event_prompt:
+        # Book-specific event guidance is already the final scaffold. Do not
+        # overwrite it with the generic O revision target or append an example.
+        line3 = s0
+    else:
+        target = _revision_target_for_stage(s_up)
+        line3 = f"{target}。{_revision_question_for_stage(s_up)}\n例如：{scaffold_for_stage(s_up)}"
 
     return (
         f"你已經做到：\n{line1}\n\n"

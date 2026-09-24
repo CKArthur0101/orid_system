@@ -24,6 +24,7 @@ def _book_pack() -> dict:
     return {
         "book_title": "阿松爺爺的柿子樹",
         "grade": "國小高年級",
+        "core_theme": ["分享", "關心他人"],
         "key_events": [
             "阿松爺爺把柿子藏到屋後倉庫",
             "最後大家一起把柿子拿出來吃，並撒下種子。",
@@ -136,11 +137,18 @@ def test_genai_feedback_builder_changes_contract_by_stage():
 
     assert "角色清單（學生寫的角色名必須對照這裡）" in o_system
     assert "書名已知；D 段不做角色名查核。" in d_system
-    assert "example：只給句型開頭、填空式提示或半句支架" in o_system
+    assert "D 段本書主題：分享、關心他人" in d_system
+    assert "不用固定關鍵字、動詞清單或句型比對" in d_system
+    assert "不是三個必填欄位" in d_system
+    assert "d_action_assessment" in d_system
+    assert "theme_aligned" in d_system
+    assert "不可用關鍵字清單" in d_system
+    assert "必須承接學生原本的想法" in d_system
+    assert "example：只給本段填空支架" in o_system
     assert "國小五、六年級" in o_system
     assert "40 分鐘" in o_system
     assert "一次只指出一個最重要的修改方向" in o_system
-    assert "1 個問句" in o_system
+    assert "1 個短問句" in o_system
     assert "2～4 個" not in o_system
     assert "學生「O」段原文如下" in o_user
     assert "不要" in o_user and ("書裡" in o_user or "故事裡" in o_user)
@@ -207,7 +215,7 @@ def test_genai_feedback_builder_changes_contract_by_stage():
         text="我覺得很開心",
         book_pack=_book_pack(),
     )
-    assert "1 個問句" in r_system
+    assert "1 個短問句" in r_system
     assert "因為" in r_system
 
 

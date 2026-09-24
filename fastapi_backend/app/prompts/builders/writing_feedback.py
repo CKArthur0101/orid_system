@@ -179,6 +179,21 @@ def _characters_for_prompt(book_pack: Optional[dict[str, Any]]) -> str:
     return "、".join(lines) if lines else "（未提供角色清單）"
 
 
+def _themes_for_prompt(book_pack: Optional[dict[str, Any]]) -> str:
+    themes = (book_pack or {}).get("core_theme") or []
+    if isinstance(themes, str):
+        themes = [themes]
+    if not isinstance(themes, list):
+        return "（未提供）"
+    cleaned = [str(theme).strip() for theme in themes if str(theme).strip()]
+    return "、".join(cleaned) if cleaned else "（未提供）"
+
+
+def _d_action_scope_for_prompt(book_pack: Optional[dict[str, Any]]) -> str:
+    scope = str((book_pack or {}).get("d_action_scope") or "").strip()
+    return scope or "依本週 D1 rubric 與本書主題判斷，不額外增加條件。"
+
+
 _O_STUCK_HINT_PHRASES: tuple[str, ...] = (
     "還不會",
     "不會寫",
@@ -205,10 +220,10 @@ _STAGE_RUBRIC_LEVEL_KEYS: dict[str, str] = {
 
 
 _STAGE_REVISION_TARGETS: dict[str, str] = {
-    "O": "請回到 O 觀察格，補角色、事件或情節",
-    "R": "請回到 R 感受格，補感受原因",
-    "I": "請回到 I 體會格，補生活連結或學到的想法",
-    "D": "請回到 D 行動格，想一想：你要對誰做？什麼時候做？怎麼做？",
+    "O": "請回到 O 觀察段，補上故事裡真的發生的一件事",
+    "R": "請回到 R 感受段，補上感受的原因",
+    "I": "請回到 I 體會段，補上學到的想法或自己的經驗",
+    "D": "請回到 D 行動段，補上一個自己做得到的行動",
 }
 
 
@@ -240,6 +255,18 @@ def _rasf_json_format_block(stage: str) -> str:
             "用 suggestions 一個問句引導即可；**不要**為此新增 SEL id；"
             "仍以 I1 是否有體會＋故事支持為 ok 主判斷。"
         )
+    d_semantic = ""
+    if (stage or "").strip().upper() == "D":
+        d_semantic = (
+            "\n- D 段必須填 d_action_assessment：has_self_action、action_is_concrete、"
+            "theme_aligned 都依整句語意判斷，不可用關鍵字清單。evidence_quote 必須原封不動摘自學生原文。"
+            "missing_dimension 只能填 no_action、not_concrete、off_theme 或 null。"
+            "theme_aligned 是判斷行動是否符合上方本書主題；但是否影響 ok，仍以本週 D1 第 3 級是否要求主題連結為準。"
+            "判斷 theme_aligned 時要看行動本身是否直接落在『D 段行動主題範圍』；"
+            "不能只因任何行動都可被廣義解釋成努力、負責或進步就判 true。"
+            "若等級 1/2，missing 與 suggestions 必須承接學生原本的想法，例如學生寫『多體諒家人』，"
+            "問句也要出現『體諒家人』，不可換成沒有原文錨點的通用模板。"
+        )
     return f"""【RASF-Anchor 輸出規則（評量對準 + 原文錨點，重要｜對準 RQ1–RQ3）】
 - rubric_focus：必填本段 ORID 主向度 id（O1 / R1 / I1 / D1），不可 null。
 - rubric_level_estimate：必須是**物件**，依本段填入所有對應向度的層級估計：
@@ -257,7 +284,7 @@ def _rasf_json_format_block(stage: str) -> str:
   example（等級 1/2 且必要才填）：只能使用本段填空支架：「{example_scaffold}」。保留＿＿，不得放入具體人名、完整情節、完整原因或完整做法。
   學生會看到的 praise / missing / suggestions / example / draft_next_step 必須改成學生語；不得出現 rubric、level、criteria、score、RASF、層級、等級、達標、精進、評分、規準等評量語。
   學生可見三段每段最多 2 個短句；每次最多一個主要修改方向。
-  SEL 的缺口不得成為 missing 的主題；SEL 最多用來把 ORID 那一刀的問句問得更具體。{i_life}""".strip()
+  SEL 的缺口不得成為 missing 的主題；SEL 最多用來把 ORID 那一刀的問句問得更具體。{i_life}{d_semantic}""".strip()
 
 
 def _o_needs_book_plot_anchor(*, text: str, input_bucket: str) -> bool:
@@ -291,6 +318,8 @@ def build_genai_feedback_prompts(
     key_events_str = "\n".join(f"・{x}" for x in key_events) if key_events else "（未提供摘要）"
     excerpts_block = _excerpts_for_prompt(book_pack, student_text=text)
     characters_block = _characters_for_prompt(book_pack)
+    themes_block = _themes_for_prompt(book_pack)
+    d_action_scope = _d_action_scope_for_prompt(book_pack)
     stage_block = STAGE_BLOCKS.get(stage, STAGE_BLOCKS["O"])
     rubric_block = _format_writing_rubric_for_prompt(book_pack, stage)
     sel_guidance_block = _format_sel_guidance_for_prompt(book_pack, stage)
@@ -324,7 +353,8 @@ def build_genai_feedback_prompts(
 【教材僅能由此來，不可編造情節】
 書名：{book_title}
 {"角色清單（學生寫的角色名必須對照這裡）：" + characters_block if stage != "D" else "書名已知；D 段不做角色名查核。"}
-{"故事摘要：" + chr(10) + key_events_str if stage != "D" else "（D 段：故事摘要僅供背景參考，不要要求學生對齊書本情節。）"}
+{"故事摘要：" + chr(10) + key_events_str if stage != "D" else "D 段本書主題：" + themes_block + "（只用來判斷主題方向；不要要求引用角色、物品或情節。）"}
+{"" if stage != "D" else "D 段行動主題範圍：" + d_action_scope}
 {"故事摘錄（可以直接引用句子來引導學生）：" + chr(10) + excerpts_block if stage != "D" else ""}
 {rag_block if stage != "D" else ""}
 教師本段說明：{guide or "（未提供）"}
@@ -371,11 +401,13 @@ example 只能用這種填空支架：「{example_scaffold}」。不要直接提
   "rubric_focus": string,
   "rubric_level_estimate": object,
   "student_anchor_quote": string,
-  "draft_next_step": string
+  "draft_next_step": string,
+  "d_action_assessment": object or null
 }}
 - rubric_focus：本段 ORID 主向度 id（O1 / R1 / I1 / D1），必填。
 - rubric_level_estimate：依段填入多向度層級物件（見 RASF 規則），以「X 層級」格式填入。
 - student_anchor_quote / draft_next_step：見 RASF-Anchor 規則；草稿空白時可填 null。
+- D 段的 d_action_assessment 必填物件；其他段填 null。格式：{{"has_self_action": boolean, "action_is_concrete": boolean, "theme_aligned": boolean, "evidence_quote": string, "missing_dimension": string or null}}。
 
 {FEW_SHOT_BLOCK}
 """.strip()

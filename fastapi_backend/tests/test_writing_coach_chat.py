@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import select
 
-from app.models import OridChatMessage, OridSession, Reading
+from app.models import OridChatMessage, OridSession, OridWeekSubmission, Reading
 from app.routes import orid
 from app.services import safety
 from app.services.orid_condition import CONTROL_AI_FORBIDDEN_DETAIL
@@ -459,6 +459,86 @@ async def test_writing_coach_synthesis_feedback_default_includes_three_part_repl
     assert r.status_code == 200, r.text
     assert "完整" in captured.get("system", "") or "連貫" in captured.get("system", "")
     assert "你已經做到" in captured.get("system", "") or "SEL" in captured.get("system", "")
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_writing_coach_synthesis_feedback_uses_prior_orid_week(
+    test_client, db_session, authenticated_user, monkeypatch
+):
+    captured: dict[str, str] = {}
+
+    async def fake_chat_completion(messages, **kwargs):
+        captured["system"] = messages[0]["content"]
+        return "你已經做到：\n四個部分都有寫到。\n再想一想：\n可以補一句銜接，讓故事和感受接得更順。\n可以這樣修改：\n請回到整合寫作格子，在故事後面加一句你的感受。"
+
+    monkeypatch.setattr(orid, "_chat_completion", fake_chat_completion)
+
+    user = authenticated_user["user"]
+    reading = Reading(
+        title="第 4 週 測試",
+        content=json.dumps(orid.BOOK_PACK_BY_WEEK[4], ensure_ascii=False),
+    )
+    db_session.add(reading)
+    await db_session.commit()
+    await db_session.refresh(reading)
+
+    session = OridSession(
+        user_id=user.id,
+        reading_id=reading.id,
+        condition="genai",
+        current_stage="O",
+        stage_turn=0,
+        book_unit=2,
+    )
+    db_session.add(session)
+    await db_session.commit()
+    await db_session.refresh(session)
+
+    week1_content = json.dumps(
+        {"schema": "orid_writing_v1", "stages": {"O": {"d1": "第一週阿松內容不該被第4週整合抓到"}}},
+        ensure_ascii=False,
+    )
+    week3_content = json.dumps(
+        {"schema": "orid_writing_v1", "stages": {"O": {"d1": "第三週朱家內容應該被第4週整合抓到"}}},
+        ensure_ascii=False,
+    )
+    db_session.add_all(
+        [
+            OridWeekSubmission(
+                user_id=user.id,
+                reading_id=reading.id,
+                session_id=session.id,
+                week=1,
+                content=week1_content,
+            ),
+            OridWeekSubmission(
+                user_id=user.id,
+                reading_id=reading.id,
+                session_id=session.id,
+                week=3,
+                content=week3_content,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    r = await test_client.post(
+        "/orid/writing-coach/chat",
+        json={
+            "session_id": str(session.id),
+            "student_text": "朱家一開始家事都由朱太太做，我覺得她很辛苦，也學到要分擔家事。",
+            "stage": "ALL",
+            "draft": "d1",
+            "source": "synthesis_feedback",
+            "week": 4,
+            "save_feedback": False,
+        },
+        headers=authenticated_user["headers"],
+    )
+
+    assert r.status_code == 200, r.text
+    assert "第三週朱家內容應該被第4週整合抓到" in captured.get("system", "")
+    assert "第一週阿松內容不該被第4週整合抓到" not in captured.get("system", "")
 
 
 @pytest.mark.asyncio(loop_scope="function")

@@ -745,20 +745,108 @@ def scrub_false_book_absence_claims(
 
 # Near-synonym clusters: student wording vs book wording must not be treated as factual error.
 _BOOK_SYNONYM_GROUPS: tuple[tuple[str, ...], ...] = (
-    ("獨占", "獨佔", "自己吃", "不想分", "不分享"),
+    (
+        "獨占",
+        "獨佔",
+        "自己吃",
+        "不想分",
+        "不分享",
+        "不願分享",
+        "不願意分享",
+        "不肯分享",
+        "不給別人",
+        "別人想吃他也不給",
+        "想吃他也不給",
+        "想吃也不給",
+        "都不給",
+        "霸著",
+    ),
     ("大口吃", "大口", "狼吞虎嚥"),
     ("藏進倉庫", "藏到倉庫", "藏進", "藏到屋後", "藏起來"),
     ("柿子蒂", "蒂"),
 )
 
 
+_BOOK_EVENT_PARAPHRASE_GROUPS_BY_TITLE: dict[str, tuple[tuple[str, ...], ...]] = {
+    "阿松爺爺的柿子樹": _BOOK_SYNONYM_GROUPS
+    + (
+        ("砍樹", "把樹砍掉", "樹都被他砍掉", "連樹都砍", "砍光柿子樹"),
+        ("一起撒種子", "大家撒種子", "把種子種下去", "種下柿子種子"),
+    ),
+    "朱家故事": (
+        ("催朱太太準備早飯", "叫媽媽做早餐", "叫媽媽準備早餐", "要媽媽煮飯", "催媽媽做飯"),
+        ("做家事", "包辦家事", "洗碗洗衣", "打掃洗衣", "家事都她做", "媽媽一直做家事"),
+        (
+            "找不到朱太太",
+            "朱太太不在",
+            "朱太太離開家",
+            "媽媽離家",
+            "媽媽不在家",
+            "媽媽走了",
+            "媽媽暫時離開",
+        ),
+        ("像豬圈", "家裡很亂", "家裡亂七八糟", "家裡變得很髒", "沒人整理家裡"),
+        ("一起分工", "一起做家事", "大家幫忙", "全家幫忙", "爸爸和孩子開始做家事"),
+        ("修車", "修理車子", "把車修好", "媽媽會修車"),
+    ),
+    "不會寫字的獅子": (
+        ("不會寫字", "不識字", "不會寫信", "不知道怎麼寫字", "不懂得寫字"),
+        ("請猴子幫他寫信", "找猴子代寫", "請猴子寫信", "叫猴子幫忙寫"),
+        ("請其他動物幫忙", "找動物代寫", "請別人幫寫", "請動物幫他寫信"),
+        ("不是自己想說的話", "不是他的想法", "信裡不是他想講的", "寫的都不是他的話"),
+        ("生氣地把信撕掉", "生氣撕信", "把信撕了", "氣得撕掉信"),
+        ("開始學認字", "開始學寫字", "母獅子教他認字", "母獅子陪他學", "跟母獅子學認字"),
+    ),
+}
+
+
+def _event_paraphrase_groups_for_book(
+    book_pack: Optional[dict[str, Any]],
+) -> tuple[tuple[str, ...], ...]:
+    title = normalize_match_text(str((book_pack or {}).get("book_title") or ""))
+    for book_title, groups in _BOOK_EVENT_PARAPHRASE_GROUPS_BY_TITLE.items():
+        if normalize_match_text(book_title) in title:
+            return groups
+    return _BOOK_SYNONYM_GROUPS
+
+
+def student_uses_supported_event_paraphrase(
+    student_text: str,
+    book_pack: Optional[dict[str, Any]],
+    *,
+    focus_text: str = "",
+) -> bool:
+    """Whether the checker-targeted wording is a known paraphrase of an in-book event.
+
+    ``focus_text`` should be the exact unsupported span or feedback line. Requiring
+    the same concept in the draft, focus, and book keeps this from excusing a
+    separate fabricated event elsewhere in the paragraph.
+    """
+    draft = normalize_match_text(student_text)
+    focus = normalize_match_text(focus_text)
+    if not draft or not focus or not isinstance(book_pack, dict):
+        return False
+
+    for group in _event_paraphrase_groups_for_book(book_pack):
+        draft_hits = [term for term in group if normalize_match_text(term) in draft]
+        focus_hits = [term for term in group if normalize_match_text(term) in focus]
+        book_hits = [term for term in group if _book_reference_mentions(book_pack, term)]
+        if draft_hits and focus_hits and book_hits:
+            return True
+    return False
+
+
 _SYNONYM_MISMATCH_CUES: tuple[str, ...] = (
     "不太一樣",
     "稍微不太一樣",
+    "不是書裡",
+    "書裡沒有",
+    "書中沒有",
     "跟書裡",
     "書裡說的是",
     "書裡比較像是",
     "書裡實際",
+    "書裡真正",
     "改成書裡",
     "對回書裡",
     "書裡真的",
@@ -782,14 +870,23 @@ def scrub_false_synonym_mismatch_claims(
     m0 = (missing[0] or "").strip()
     if not m0:
         return missing, suggestions
-    if not any(c in m0 for c in _SYNONYM_MISMATCH_CUES):
-        return missing, suggestions
-
     draft = normalize_match_text(student_text)
-    for group in _BOOK_SYNONYM_GROUPS:
-        draft_hits = [t for t in group if t in draft]
-        missing_hits = [t for t in group if t in m0]
+    normalized_missing = normalize_match_text(m0)
+    for group in _event_paraphrase_groups_for_book(book_pack):
+        draft_hits = [t for t in group if normalize_match_text(t) in draft]
+        missing_hits = [t for t in group if normalize_match_text(t) in normalized_missing]
         book_hits = [t for t in group if _book_reference_mentions(book_pack, t)]
-        if draft_hits and book_hits and missing_hits:
-            return [], suggestions
+        explicit_mismatch = any(c in m0 for c in _SYNONYM_MISMATCH_CUES)
+        # A correction that quotes the student's wording and then substitutes a
+        # second term from the same in-book concept is itself evidence of a
+        # false synonym mismatch, even when the model invents a new phrase such
+        # as「這句不在書裡」. This removes dependence on an endless cue list.
+        same_concept_substitution = len(set(missing_hits)) >= 2
+        if (
+            draft_hits
+            and book_hits
+            and missing_hits
+            and (explicit_mismatch or same_concept_substitution)
+        ):
+            return [], []
     return missing, suggestions
