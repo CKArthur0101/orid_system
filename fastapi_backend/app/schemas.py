@@ -386,8 +386,6 @@ class PromptUsageResponse(BaseModel):
 
 class OridProgressRead(BaseModel):
     earnedBadges: list[str] = []
-    totalScore: int | None = None
-    score: dict[str, Any] = {}
 
 
 # ----------------------------
@@ -541,7 +539,6 @@ class ResearchSummaryCards(BaseModel):
     submitted_count: int
     submission_rate: float
     avg_guide_use_count: float
-    avg_total_score: float | None = None
 
 
 class ResearchGroupComparisonRow(BaseModel):
@@ -552,9 +549,6 @@ class ResearchGroupComparisonRow(BaseModel):
     avg_revision_count: float
     avg_guide_use_count: float
     avg_badge_count: float
-    avg_orid_score: float | None = None
-    avg_sel_score: float | None = None
-    avg_total_score: float | None = None
     submission_rate: float
 
 
@@ -566,9 +560,6 @@ class ResearchWeeklyTrendPoint(BaseModel):
     avg_revision_count: float
     avg_guide_use_count: float
     avg_badge_count: float
-    avg_orid_score: float | None = None
-    avg_sel_score: float | None = None
-    avg_total_score: float | None = None
     student_count: int
 
 
@@ -589,9 +580,6 @@ class ResearchStudentRow(BaseModel):
     revision_count: int
     guide_use_count: int
     badge_count: int
-    orid_score: float | None = None
-    sel_score: float | None = None
-    total_score: int | None = None
     is_submitted: bool
 
 

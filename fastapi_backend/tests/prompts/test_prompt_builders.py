@@ -221,22 +221,21 @@ def test_genai_feedback_builder_changes_contract_by_stage():
 
 def test_week1_formal_orid_and_sel_rubrics_are_available():
     assert WEEK1_ORID_RUBRIC["schema"] == "writing_rubric_v1"
-    assert WEEK1_ORID_RUBRIC["version"] == 4
-    assert WEEK1_ORID_RUBRIC["by_stage"]["O"][0]["name"] == "客觀事實"
+    assert WEEK1_ORID_RUBRIC["version"] == 5
+    assert WEEK1_ORID_RUBRIC["by_stage"]["O"][0]["name"] == "客觀觀察"
     assert WEEK1_ORID_RUBRIC["by_stage"]["O"][0]["levels"][2]["desc"] == (
-        "人物正確；至少寫到開頭衝突，並再寫一段中間或結尾的重要情節，大致清楚、無明顯事實錯誤。"
+        "正確寫出重要人物與事件，能看出故事的大致發展。"
     )
     assert WEEK1_ORID_RUBRIC["by_stage"]["D"][0]["levels"][3]["desc"] == (
-        "能說明情境、對象、做法，並連回故事帶給自己的啟發。"
+        "能進一步說明適用情境、做法或第一步，也能考慮可能遇到的困難與調整方式。"
     )
 
     assert WEEK1_SEL_RUBRIC["schema"] == "sel_rubric_v1"
-    assert WEEK1_SEL_RUBRIC["version"] == 2
+    assert WEEK1_SEL_RUBRIC["version"] == 3
     assert WEEK1_SEL_RUBRIC["by_stage"]["O"] == []
     assert [item["id"] for item in WEEK1_SEL_RUBRIC["by_stage"]["R"]] == [
         "SEL_SA",
         "SEL_SOA",
-        "SEL_SM",
     ]
     assert [item["id"] for item in WEEK1_SEL_RUBRIC["by_stage"]["I"]] == [
         "SEL_SOA",
@@ -384,25 +383,28 @@ def test_coach_and_checker_builders_keep_expected_sections():
     synthesis_system = build_synthesis_coach_system_prompt(
         book_context=build_book_context_block(_book_pack()),
         week1_orid_lines={"O": "他把柿子藏起來", "R": "", "I": "", "D": ""},
-        student_display_name="小華",
-        student_login=None,
+        student_display_name="測試學生",
+        student_login="test@example.com",
         opening_hint="先檢查段落銜接。",
         prev_ai_opener="我有看到",
     )
     assert "第 1 週四段（唯讀參考）" in synthesis_system
     assert "O 客觀" in synthesis_system
-    assert "小華" in synthesis_system
+    assert "一律使用「你」" in synthesis_system
+    assert "測試學生" not in synthesis_system
+    assert "test@example.com" not in synthesis_system
     assert "先檢查段落銜接" in synthesis_system
     assert "你已經做到：" in synthesis_system
     assert "再想一想：" in synthesis_system
     assert "可以這樣修改：" in synthesis_system
-    assert "SEL 表現" in synthesis_system
-    assert "生活連結" in synthesis_system
-    assert "優先規則" in synthesis_system
+    assert "CASEL SEL rubric" in synthesis_system
+    assert "SEL_SA" in synthesis_system
+    assert "content_integration" in synthesis_system
+    assert "action_application" in synthesis_system
     assert "完整 ≠ 連貫" in synthesis_system
     assert "硬串" in synthesis_system
     assert "串起來了" in synthesis_system
-    assert "不做正式計分" in synthesis_system
+    assert '"rubric_levels"' in synthesis_system
     assert "回到整合寫作格子" in synthesis_system
     # 可選 meta 仍會插入中段；預設不傳時僅有 playbook 內建「三段標題」與週一區塊，無【學生自填閱讀心得】中段
     assert "【學生自填閱讀心得" not in synthesis_system
@@ -420,7 +422,7 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "我讀到分享很重要" in syn_layered
     assert "【當前寫作階段】" in syn_layered
     assert "【本輪回饋層級" in syn_layered
-    assert "完整性" in syn_layered and "連貫性" in syn_layered
+    assert "內容整合" in syn_layered and "文章連貫" in syn_layered
 
     syn_r2 = build_synthesis_coach_system_prompt(
         book_context=build_book_context_block(_book_pack()),
@@ -428,7 +430,7 @@ def test_coach_and_checker_builders_keep_expected_sections():
         synthesis_phase="short_draft",
         feedback_round=2,
     )
-    assert "SEL表現" in syn_r2 or "SEL 表現" in syn_r2
+    assert "SEL 輔助" in syn_r2
     assert "反思深度" in syn_r2
 
     syn_r2_depth = build_synthesis_coach_system_prompt(
@@ -487,7 +489,7 @@ def test_synthesis_pasted_stage_paragraphs_detection():
         student_text=pasted_draft,
     )
     assert "草稿看起來像是把上週幾段" in synthesis_pasted_system
-    assert "連貫性" in synthesis_pasted_system
+    assert "連貫" in synthesis_pasted_system
     assert "不要**要求整篇重寫" in synthesis_pasted_system
     assert "先不要談 SEL" in synthesis_pasted_system
 
@@ -603,17 +605,17 @@ def test_strip_markdown_for_student_chat_removes_bold_markers():
 
 
 def test_o_draft_meets_pass_bar():
-    # Opening + mid + late → pass
+    # Multiple linked events show broad development → pass.
     assert o_draft_meets_pass_bar(
         "阿松爺爺家的柿子很甜，可是他一直自己吃，不想分給別人。"
         "哎唷奶奶搬來後，他只給她柿子蒂。後來他把柿子藏進倉庫，最後還把樹砍掉，只剩樹樁。"
     )
     # Feeling only → fail
     assert not o_draft_meets_pass_bar("我覺得這個故事很溫暖。")
-    # Only one beat → fail
+    # Only one isolated beat → fail.
     assert not o_draft_meets_pass_bar("阿松爺爺把柿子藏起來。")
-    # Early+mid only (no climax) → fail; student still needs 砍樹／樹樁等
-    assert not o_draft_meets_pass_bar(
+    # A correct development does not need to enumerate the ending to pass.
+    assert o_draft_meets_pass_bar(
         "故事裡我看到阿松爺爺不分享柿子，然後只給奶奶柿子蒂，後來他把柿子都採下來藏進倉庫。"
     )
 
@@ -662,7 +664,7 @@ def test_apply_o_key_event_gaps_replaces_generic_o_when_events_missing():
         suggestions=["先挑書裡一件你稿子上還沒寫到的事，用三句話寫出誰、做了什麼、後來怎麼了"],
     )
     blob = m[0] + s[0]
-    assert "故事一開始" in blob
+    assert "前後" in blob or "重要事件" in blob
     assert not any(word in blob for word in ("倉庫", "柿子葉", "樹枝", "砍樹", "柿子蒂"))
     assert "中間衝突" not in m[0]
 
@@ -681,8 +683,8 @@ def test_apply_o_key_event_gaps_guides_vague_change_without_revealing_answer():
         suggestions=["寫出接著發生什麼。"],
     )
     blob = m[0] + s[0]
-    assert "中間發生什麼還不清楚" in m[0]
-    assert "接著發生了哪一件事" in s[0]
+    assert "重要事件怎麼發展" in m[0]
+    assert "前面或接著" in s[0]
     assert not any(word in blob for word in ("藏", "倉庫", "砍樹", "樹樁"))
 
 
@@ -782,4 +784,4 @@ def test_prompt_versions_cover_active_surfaces():
     }.issubset(PROMPT_VERSIONS.keys())
     assert PROMPT_VERSIONS["genai_feedback"] == "wf_v11"
     assert PROMPT_VERSIONS["feedback_narration"] == "fn_v12"
-    assert PROMPT_VERSIONS["synthesis_coach"] == "sc_v12"
+    assert PROMPT_VERSIONS["synthesis_coach"] == "sc_v14"

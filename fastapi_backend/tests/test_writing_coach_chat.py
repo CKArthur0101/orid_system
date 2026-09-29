@@ -418,7 +418,24 @@ async def test_writing_coach_synthesis_feedback_default_includes_three_part_repl
 
     async def fake_chat_completion(messages, **kwargs):
         captured["system"] = messages[0]["content"]
-        return "先把你最想讀者跟上的一句寫清楚，再補一句故事細節。"
+        return json.dumps(
+            {
+                "reply": (
+                    "你已經做到：\n你有寫出故事和自己的想法。\n"
+                    "再想一想：\n故事和感受之間還可以接得更清楚。\n"
+                    "可以這樣修改：\n哪一句可以補上『看到這件事，我覺得……』？"
+                ),
+                "rubric_levels": {
+                    "content_integration": 3,
+                    "coherence": 2,
+                    "reflection_depth": 4,
+                    "action_application": 1,
+                },
+                "focus": "coherence",
+                "sel_focus": "SEL_SA",
+            },
+            ensure_ascii=False,
+        )
 
     monkeypatch.setattr(orid, "_chat_completion", fake_chat_completion)
 
@@ -457,8 +474,16 @@ async def test_writing_coach_synthesis_feedback_default_includes_three_part_repl
         headers=authenticated_user["headers"],
     )
     assert r.status_code == 200, r.text
+    data = r.json()
     assert "完整" in captured.get("system", "") or "連貫" in captured.get("system", "")
     assert "你已經做到" in captured.get("system", "") or "SEL" in captured.get("system", "")
+    assert data["meta"]["synthesis_rubric_levels"]["coherence"] == 2
+    assert data["meta"]["synthesis_focus"] == "coherence"
+    assert data["meta"]["synthesis_sel_focus"] == "SEL_SA"
+    assert set(data["meta"]["newlyEarnedBadges"]) == {
+        "badge_synthesis_content",
+        "badge_synthesis_reflection",
+    }
 
 
 @pytest.mark.asyncio(loop_scope="function")

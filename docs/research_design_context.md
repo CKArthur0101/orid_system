@@ -59,7 +59,7 @@
 |--|---------------------|----------------|
 | 引導 | AI **個人化**引導式 feedback | **固定**提示句與文本提問 |
 | Chatbot | 有（寫作教練／整合回饋） | **無**個人化 AI chatbot |
-| 系統自動分 | 可產生（過程／dashboard／探索用） | **不**產生個人化 AI 系統分 |
+| 系統自動分 | **不產生**；AI rubric 僅用於形成性引導與階段達標 | **不產生** |
 
 ### 3.3 條件值在系統中的命名
 
@@ -109,8 +109,8 @@
 | 項目 | 決策 |
 |------|------|
 | RQ1／RQ2 正式依變項 | 以**人工 rubric 評分**為主（兩組作品用同一套人評規準） |
-| 系統 AI 自動分數 | **過程參考**、dashboard 顯示、**探索性**資料；**不是**唯一正式依變項 |
-| 控制組系統分 | **不需要**個人化 AI 系統分；避免組間測量不等價 |
+| 系統 AI 自動分數 | 不產生；避免把生成式 AI 的形成性判斷當成研究成效分數 |
+| 前後測分數 | 由人工評分者依共用 rubric 評定 |
 | 徽章 | 兩組都有；參與／階段完成指標，**非**主要學習成效 |
 | RQ4 | **Google 表單或紙本問卷**；不做進系統 |
 
@@ -119,7 +119,7 @@
 | 來源 | 用途 |
 |------|------|
 | 人工 ORID／整合寫作 rubric | **正式**組間比較 |
-| 系統 `orid_score`／階段 `feedback.ok`／層級估計 | 探索、歷程、教師儀表 |
+| 階段 `feedback.ok`／層級估計 | 形成性引導與階段完成歷程，不換算 AI 數字分數 |
 | 奇數週寫作 JSON（`stages.O/R/I/D`）與偶數週 `synthesis_draft` | 人評材料 |
 
 人評向度細節見 [`orid_ai_feedback_rubric.md`](orid_ai_feedback_rubric.md)。
@@ -129,7 +129,7 @@
 | 來源 | 用途 |
 |------|------|
 | 人工 SEL／反思中 SEL 面向評分 | **正式**組間比較 |
-| 系統 `sel_score` 與各 `SEL_*` 層級 | 探索用（僅實驗組路徑較完整） |
+| 各 `SEL_*` 層級估計 | 形成性引導參考，不換算 AI 數字分數 |
 
 研究用語與系統 CASEL ID 對照（已確認）：
 
@@ -166,13 +166,12 @@ AI feedback 設計應鼓勵學生回到自己的文字修改，以促進上述�
 
 ### 5.6 匯出欄位資料字典（Phase 5）
 
-教師「研究分析」CSV（`/research-export`）與課堂監控 CSV 中的系統分欄位：
+教師「研究分析」CSV（`/research-export`）與課堂監控 CSV 的主要欄位：
 
 | 欄位（研究匯出） | 意義 | 正式分析角色 |
 |------------------|------|----------------|
 | `word_count` / `save_count` / `revision_count` / `guide_use_count` | RQ3 歷程 | 可用 |
-| `badge_count` / `earned_badges` | 參與／階段完成（奇數週 start/30/60/90；**不含** `badge_synthesis_start`） | 非 RQ1／RQ2 主 DV |
-| `ai_system_*_score_exploratory` | 系統 AI 自動分 | **探索用 only**；正式 RQ1／RQ2 用人評 |
+| `badge_count` / `earned_badges` | 參與／階段完成（奇數週 ORID 四章；偶數週整合寫作四向度章） | 非 RQ1／RQ2 主 DV |
 | `condition` / `week` / `task_type` / `is_submitted` | 分組與完成 | 可用 |
 
 人評分數目前在系統外（紙本／表單／獨立表）；匯出後與 `student_email`／週次對齊即可。
@@ -202,7 +201,10 @@ AI feedback 設計應鼓勵學生回到自己的文字修改，以促進上述�
 |---------|--------------|------|
 | `badge_start` | 下筆 | 奇數週 ORID |
 | `badge_30` / `badge_60` / `badge_90` | 松果銅／銀／金 | 階段進度（非總分門檻） |
-| `badge_synthesis_start` | 整合下筆章 | 偶數週整合 |
+| `badge_synthesis_content` | 內容整合章 | 偶數週整合寫作該向度第 3／4 級 |
+| `badge_synthesis_coherence` | 文章連貫章 | 偶數週整合寫作該向度第 3／4 級 |
+| `badge_synthesis_reflection` | 反思深度章 | 偶數週整合寫作該向度第 3／4 級 |
+| `badge_synthesis_action` | 行動應用章 | 偶數週整合寫作該向度第 3／4 級 |
 
 - 兩組皆可獲得對應軌道徽章。
 - **不作為** RQ1／RQ2 主要成效指標。
@@ -235,7 +237,7 @@ AI feedback 設計應鼓勵學生回到自己的文字修改，以促進上述�
 3. **偶數週自動計分**：文件已要求 SEL **引導**面向；正式自動計分非優先。  
 4. **舊文件落差**：部分歷史設計文可能描述已廢棄之 `/orid/chat` 或與現行「人評為主」策略不同——以**本文件＋現行程式**為準（見下方衝突說明）。  
 5. **條件閘門（Phase 4）**：控制組 session 呼叫 `writing-coach/chat`、`writings/feedback`、`writings/assist` 回 **403**；前端隱藏「取得回饋／取得整合回饋」；session 條件由 `User.orid_condition` 決定（僅 force_new 帳號可覆寫）。  
-6. **分數／徽章對齊（Phase 5）**：控制組 `/progress` 不回系統分；寫入寫作 JSON 時剝除 `score`；徽章事件週次改用學術週（1–6）；教師儀表與 CSV 標明系統分為探索用；研究匯出徽章依該列週次篩選，且省略 `badge_synthesis_start`。
+6. **分數／徽章對齊（Phase 5）**：控制組 `/progress` 不回系統分；寫入寫作 JSON 時剝除 `score`；徽章事件週次使用學術週（1–6）；偶數週四枚品質獎章只由整合寫作 rubric 第 3／4 級解鎖，不由字數或提示使用次數解鎖。
 
 ### 與既有 docs 的關係（衝突說明）
 

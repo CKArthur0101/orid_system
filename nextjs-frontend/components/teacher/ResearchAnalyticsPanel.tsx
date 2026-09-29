@@ -28,7 +28,6 @@ type ResearchSummaryCards = {
   submitted_count: number;
   submission_rate: number;
   avg_guide_use_count: number;
-  avg_total_score: number | null;
 };
 
 type ResearchGroupComparisonRow = {
@@ -39,9 +38,6 @@ type ResearchGroupComparisonRow = {
   avg_revision_count: number;
   avg_guide_use_count: number;
   avg_badge_count: number;
-  avg_orid_score: number | null;
-  avg_sel_score: number | null;
-  avg_total_score: number | null;
   submission_rate: number;
 };
 
@@ -53,9 +49,6 @@ type ResearchWeeklyTrendPoint = {
   avg_revision_count: number;
   avg_guide_use_count: number;
   avg_badge_count: number;
-  avg_orid_score: number | null;
-  avg_sel_score: number | null;
-  avg_total_score: number | null;
   student_count: number;
 };
 
@@ -73,9 +66,6 @@ type ResearchStudentRow = {
   revision_count: number;
   guide_use_count: number;
   badge_count: number;
-  orid_score: number | null;
-  sel_score: number | null;
-  total_score: number | null;
   is_submitted: boolean;
 };
 

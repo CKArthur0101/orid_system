@@ -229,7 +229,7 @@ class OridBadgeEvent(Base):
     task_type = Column(String(32), nullable=True)    # orid_stage / synthesis
     condition = Column(String(32), nullable=True)    # genai / control
     badge_id = Column(String(32), nullable=False)    # badge_start / badge_30(銅O) / badge_60(銀ORI) / badge_90(金ORID)
-    total_score = Column(Integer, nullable=True)
+    total_score = Column(Integer, nullable=True)  # Legacy compatibility; no new AI scores are written.
     word_count = Column(Integer, nullable=True)
     feedback_count = Column(Integer, nullable=True, default=0)
     prompt_view_count = Column(Integer, nullable=True, default=0)
@@ -274,9 +274,9 @@ class OridWeeklyResearchSummary(Base):
     guide_use_count = Column(Integer, nullable=False, default=0)
     badge_count = Column(Integer, nullable=False, default=0)
 
-    orid_score = Column(Float, nullable=True)
-    sel_score = Column(Float, nullable=True)
-    total_score = Column(Integer, nullable=True)
+    orid_score = Column(Float, nullable=True)  # Legacy compatibility only.
+    sel_score = Column(Float, nullable=True)  # Legacy compatibility only.
+    total_score = Column(Integer, nullable=True)  # Legacy compatibility only.
 
     is_submitted = Column(Boolean, nullable=False, default=False)
     # Internal-only, for revision-change detection — never exposed via API/CSV.

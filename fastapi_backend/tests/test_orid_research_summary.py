@@ -396,7 +396,6 @@ async def test_research_overview_groups_by_condition(test_client, db_session):
                 revision_count=2,
                 guide_use_count=4,
                 badge_count=2,
-                total_score=60,
                 is_submitted=True,
             ),
             OridWeeklyResearchSummary(
@@ -411,7 +410,6 @@ async def test_research_overview_groups_by_condition(test_client, db_session):
                 revision_count=0,
                 guide_use_count=1,
                 badge_count=1,
-                total_score=30,
                 is_submitted=False,
             ),
         ]
@@ -432,11 +430,15 @@ async def test_research_overview_groups_by_condition(test_client, db_session):
     assert data["summary_cards"]["experimental_count"] == 2
     assert data["summary_cards"]["control_count"] == 1
     assert data["summary_cards"]["submitted_count"] == 1
+    assert "avg_total_score" not in data["summary_cards"]
 
     by_condition = {row["condition"]: row for row in data["group_comparison"]}
     assert by_condition["experimental"]["student_count"] == 2
     assert by_condition["experimental"]["avg_word_count"] == 50
     assert by_condition["experimental"]["submission_rate"] == 0.5
+    assert "avg_orid_score" not in by_condition["experimental"]
+    assert "avg_sel_score" not in by_condition["experimental"]
+    assert "avg_total_score" not in by_condition["experimental"]
     assert by_condition["control"]["avg_word_count"] == 40
     assert by_condition["control"]["submission_rate"] == 0.0
 

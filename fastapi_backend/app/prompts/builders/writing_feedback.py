@@ -39,7 +39,7 @@ def _format_writing_rubric_for_prompt(book_pack: Optional[dict[str, Any]], stage
     lines: list[str] = [
         "【ORID 主要評量標準（ok=true ← 層級3達標或4精進；ok=false ← 層級1或2）】",
         "ok 只依 ORID 本段標準判斷；SEL 只能輔助提問，不能改變 ok。",
-        "計分採累加制：達到第 n 階 = 1+2+…+n 分（第1階=1, 第2階=3, 第3階=6, 第4階=10）。",
+        "層級只用於形成性引導與階段達標，不換算成數字分數。",
     ]
     for it in items[:4]:
         if not isinstance(it, dict):

@@ -5,16 +5,13 @@ from datetime import datetime, timezone
 from typing import Iterable, Optional
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import OridBadgeEvent
-from app.services.orid_rubric_scoring import (
-    calculate_orid_sel_score,
-    collect_levels_from_writing_obj,
-    parse_level,
-)
+from app.content.synthesis_rubric import synthesis_badges_from_levels
+from app.services.orid_rubric_scoring import parse_level
 from app.services.orid_writing_store import ensure_orid_writing_obj
 
 # ---------------------------------------------------------------------------
@@ -65,27 +62,50 @@ BADGE_CONFIG: dict[str, dict] = {
         "modal_title": "恭喜獲得松果金徽章！",
         "modal_text": "太棒了！你已經把觀察、感受、體會和行動都寫完了。",
     },
-    # Even-week integration task. Independent track from badge_30/60/90
-    # (which are O/R/I/D stage-progress only) — rewards starting the
-    # integrated draft and using the synthesis guide/AI feedback at least
-    # once, not passing any ORID rubric bar.
-    "badge_synthesis_start": {
-        "id": "badge_synthesis_start",
-        "name": "整合下筆章",
-        "description": (
-            "在「整合寫作」框裡寫幾句，並按一次「取得整合回饋」（或看一次整合寫作提示），"
-            "就可以獲得。"
-        ),
-        "earned_description": "已獲得：你已經開始把上週的想法收成一篇，也問過小幫手了！",
-        "modal_title": "恭喜獲得整合下筆章！",
-        "modal_text": (
-            "你已經開始把上週的觀察、感受、體會和行動收成一篇文章，也使用了整合寫作的引導。"
-            "接下來可以照建議調整一個地方，讓文章更順。"
-        ),
+    "badge_synthesis_content": {
+        "id": "badge_synthesis_content",
+        "name": "內容整合章",
+        "description": "故事事件、感受或想法、體會與未來行動彼此有關，達到整合寫作 rubric 第 3 級。",
+        "earned_description": "已獲得：你已經把故事、想法、體會與行動放進同一篇文章！",
+        "modal_title": "恭喜獲得內容整合章！",
+        "modal_text": "你已經把故事事件、自己的想法、學到的體會和未來行動整合起來了。",
+    },
+    "badge_synthesis_coherence": {
+        "id": "badge_synthesis_coherence",
+        "name": "文章連貫章",
+        "description": "內容順序合理，前後句和各部分關係清楚，達到整合寫作 rubric 第 3 級。",
+        "earned_description": "已獲得：讀者可以順著你的文章讀懂前後關係！",
+        "modal_title": "恭喜獲得文章連貫章！",
+        "modal_text": "你的文章順序清楚，故事、感受、體會和行動能自然接起來。",
+    },
+    "badge_synthesis_reflection": {
+        "id": "badge_synthesis_reflection",
+        "name": "反思深度章",
+        "description": "不只重述故事，也能說明感受、想法或學習的原因，達到整合寫作 rubric 第 3 級。",
+        "earned_description": "已獲得：你不只說發生什麼，也說清楚自己為什麼這樣想！",
+        "modal_title": "恭喜獲得反思深度章！",
+        "modal_text": "你能用故事裡的事情說明自己的感受、想法或學習原因。",
+    },
+    "badge_synthesis_action": {
+        "id": "badge_synthesis_action",
+        "name": "行動應用章",
+        "description": "提出自己能做到、具體可行且呼應體會的行動，達到整合寫作 rubric 第 3 級。",
+        "earned_description": "已獲得：你已經把學到的事變成自己能做到的行動！",
+        "modal_title": "恭喜獲得行動應用章！",
+        "modal_text": "你提出了一個具體、可行，而且能呼應故事體會的行動。",
     },
 }
 
-BADGE_ORDER = ["badge_start", "badge_30", "badge_60", "badge_90", "badge_synthesis_start"]
+BADGE_ORDER = [
+    "badge_start",
+    "badge_30",
+    "badge_60",
+    "badge_90",
+    "badge_synthesis_content",
+    "badge_synthesis_coherence",
+    "badge_synthesis_reflection",
+    "badge_synthesis_action",
+]
 
 _STAGE_KEYS = ("O", "R", "I", "D")
 
@@ -104,7 +124,9 @@ def normalize_stage_set(stages: Optional[Iterable[str]]) -> set[str]:
     return out
 
 
-def stages_passed_from_writing_obj(writing_obj: dict | None, *, mode: str = "ok") -> set[str]:
+def stages_passed_from_writing_obj(
+    writing_obj: dict | None, *, mode: str = "ok"
+) -> set[str]:
     """Derive completed stages from orid_writing_v1 JSON.
 
     mode="ok": experimental — stage counts if any draft feedback.ok is true
@@ -152,7 +174,6 @@ def calculate_earned_badges(
     has_writing_content: bool,
     has_used_feedback_or_prompt: bool,
     stages_passed: Optional[Iterable[str]] = None,
-    total_score: Optional[int] = None,  # retained for API compat; ignored for unlock
 ) -> list[str]:
     """Return badge IDs earned from start action + ORID stage progress.
 
@@ -161,7 +182,6 @@ def calculate_earned_badges(
       badge_60 (銀): O+R+I passed
       badge_90 (金): O+R+I+D passed
     """
-    del total_score  # score no longer drives badges
     earned: list[str] = []
 
     if has_writing_content and has_used_feedback_or_prompt:
@@ -178,19 +198,11 @@ def calculate_earned_badges(
     return earned
 
 
-def calculate_earned_synthesis_badge(
-    *,
-    has_synthesis_content: bool,
-    has_used_synthesis_guide: bool,
+def calculate_earned_synthesis_badges(
+    *, rubric_levels: dict[str, object] | None
 ) -> list[str]:
-    """Even-week integration badge — independent of the O/R/I/D stage track.
-
-    Rewards starting the integrated draft and using the synthesis guide/AI
-    feedback at least once (does not require passing any ORID rubric bar).
-    """
-    if has_synthesis_content and has_used_synthesis_guide:
-        return ["badge_synthesis_start"]
-    return []
+    """Return one even-week badge per criterion whose level is at least 3."""
+    return synthesis_badges_from_levels(rubric_levels)
 
 
 def get_new_badges(
@@ -212,24 +224,6 @@ def should_show_badge_modal(new_badges: list[str]) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _score_from_writing_obj(obj: dict) -> tuple[dict, int | None]:
-    """Extract persisted or computed score snapshot from orid_writing_v1 JSON."""
-    score_snap = obj.get("score")
-    if isinstance(score_snap, dict) and score_snap.get("totalScore") is not None:
-        try:
-            total = int(score_snap["totalScore"])
-        except (TypeError, ValueError):
-            total = None
-        else:
-            return score_snap, total
-
-    orid_levels, sel_levels = collect_levels_from_writing_obj(obj)
-    if not orid_levels and not sel_levels:
-        return {}, None
-    score_result = calculate_orid_sel_score(orid_levels, sel_levels)
-    return score_result, score_result.get("totalScore")
-
-
 async def load_session_progress(
     db: AsyncSession,
     *,
@@ -239,13 +233,10 @@ async def load_session_progress(
     writing_content: str | None = None,
     empty_writing_factory,
 ) -> dict:
-    """Return earned badges and latest score for a user session/week."""
+    """Return earned badges for a user session/week."""
     earned = await get_earned_badges_from_db(
         db, user_id=user_id, session_id=session_id, week=week
     )
-
-    score_result: dict = {}
-    total_score: int | None = None
 
     if writing_content:
         obj = ensure_orid_writing_obj(
@@ -253,29 +244,12 @@ async def load_session_progress(
             week=week,
             empty_factory=empty_writing_factory,
         )
-        score_result, total_score = _score_from_writing_obj(obj)
-
         writing_badges = obj.get("earnedBadges")
         if isinstance(writing_badges, list):
             earned = list(set(earned + [str(b) for b in writing_badges if b]))
 
-    if total_score is None:
-        max_stmt = select(func.max(OridBadgeEvent.total_score)).where(
-            OridBadgeEvent.user_id == user_id,
-            OridBadgeEvent.session_id == session_id,
-            OridBadgeEvent.week == week,
-            OridBadgeEvent.total_score.is_not(None),
-        )
-        max_res = await db.execute(max_stmt)
-        max_score = max_res.scalar()
-        if max_score is not None:
-            total_score = int(max_score)
-            score_result = {"totalScore": total_score, "maxTotal": 90}
-
     return {
         "earnedBadges": earned,
-        "totalScore": total_score,
-        "score": score_result,
     }
 
 
@@ -306,7 +280,6 @@ async def record_badge_events(
     task_type: Optional[str],
     condition: Optional[str],
     new_badge_ids: list[str],
-    total_score: Optional[int],
     word_count: Optional[int],
     feedback_count: int,
     prompt_view_count: int,
@@ -327,7 +300,6 @@ async def record_badge_events(
             task_type=task_type,
             condition=condition,
             badge_id=badge_id,
-            total_score=total_score,
             word_count=word_count,
             feedback_count=feedback_count,
             prompt_view_count=prompt_view_count,
@@ -343,26 +315,3 @@ async def record_badge_events(
             # Duplicate badge for this user/session/week — skip silently
             pass
     return saved
-
-
-async def update_session_score_snapshot(
-    db: AsyncSession,
-    *,
-    user_id: UUID,
-    session_id: UUID,
-    week: int,
-    total_score: Optional[int],
-) -> None:
-    """Keep badge-event rows in sync with the latest computed total score."""
-    if total_score is None:
-        return
-    stmt = (
-        update(OridBadgeEvent)
-        .where(
-            OridBadgeEvent.user_id == user_id,
-            OridBadgeEvent.session_id == session_id,
-            OridBadgeEvent.week == week,
-        )
-        .values(total_score=total_score)
-    )
-    await db.execute(stmt)

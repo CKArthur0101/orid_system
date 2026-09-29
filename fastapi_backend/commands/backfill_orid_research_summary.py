@@ -49,7 +49,6 @@ from app.services.orid_research_summary import (
     resolve_class_id,
     task_type_for_week,
 )
-from app.services.orid_rubric_scoring import calculate_orid_sel_score, collect_levels_from_writing_obj
 from app.services.orid_writing_store import ensure_orid_writing_obj
 
 load_dotenv()
@@ -61,24 +60,6 @@ def _empty_writing_v1(week: int) -> dict:
         "week": week,
         "stages": {k: {"d1": "", "d2": ""} for k in ("O", "R", "I", "D")},
     }
-
-
-def _score_from_writing_obj(obj: dict) -> tuple[float | None, float | None, int | None]:
-    score_snap = obj.get("score")
-    if isinstance(score_snap, dict) and score_snap.get("totalScore") is not None:
-        try:
-            return (
-                score_snap.get("oridSubtotal"),
-                score_snap.get("selSubtotal"),
-                int(score_snap["totalScore"]),
-            )
-        except (TypeError, ValueError):
-            pass
-    orid_levels, sel_levels = collect_levels_from_writing_obj(obj)
-    if not orid_levels and not sel_levels:
-        return None, None, None
-    result = calculate_orid_sel_score(orid_levels, sel_levels)
-    return result.get("oridSubtotal"), result.get("selSubtotal"), result.get("totalScore")
 
 
 async def main(dry_run: bool = False) -> None:
@@ -113,7 +94,6 @@ async def main(dry_run: bool = False) -> None:
                 empty_factory=_empty_writing_v1,
             )
             word_count = compute_word_count(writing_obj, sub.week)
-            orid_score, sel_score, total_score = _score_from_writing_obj(writing_obj)
 
             if sub.user_id not in condition_cache:
                 cond_res = await db.execute(select(User.orid_condition).where(User.id == sub.user_id))
@@ -159,15 +139,12 @@ async def main(dry_run: bool = False) -> None:
                 revision_count=0,
                 guide_use_count=guide_use_count,
                 badge_count=badge_count,
-                orid_score=orid_score,
-                sel_score=sel_score,
-                total_score=total_score,
                 is_submitted=True,
                 content_fingerprint=compute_content_fingerprint(writing_obj, sub.week),
             )
             if dry_run:
                 print(f"[dry-run] would create summary for {key}: word_count={word_count} "
-                      f"guide_use={guide_use_count} badges={badge_count} total_score={total_score}")
+                      f"guide_use={guide_use_count} badges={badge_count}")
             else:
                 db.add(row)
             created += 1

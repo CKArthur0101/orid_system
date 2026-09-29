@@ -61,7 +61,9 @@ def compute_word_count(writing_obj: dict | None, week: int) -> int:
     """
     total = sum(len(t) for t in _stage_texts(writing_obj))
     if week % 2 == 0 and isinstance(writing_obj, dict):
-        total += len(normalize_writing_text(str(writing_obj.get("synthesis_draft") or "")))
+        total += len(
+            normalize_writing_text(str(writing_obj.get("synthesis_draft") or ""))
+        )
     return total
 
 
@@ -71,7 +73,9 @@ def compute_content_fingerprint(writing_obj: dict | None, week: int) -> str:
     Never exposed via API/CSV."""
     parts = _stage_texts(writing_obj)
     if week % 2 == 0 and isinstance(writing_obj, dict):
-        parts.append(normalize_writing_text(str(writing_obj.get("synthesis_draft") or "")))
+        parts.append(
+            normalize_writing_text(str(writing_obj.get("synthesis_draft") or ""))
+        )
     source = "|".join(parts)
     return hashlib.sha1(source.encode("utf-8")).hexdigest()
 
@@ -154,16 +158,23 @@ async def bump_save_and_maybe_revision(
     """
     try:
         async with db.begin_nested():
-            summary = await get_or_create_summary(db, user_id=user_id, week=week, session_id=session_id)
+            summary = await get_or_create_summary(
+                db, user_id=user_id, week=week, session_id=session_id
+            )
             fingerprint = compute_content_fingerprint(writing_obj, week)
-            if summary.content_fingerprint is not None and fingerprint != summary.content_fingerprint:
+            if (
+                summary.content_fingerprint is not None
+                and fingerprint != summary.content_fingerprint
+            ):
                 summary.revision_count = (summary.revision_count or 0) + 1
             summary.content_fingerprint = fingerprint
             summary.word_count = compute_word_count(writing_obj, week)
             summary.save_count = (summary.save_count or 0) + 1
             await db.flush()
     except Exception:
-        logger.warning("research summary bump_save_and_maybe_revision failed", exc_info=True)
+        logger.warning(
+            "research summary bump_save_and_maybe_revision failed", exc_info=True
+        )
 
 
 async def mark_submitted(
@@ -176,7 +187,9 @@ async def mark_submitted(
     """Call only when the student explicitly submits (not on autosave/draft)."""
     try:
         async with db.begin_nested():
-            summary = await get_or_create_summary(db, user_id=user_id, week=week, session_id=session_id)
+            summary = await get_or_create_summary(
+                db, user_id=user_id, week=week, session_id=session_id
+            )
             summary.is_submitted = True
             await db.flush()
     except Exception:
@@ -197,7 +210,9 @@ async def bump_guide_use(
         return
     try:
         async with db.begin_nested():
-            summary = await get_or_create_summary(db, user_id=user_id, week=week, session_id=session_id)
+            summary = await get_or_create_summary(
+                db, user_id=user_id, week=week, session_id=session_id
+            )
             summary.guide_use_count = (summary.guide_use_count or 0) + int(amount)
             await db.flush()
     except Exception:
@@ -216,35 +231,10 @@ async def sync_badges(
     for this user/session/week (monotonically non-decreasing)."""
     try:
         async with db.begin_nested():
-            summary = await get_or_create_summary(db, user_id=user_id, week=week, session_id=session_id)
+            summary = await get_or_create_summary(
+                db, user_id=user_id, week=week, session_id=session_id
+            )
             summary.badge_count = max(int(badge_count or 0), summary.badge_count or 0)
             await db.flush()
     except Exception:
         logger.warning("research summary sync_badges failed", exc_info=True)
-
-
-async def sync_scores(
-    db: AsyncSession,
-    *,
-    user_id: UUID,
-    week: int,
-    session_id: UUID,
-    orid_score: float | None,
-    sel_score: float | None,
-    total_score: int | None,
-) -> None:
-    """Persist the latest computed rubric scores for this user/session/week."""
-    if orid_score is None and sel_score is None and total_score is None:
-        return
-    try:
-        async with db.begin_nested():
-            summary = await get_or_create_summary(db, user_id=user_id, week=week, session_id=session_id)
-            if orid_score is not None:
-                summary.orid_score = orid_score
-            if sel_score is not None:
-                summary.sel_score = sel_score
-            if total_score is not None:
-                summary.total_score = total_score
-            await db.flush()
-    except Exception:
-        logger.warning("research summary sync_scores failed", exc_info=True)

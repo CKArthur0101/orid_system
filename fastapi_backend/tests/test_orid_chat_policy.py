@@ -267,9 +267,7 @@ def test_week1_book_does_not_say_this_wording_is_redirected_to_missing_ending():
     combined = " ".join(missing + suggestions)
     assert "書裡沒有" not in combined
     assert "一直獨占" not in combined
-    assert "樹被砍掉以後" in combined
-    assert "結尾" in missing[0]
-    assert "砍掉以後" in suggestions[0]
+    assert "前後" in combined or "重要事件" in combined
 
 
 def test_o_ending_feedback_replaces_stale_generic_grounding_prompt():
@@ -286,7 +284,7 @@ def test_o_ending_feedback_replaces_stale_generic_grounding_prompt():
 
     assert "結尾" in missing[0]
     assert "補上故事裡真的發生" not in suggestions[0]
-    assert "樹被砍掉以後" in suggestions[0]
+    assert "前面或接著" in suggestions[0]
 
 
 @pytest.mark.parametrize(
@@ -310,7 +308,7 @@ def test_o_ending_diagnosis_and_action_share_book_event(week: int, expected_focu
     assert suggestions[0].startswith("請回到 O 觀察段，想一想：")
 
 
-def test_o_screenshot_wording_still_aligns_to_week1_ending_event():
+def test_o_complete_development_is_not_forced_to_add_week1_ending():
     missing, suggestions = align_o_feedback_to_book_event(
         stage="O",
         book_pack=orid.BOOK_PACK_BY_WEEK[1],
@@ -325,12 +323,8 @@ def test_o_screenshot_wording_still_aligns_to_week1_ending_event():
         suggestions=["請回到 O 觀察段，補上最後那一句。"],
     )
 
-    assert missing == [
-        "你已經寫到故事的開頭、中間和後面的轉折，結尾的變化還沒有說清楚。"
-    ]
-    assert suggestions == [
-        "請回到 O 觀察段，想一想：樹被砍掉以後，故事最後又發生了什麼？"
-    ]
+    assert "別人想吃他也不給" in missing[0]
+    assert suggestions == ["請回到 O 觀察段，補上最後那一句。"]
 
 
 @pytest.mark.parametrize(
@@ -353,9 +347,10 @@ def test_o_screenshot_wording_still_aligns_to_week1_ending_event():
         ),
     ],
 )
-def test_o_book_event_diagnosis_does_not_depend_on_ai_wording(
+def test_o_broad_development_is_not_forced_to_cover_every_book_arc(
     week: int, draft: str, expected_focus: str
 ):
+    _ = expected_focus
     missing, suggestions = align_o_feedback_to_book_event(
         stage="O",
         book_pack=orid.BOOK_PACK_BY_WEEK[week],
@@ -364,8 +359,8 @@ def test_o_book_event_diagnosis_does_not_depend_on_ai_wording(
         suggestions=["再想一想。"],
     )
 
-    assert "結尾" in missing[0]
-    assert expected_focus in suggestions[0]
+    assert missing == ["這裡還可以再補清楚一點。"]
+    assert suggestions == ["再想一想。"]
 
 
 def test_same_event_substitution_is_scrubbed_without_known_mismatch_cue():
@@ -729,8 +724,8 @@ def test_d_week3_concrete_but_off_theme_action_is_not_passed():
     assert example is None
 
 
-@pytest.mark.parametrize("week", [1, 5])
-def test_d_theme_guard_does_not_add_requirement_missing_from_level_three(week):
+@pytest.mark.parametrize("week", [1, 3, 5])
+def test_unified_d_theme_guard_enforces_story_alignment_for_every_book(week):
     ok, missing, suggestions, _example, meta = orid._enforce_d_theme_alignment(
         stage="D",
         student_text="每天放學後，我會練習投籃二十分鐘。",
@@ -746,9 +741,9 @@ def test_d_theme_guard_does_not_add_requirement_missing_from_level_three(week):
         },
     )
 
-    assert ok is True
-    assert missing == suggestions == []
-    assert meta.get("d_theme_alignment_guard") is None
+    assert ok is False
+    assert missing and suggestions
+    assert meta.get("d_theme_alignment_guard") is True
 
 
 def test_d_week3_theme_aligned_action_keeps_semantic_pass():
@@ -1345,11 +1340,11 @@ def test_maybe_demote_o_thin_pass_blocks_short_early_mid():
     )
     assert ok is False
     assert meta.get("rubric_level_demoted") is True
-    assert "砍樹" in missing[0] or "偏短" in missing[0] or "結尾" in missing[0] or "轉折" in missing[0]
+    assert "重要事件怎麼發展" in missing[0]
     assert sug and len(sug[0]) > 4
 
 
-def test_maybe_demote_ri_one_liners_without_keyword_demoting_d():
+def test_unified_short_answers_use_content_not_word_count_without_keyword_demoting_d():
     from app.prompts.policy.feedback_focus import (
         d_draft_meets_pass_bar,
         i_draft_meets_pass_bar,
@@ -1360,26 +1355,34 @@ def test_maybe_demote_ri_one_liners_without_keyword_demoting_d():
     i_thin = "這個故事讓我學到我應該大方一點，不要像阿松爺爺這樣小氣。"
     d_thin = "以後如果我遇到別人需要幫忙，我會去幫忙。"
 
-    assert r_draft_meets_pass_bar(r_thin) is False
+    assert r_draft_meets_pass_bar(r_thin) is True
     assert i_draft_meets_pass_bar(i_thin) is False
     assert d_draft_meets_pass_bar(d_thin) is False
 
-    for stage, draft, key in (
-        ("R", r_thin, "R1"),
-        ("I", i_thin, "I1"),
-    ):
-        ok, missing, sug, ex, meta = orid._maybe_demote_o_thin_pass(
-            stage=stage,
-            student_text=draft,
-            ok=True,
-            missing=[],
-            suggestions=[],
-            example=None,
-            rubric_meta={"rubric_focus": key, "rubric_level_estimate": {key: "3 達標"}},
-        )
-        assert ok is False, stage
-        assert meta.get("rubric_level_demoted") is True, stage
-        assert missing and sug
+    r_ok, r_missing, r_sug, *_ = orid._maybe_demote_o_thin_pass(
+        stage="R",
+        student_text=r_thin,
+        ok=True,
+        missing=[],
+        suggestions=[],
+        example=None,
+        rubric_meta={"rubric_focus": "R1", "rubric_level_estimate": {"R1": "3 達標"}},
+    )
+    assert r_ok is True
+    assert r_missing == r_sug == []
+
+    i_ok, i_missing, i_sug, _ex, i_meta = orid._maybe_demote_o_thin_pass(
+        stage="I",
+        student_text=i_thin,
+        ok=True,
+        missing=[],
+        suggestions=[],
+        example=None,
+        rubric_meta={"rubric_focus": "I1", "rubric_level_estimate": {"I1": "3 達標"}},
+    )
+    assert i_ok is False
+    assert i_meta.get("rubric_level_demoted") is True
+    assert i_missing and i_sug
 
     d_semantic_ok, d_missing, d_sug, *_ = orid._maybe_demote_o_thin_pass(
         stage="D",
@@ -1449,7 +1452,8 @@ def test_maybe_promote_ri_pass_bar_stops_ghost_wall_without_keyword_promoting_d(
     assert r_meta.get("rubric_level_promoted") is True
     assert r_meta.get("rubric_level_estimate", {}).get("R1") == "3 達標"
 
-    # Thin R must NOT promote (still needs rubric-guided coaching)
+    # A concise R can pass when it already contains a feeling and a story event
+    # as its reason; sentence length is not a rubric criterion.
     r_thin = "我覺得很生氣，因為他都故意不分享柿子"
     thin_ok, *_ = orid._maybe_promote_o_pass(
         stage="R",
@@ -1460,7 +1464,7 @@ def test_maybe_promote_ri_pass_bar_stops_ghost_wall_without_keyword_promoting_d(
         example=None,
         rubric_meta={"rubric_focus": "R1", "rubric_level_estimate": {"R1": "2 接近"}},
     )
-    assert thin_ok is False
+    assert thin_ok is True
 
     i_ok_draft = (
         "我學到分享比獨占更好，因為阿松爺爺後來砍了樹只剩樹樁才後悔，"

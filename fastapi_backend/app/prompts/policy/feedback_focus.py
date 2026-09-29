@@ -41,9 +41,8 @@ def _missing_options(stage: str, strength: str) -> tuple[str, ...]:
     if s == "O":
         if lv == "high":
             return (
-                "想一想書裡接下來還發生什麼：若還有一句**比較大的情節**幾乎沒出現在你寫的稿子裡，請先把那一句用你自己的話補進 O（可先寫一句接在合適的位置）。",
-                "目前幾件事寫得很清楚；下一步試著寫出**故事裡還沒提到的一段**（例如中間衝突或轉變），先用一段話串一個重點就好。",
-                "若書裡重點情節你都已經有寫到，再挑一個：補一句更細的動作、或補一句旁人反應（二選一）。",
+                "重要人物和事件已經有了；現在只要把這些事前後怎麼發展說清楚。",
+                "目前幾件事寫得很清楚；想一想哪一個前後變化最能讓讀者看懂故事發展。",
             )
         if lv == "mid":
             return (
@@ -271,27 +270,31 @@ _O_PASS_ARC_LATE: tuple[str, ...] = (
 
 
 def o_draft_meets_pass_bar(student_text: str) -> bool:
-    """True when O draft is ready to auto-pass (strong coverage).
+    """Conservative, book-neutral O fallback for a visible story development.
 
-    Requires character + markers from **all three** story arcs
-    (early conflict → mid hiding/stems → late climax/turn), enough length,
-    and at least 4 marker hits. Exact book wording is not required.
-
-    Thin early+mid summaries must NOT auto-pass; AI/prompt still guide
-    the student to add the missing arc.
+    Story correctness and importance are evaluated against the active book pack
+    by the semantic rubric. This helper intentionally checks only structural
+    evidence and never uses a book title, character name, or word-count quota.
     """
     t = (student_text or "").strip()
-    if len(t) < 60:
+    compact = re.sub(r"\s+", "", t)
+    if len(compact) < 8:
         return False
-    if not any(m in t for m in _O_PASS_CHARACTER_MARKERS):
+    if re.fullmatch(r"(?:我)?覺得.+", compact) and not any(
+        cue in t for cue in ("做", "說", "拿", "給", "去", "回", "離開", "發現", "變成")
+    ):
         return False
-
-    early, mid, late = o_draft_arc_flags(t)
-    arcs_hit = sum(1 for x in (early, mid, late) if x)
-    total_hits = 0
-    for arc in (_O_PASS_ARC_EARLY, _O_PASS_ARC_MID, _O_PASS_ARC_LATE):
-        total_hits += sum(1 for m in arc if m in t)
-    return arcs_hit >= 3 and total_hits >= 4
+    event_cues = (
+        "做", "說", "拿", "給", "找", "問", "請", "叫", "看", "寫", "讀",
+        "吃", "藏", "砍", "離開", "回來", "發現", "變成", "幫",
+    )
+    event_hits = sum(1 for cue in event_cues if cue in t)
+    has_development = any(
+        cue in t
+        for cue in ("一開始", "接著", "然後", "後來", "最後", "結果", "但是", "卻", "才")
+    )
+    has_two_clauses = len([part for part in re.split(r"[，。！？；,.!?;]", t) if part.strip()]) >= 2
+    return event_hits >= 2 and (has_development or has_two_clauses)
 
 
 def o_draft_arc_flags(student_text: str) -> tuple[bool, bool, bool]:
@@ -349,24 +352,15 @@ _R_SCENE_MARKERS: tuple[str, ...] = (
 
 
 def r_draft_meets_pass_bar(student_text: str) -> bool:
-    """R pass: feeling + reason + concrete story beat; one thin sentence must not pass."""
+    """Book-neutral R fallback: a clear feeling plus a story-linked reason."""
     t = (student_text or "").strip()
-    compact = re.sub(r"\s+", "", t)
-    if len(compact) < 42:
-        return False
     if not any(m in t for m in _R_FEELING_MARKERS):
         return False
-    if not any(m in t for m in _R_REASON_MARKERS):
+    reason_match = re.search(r"因為|看到|讀到|當.+時|讓我", t)
+    if not reason_match:
         return False
-    # Need a concrete scene cue (not only 「不分享」)
-    rich_story = any(m in t for m in _R_SCENE_MARKERS) or any(
-        m in t for m in _O_PASS_ARC_MID + _O_PASS_ARC_LATE
-    )
-    if not rich_story:
-        return False
-    if not any(m in t for m in _O_PASS_CHARACTER_MARKERS + ("爺爺", "奶奶", "柿子")):
-        return False
-    return True
+    reason = t[reason_match.end():].strip(" ，。！？、；：,.!?;:")
+    return len(reason) >= 3
 
 
 _I_LESSON_MARKERS: tuple[str, ...] = (
@@ -383,26 +377,15 @@ _I_GENERIC_ONLY: tuple[str, ...] = ("大方", "小氣", "善良", "分享很好"
 
 
 def i_draft_meets_pass_bar(student_text: str) -> bool:
-    """I pass: lesson + story-supported why; ban one-line moral slogans."""
+    """Book-neutral I fallback: an interpretation plus story support."""
     t = (student_text or "").strip()
-    compact = re.sub(r"\s+", "", t)
-    if len(compact) < 42:
-        return False
     if not any(m in t for m in _I_LESSON_MARKERS):
         return False
-    has_story = any(m in t for m in _O_PASS_CHARACTER_MARKERS + ("爺爺", "奶奶", "柿子")) and (
-        any(m in t for m in _O_PASS_ARC_EARLY + _O_PASS_ARC_MID + _O_PASS_ARC_LATE)
-        or any(m in t for m in ("因為", "所以", "從", "看到", "後來", "最後"))
-    )
-    if not has_story:
+    support_match = re.search(r"因為|從.+(?:看出|知道|發現)|故事裡|書裡|看到|後來|最後|結果", t)
+    if not support_match:
         return False
-    # Pure 「要大方／不要小氣」 without richer story beat → not enough
-    only_generic = any(g in t for g in _I_GENERIC_ONLY) and not any(
-        m in t for m in _O_PASS_ARC_MID + _O_PASS_ARC_LATE + ("大口", "獨占", "藏", "後悔", "種子")
-    )
-    if only_generic and len(compact) < 65:
-        return False
-    return True
+    support = t[support_match.end():].strip(" ，。！？、；：,.!?;:")
+    return len(support) >= 3
 
 
 _D_ACTION_MARKERS: tuple[str, ...] = ("我會", "我要", "下次", "打算", "先", "再")
@@ -498,61 +481,17 @@ def thin_stage_coaching(stage: str, student_text: str) -> tuple[str, str]:
     compact = re.sub(r"\s+", "", t)
 
     if s == "O":
-        has_early, has_mid, has_late = o_draft_arc_flags(t)
-        if has_early and has_mid and has_late and len(t) < 60:
-            return (
-                "你已經寫到故事的開頭、中間和後面的轉折，結尾的變化還沒有說清楚。",
-                "想一想：樹被砍掉以後，故事最後又發生了什麼？",
-            )
-        if has_early and has_mid and not has_late:
-            return (
-                "你已經寫到故事開頭和中間，結尾的轉折還沒有說清楚。",
-                "想一想：故事最後發生了什麼？",
-            )
-        if has_early and has_late and not has_mid:
-            return (
-                "你已經寫到故事開頭和最後，中間發生什麼還不清楚。",
-                "想一想：故事中間又發生了什麼？",
-            )
-        if has_mid and has_late and not has_early:
-            return (
-                "你已經寫到故事中間和最後，開頭發生什麼還不清楚。",
-                "想一想：故事一開始是誰做了什麼？",
-            )
-        if len(t) < 60:
-            if has_early:
-                return (
-                    "你已經寫出故事開頭，中間發生什麼還不清楚。",
-                    "想一想：接著發生了哪一件事？",
-                )
-            if has_mid:
-                return (
-                    "你寫到故事中間的事了，但開頭還不清楚。",
-                    "想一想：故事一開始是誰做了什麼？",
-                )
-            if has_late:
-                return (
-                    "你寫到故事最後的事了，但開頭還不清楚。",
-                    "想一想：故事一開始是誰做了什麼？",
-                )
-            return (
-                "目前還看不出故事先發生什麼。",
-                "想一想：故事一開始是誰做了什麼？",
-            )
         return (
-            "人物和事情都有了，再把其中一件事說清楚一點。",
-            "回到 O 觀察段，補一句：故事裡，＿＿做了＿＿。",
+            "你已經寫到一些故事內容，現在還看不出重要事件怎麼發展。",
+            "請回到 O 觀察段，想一想：這件事前面或接著又發生了什麼？",
         )
 
     if s == "R":
         has_feeling = any(m in t for m in _R_FEELING_MARKERS)
         has_reason = any(m in t for m in _R_REASON_MARKERS)
-        has_scene = any(m in t for m in _R_SCENE_MARKERS) or any(
-            m in t for m in _O_PASS_ARC_MID + _O_PASS_ARC_LATE
-        )
-        if has_feeling and has_reason and not has_scene:
+        if has_feeling and has_reason:
             return (
-                "你有感受和「因為」了，再補「書裡哪一幕」會更清楚，例如大口吃、藏倉庫或砍樹。",
+                "你有感受和原因了，但原因和故事中的哪一幕還不清楚。",
                 "哪一幕讓你最有這種感覺？看到誰做了什麼？",
             )
         if has_feeling and not has_reason:
@@ -560,31 +499,21 @@ def thin_stage_coaching(stage: str, student_text: str) -> tuple[str, str]:
                 "你有寫出感受了，請再補「因為書裡哪一件事」。",
                 "試著寫：我覺得……，因為故事裡……。",
             )
-        if len(compact) < 42:
-            return (
-                "目前還偏短，請把感受、原因，以及書裡那一幕都寫清楚一點。",
-                "可以寫：我覺得……，因為我看到……。",
-            )
         return (
-            "請把感受、原因和書裡具體那一幕都寫出來，R 才算達標。",
-            "哪一幕讓你有這個感覺？再多寫一句畫面。",
+            "目前還看不出你的感受和故事原因。",
+            "請回到 R 感受段想一想：哪一幕讓你有這種感覺？",
         )
 
     if s == "I":
         has_lesson = any(m in t for m in _I_LESSON_MARKERS)
-        if has_lesson and not any(m in t for m in _O_PASS_ARC_MID + _O_PASS_ARC_LATE + ("大口", "獨占", "藏", "後悔")):
+        if has_lesson:
             return (
-                "你有寫到學到什麼了，再補「故事裡哪一段讓你這樣想」，不要只說要大方／不要小氣。",
+                "你有寫到學到什麼了，再補故事裡哪一件事支持這個想法。",
                 "故事裡哪一件事讓你明白這個道理？",
             )
-        if len(compact) < 42:
-            return (
-                "目前還偏短，請寫出學到的道理，並連回書裡一件具體的事。",
-                "可以寫：我學到……，因為故事裡……。",
-            )
         return (
-            "請把「學到什麼」和「故事哪一段支持你」都寫清楚，I 才算達標。",
-            "從阿松爺爺哪一件事，你看出這個道理？",
+            "目前還看不出你從故事中學到或明白什麼。",
+            "請回到 I 體會段想一想：故事讓你明白什麼？",
         )
 
     # D
@@ -595,10 +524,11 @@ def thin_stage_coaching(stage: str, student_text: str) -> tuple[str, str]:
             "「去幫忙」方向對了，再寫清楚：什麼時候、幫誰、先做哪一步。",
             "可以寫：下次在……的時候，我會先……，再……。",
         )
-    if len(compact) < 40:
+    if d_draft_is_obvious_empty_wish(t):
+        idea = d_student_idea_anchor(t)
         return (
-            "目前還偏短，請寫出一個生活裡真的做得到的小行動，並說何時／對誰。",
-            "可以寫：如果遇到……，我會先……。",
+            f"你已經想到「{idea}」，現在再把它變成一件自己做得到的小行動。",
+            f"下次遇到什麼事情時，你會先做什麼來實現「{idea}」？",
         )
     return (
         "請把行動寫得更具體：什麼情況、對誰、先做哪一步，D 才算達標。",
@@ -971,9 +901,6 @@ def apply_o_key_event_gaps(
     if not isinstance(key_events, list) or not key_events:
         return missing, suggestions
 
-    if len(_compact_zh(student_text)) < 18:
-        return missing, suggestions
-
     # Keep concrete book events internal. Student-facing feedback only names
     # the missing story position, which also avoids semantic repeat requests.
     miss, sug = thin_stage_coaching("O", student_text)
@@ -1048,7 +975,11 @@ _O_BOOK_ARC_MARKERS: dict[str, dict[str, tuple[str, ...]]] = {
 
 
 def _diagnose_o_book_position(book_title: str, student_text: str) -> str:
-    """Return a stable O gap from book events, independent of model wording."""
+    """Return an O gap only when broad story development is still absent.
+
+    Two represented story arcs are enough for the unified level-3 threshold.
+    Requiring every arc would turn level-4 completeness into a prerequisite.
+    """
     text = re.sub(r"\s+", "", student_text or "")
     if not text:
         return ""
@@ -1059,13 +990,13 @@ def _diagnose_o_book_position(book_title: str, student_text: str) -> str:
             name: any(re.sub(r"\s+", "", marker) in text for marker in markers)
             for name, markers in arcs.items()
         }
+        if sum(1 for present in hit.values() if present) >= 2:
+            return "complete"
         if not hit["opening"]:
             return "opening"
         if not hit["middle"]:
             return "middle"
-        if not hit["turn"] or not hit["ending"]:
-            return "ending"
-        return "complete"
+        return "ending"
     return ""
 
 

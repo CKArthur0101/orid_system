@@ -42,7 +42,7 @@
 
 ### 給工程師
 
-系統由 **Next.js 前端 + FastAPI 後端 + PostgreSQL** 組成。前端透過 BFF（`app/api/*`）代理後端 API；後端負責 session、寫作儲存、LLM 回饋、grounding 檢查與 rubric 計分。書籍內容以 JSON `book_pack` 注入 prompt 與 RAG。
+系統由 **Next.js 前端 + FastAPI 後端 + PostgreSQL** 組成。前端透過 BFF（`app/api/*`）代理後端 API；後端負責 session、寫作儲存、LLM 回饋、grounding 檢查與 rubric 達標判斷。正式前後測由人工評分。書籍內容以 JSON `book_pack` 注入 prompt 與 RAG。
 
 ```mermaid
 flowchart TB
@@ -114,8 +114,8 @@ flowchart TB
 | **取得回饋** | 針對目前段落給結構化回饋（praise / missing / suggestions） | `POST /orid/writing-coach/chat`（`source: feedback_button`） |
 | **寫作小幫手聊天** | 右側回饋區顯示學生寫作 + AI 回饋卡片 | `FeedbackGuideCard.tsx`, `parse-feedback-narration.ts` |
 | **整合寫作** | 偶數週把上週四段合成一篇 | `SynthesisWritingGuide.tsx`, `synthesis-opening.ts` |
-| **徽章** | 依 rubric 總分（90 分制）解鎖 30 / 60 / 90 徽章 | `badgeRules.ts`, `orid_badges.py` |
-| **進度與分數** | 四段完成度、總分顯示 | `rubricScoring.ts`, `orid_rubric_scoring.py` |
+| **徽章** | 依 O／R／I／D 階段完成進度解鎖徽章 | `badgeRules.ts`, `orid_badges.py` |
+| **寫作進度** | 顯示四段完成度，不產生 AI 數字分數 | `badgeRules.ts`, `orid_rubric_scoring.py` |
 
 ### 教師端
 
@@ -224,7 +224,7 @@ sequenceDiagram
 
 | 檔案 | 職責 |
 |------|------|
-| `orid_rubric_scoring.py` | ORID + SEL rubric，滿分 90 |
+| `orid_rubric_scoring.py` | ORID + SEL rubric 等級解析與階段達標輔助，不換算數字總分 |
 | `orid_badges.py` | 徽章計算與事件 |
 | `orid_condition.py` | experimental / control 正規化 |
 | `orid_writing_store.py` | `orid_writing_v1` JSON 讀寫 |
@@ -473,7 +473,6 @@ docker compose -p orid-prod -f docker-compose.prod.yml --env-file .env.prod up -
   },
   "week2_flow": "orid_review",
   "synthesis_draft": "",
-  "score": { "totalScore": 45, "maxTotal": 90 },
   "earnedBadges": ["badge_start"]
 }
 ```

@@ -8,7 +8,10 @@ export type BadgeId =
   | "badge_30"
   | "badge_60"
   | "badge_90"
-  | "badge_synthesis_start";
+  | "badge_synthesis_content"
+  | "badge_synthesis_coherence"
+  | "badge_synthesis_reflection"
+  | "badge_synthesis_action";
 
 export type BadgeBookId = "book1" | "book2" | "book3";
 
@@ -34,7 +37,10 @@ export const BADGE_ORDER: BadgeId[] = [
   "badge_30",
   "badge_60",
   "badge_90",
-  "badge_synthesis_start",
+  "badge_synthesis_content",
+  "badge_synthesis_coherence",
+  "badge_synthesis_reflection",
+  "badge_synthesis_action",
 ];
 
 export const ORID_BADGE_ORDER: BadgeId[] = [
@@ -45,7 +51,10 @@ export const ORID_BADGE_ORDER: BadgeId[] = [
 ];
 
 export const SYNTHESIS_BADGE_ORDER: BadgeId[] = [
-  "badge_synthesis_start",
+  "badge_synthesis_content",
+  "badge_synthesis_coherence",
+  "badge_synthesis_reflection",
+  "badge_synthesis_action",
 ];
 
 const BOOK1_BADGE_IMAGES: Record<BadgeId, string> = {
@@ -53,7 +62,10 @@ const BOOK1_BADGE_IMAGES: Record<BadgeId, string> = {
   badge_30: "/images/orid/badges/badge_persimmon_bronze.png",
   badge_60: "/images/orid/badges/badge_persimmon_silver.png",
   badge_90: "/images/orid/badges/badge_persimmon_gold.png",
-  badge_synthesis_start: "/images/orid/badges/badge_persimmon_start.png",
+  badge_synthesis_content: "/images/orid/badges/badge_persimmon_start.png",
+  badge_synthesis_coherence: "/images/orid/badges/badge_persimmon_bronze.png",
+  badge_synthesis_reflection: "/images/orid/badges/badge_persimmon_silver.png",
+  badge_synthesis_action: "/images/orid/badges/badge_persimmon_gold.png",
 };
 
 const BOOK2_BADGE_IMAGES: Record<BadgeId, string> = {
@@ -61,7 +73,10 @@ const BOOK2_BADGE_IMAGES: Record<BadgeId, string> = {
   badge_30: "/images/orid/badges/badge_pig_bronze.png",
   badge_60: "/images/orid/badges/badge_pig_silver.png",
   badge_90: "/images/orid/badges/badge_pig_gold.png",
-  badge_synthesis_start: "/images/orid/badges/badge_pig_start.png",
+  badge_synthesis_content: "/images/orid/badges/badge_pig_start.png",
+  badge_synthesis_coherence: "/images/orid/badges/badge_pig_bronze.png",
+  badge_synthesis_reflection: "/images/orid/badges/badge_pig_silver.png",
+  badge_synthesis_action: "/images/orid/badges/badge_pig_gold.png",
 };
 
 const BOOK3_BADGE_IMAGES: Record<BadgeId, string> = {
@@ -69,7 +84,10 @@ const BOOK3_BADGE_IMAGES: Record<BadgeId, string> = {
   badge_30: "/images/orid/badges/badge_lion_bronze.png",
   badge_60: "/images/orid/badges/badge_lion_silver.png",
   badge_90: "/images/orid/badges/badge_lion_gold.png",
-  badge_synthesis_start: "/images/orid/badges/badge_lion_start.png",
+  badge_synthesis_content: "/images/orid/badges/badge_lion_start.png",
+  badge_synthesis_coherence: "/images/orid/badges/badge_lion_bronze.png",
+  badge_synthesis_reflection: "/images/orid/badges/badge_lion_silver.png",
+  badge_synthesis_action: "/images/orid/badges/badge_lion_gold.png",
 };
 
 const BADGE_IMAGES_BY_BOOK: Record<BadgeBookId, Record<BadgeId, string>> = {
@@ -83,7 +101,6 @@ const BOOK2_BADGE_NAMES: Partial<Record<BadgeId, { name: string; modalTitle: str
   badge_30: { name: "豬頭銅徽章", modalTitle: "恭喜獲得豬頭銅徽章！" },
   badge_60: { name: "豬頭銀徽章", modalTitle: "恭喜獲得豬頭銀徽章！" },
   badge_90: { name: "豬頭金徽章", modalTitle: "恭喜獲得豬頭金徽章！" },
-  badge_synthesis_start: { name: "整合下筆章", modalTitle: "恭喜獲得整合下筆章！" },
 };
 
 const BOOK3_BADGE_NAMES: Partial<Record<BadgeId, { name: string; modalTitle: string }>> = {
@@ -91,7 +108,6 @@ const BOOK3_BADGE_NAMES: Partial<Record<BadgeId, { name: string; modalTitle: str
   badge_30: { name: "獅子銅徽章", modalTitle: "恭喜獲得獅子銅徽章！" },
   badge_60: { name: "獅子銀徽章", modalTitle: "恭喜獲得獅子銀徽章！" },
   badge_90: { name: "獅子金徽章", modalTitle: "恭喜獲得獅子金徽章！" },
-  badge_synthesis_start: { name: "整合下筆章", modalTitle: "恭喜獲得整合下筆章！" },
 };
 
 export function resolveBadgeBookId(
@@ -192,16 +208,41 @@ export const BADGE_CONFIG: Record<BadgeId, BadgeConfig> = {
     modalText: "太棒了！你已經把觀察、感受、體會和行動都寫完了。",
     svgPath: "/images/orid/badges/badge_persimmon_gold.png",
   },
-  // Even-week integration task badge — independent track from badge_30/60/90.
-  badge_synthesis_start: {
-    id: "badge_synthesis_start",
-    name: "整合下筆章",
-    unlockHint: "開始整合寫作，並使用一次整合寫作引導，就可以獲得。",
-    earnedHint: "已獲得：你已經開始把上週的想法收成一篇，也問過小幫手了！",
-    modalTitle: "恭喜獲得整合下筆章！",
-    modalText:
-      "你已經開始把上週的觀察、感受、體會和行動收成一篇文章，也使用了整合寫作的引導。接下來可以照建議調整一個地方，讓文章更順。",
+  badge_synthesis_content: {
+    id: "badge_synthesis_content",
+    name: "內容整合章",
+    unlockHint: "寫出故事事件、自己的想法、體會與行動，並讓它們彼此有關。",
+    earnedHint: "已獲得：你已把故事、想法、體會與行動整合成一篇！",
+    modalTitle: "恭喜獲得內容整合章！",
+    modalText: "你已經把故事事件、自己的想法、學到的體會和未來行動整合起來了。",
     svgPath: "/images/orid/badges/badge_persimmon_start.png",
+  },
+  badge_synthesis_coherence: {
+    id: "badge_synthesis_coherence",
+    name: "文章連貫章",
+    unlockHint: "調整文章順序和前後連接，讓讀者能順利讀懂。",
+    earnedHint: "已獲得：讀者可以順著文章讀懂前後關係！",
+    modalTitle: "恭喜獲得文章連貫章！",
+    modalText: "你的文章順序清楚，故事、感受、體會和行動能自然接起來。",
+    svgPath: "/images/orid/badges/badge_persimmon_bronze.png",
+  },
+  badge_synthesis_reflection: {
+    id: "badge_synthesis_reflection",
+    name: "反思深度章",
+    unlockHint: "不只說發生什麼，也用故事說明自己的感受、想法或學習原因。",
+    earnedHint: "已獲得：你已說清楚自己為什麼這樣想！",
+    modalTitle: "恭喜獲得反思深度章！",
+    modalText: "你能用故事裡的事情說明自己的感受、想法或學習原因。",
+    svgPath: "/images/orid/badges/badge_persimmon_silver.png",
+  },
+  badge_synthesis_action: {
+    id: "badge_synthesis_action",
+    name: "行動應用章",
+    unlockHint: "提出自己能做到、具體可行，而且呼應故事體會的行動。",
+    earnedHint: "已獲得：你已把學到的事變成自己能做到的行動！",
+    modalTitle: "恭喜獲得行動應用章！",
+    modalText: "你提出了一個具體、可行，而且能呼應故事體會的行動。",
+    svgPath: "/images/orid/badges/badge_persimmon_gold.png",
   },
 };
 
@@ -212,10 +253,8 @@ export const BADGE_CONFIG: Record<BadgeId, BadgeConfig> = {
 export interface BadgeEvalInput {
   hasWritingContent: boolean;
   hasUsedFeedbackOrPrompt: boolean;
-  /** Completed ORID stages (O/R/I/D). Prefer this over totalScore. */
+  /** Completed ORID stages (O/R/I/D). */
   stagesPassed?: Iterable<string> | null;
-  /** @deprecated Score no longer unlocks badges; kept for call-site compat. */
-  totalScore?: number | null;
 }
 
 const STAGE_KEYS = new Set(["O", "R", "I", "D"]);
@@ -285,15 +324,26 @@ export function calculateEarnedBadges(input: BadgeEvalInput): BadgeId[] {
   return earned;
 }
 
-/** Even-week integration badge — independent of the O/R/I/D stage track. */
-export function calculateEarnedSynthesisBadge(input: {
-  hasSynthesisContent: boolean;
-  hasUsedSynthesisGuide: boolean;
-}): BadgeId[] {
-  if (input.hasSynthesisContent && input.hasUsedSynthesisGuide) {
-    return ["badge_synthesis_start"];
-  }
-  return [];
+export type SynthesisCriterionId =
+  | "content_integration"
+  | "coherence"
+  | "reflection_depth"
+  | "action_application";
+
+const SYNTHESIS_BADGE_BY_CRITERION: Record<SynthesisCriterionId, BadgeId> = {
+  content_integration: "badge_synthesis_content",
+  coherence: "badge_synthesis_coherence",
+  reflection_depth: "badge_synthesis_reflection",
+  action_application: "badge_synthesis_action",
+};
+
+/** Even-week quality badges: one per rubric criterion at level 3 or 4. */
+export function calculateEarnedSynthesisBadges(
+  levels: Partial<Record<SynthesisCriterionId, number>>,
+): BadgeId[] {
+  return (Object.keys(SYNTHESIS_BADGE_BY_CRITERION) as SynthesisCriterionId[])
+    .filter((criterion) => Number(levels[criterion] ?? 0) >= 3)
+    .map((criterion) => SYNTHESIS_BADGE_BY_CRITERION[criterion]);
 }
 
 /** Return badges in current that are NOT in previous. */

@@ -1,18 +1,8 @@
-"""ORID + SEL rubric scoring service.
+"""ORID and SEL rubric-level helpers.
 
-Scoring:
-  ORID: 4 criteria (O1, R1, I1, D1) × 10 pts each = 40 pts max
-  SEL:  5 CASEL criteria (SEL_SA, SEL_SM, SEL_SOA, SEL_RS, SEL_RD) × 10 pts each = 50 pts max
-  Total: 90 pts max
-
-Each criterion uses level 1–4 with triangular cumulative scoring
-(reaching level n means levels 1..n are all achieved):
-  level 1 (起步)  → 1  pt   (= 1)
-  level 2 (接近)  → 3  pts  (= 1+2)
-  level 3 (達標)  → 6  pts  (= 1+2+3)
-  level 4 (精進)  → 10 pts  (= 1+2+3+4)
-
-Formula: triangular_points(n) = n × (n + 1) ÷ 2
+Rubric levels support formative feedback and stage-completion decisions. Formal
+outcome scoring is performed by human raters, so this module intentionally does
+not convert AI-estimated levels into numeric ORID, SEL, or combined scores.
 """
 from __future__ import annotations
 
@@ -33,11 +23,6 @@ _SEL_ID_ALIASES: dict[str, str] = {
     "SEL_RA": "SEL_RD",
     # SEL_VR retired into I1; ignore for SEL scoring
 }
-
-POINTS_PER_CRITERION = 10.0
-ORID_MAX = len(ORID_CRITERION_IDS) * POINTS_PER_CRITERION   # 40
-SEL_MAX = len(SEL_CRITERION_IDS) * POINTS_PER_CRITERION      # 50
-TOTAL_MAX = 90
 
 # Chinese level label → int
 _LABEL_TO_INT = {
@@ -79,98 +64,6 @@ def parse_level(value: object) -> Optional[int]:
         if label in s:
             return n
     return None
-
-
-def triangular_points(level: int) -> int:
-    """Triangular cumulative score for a given level (1–4).
-
-    Reaching level n means levels 1..n are all achieved:
-      n=1 → 1,  n=2 → 3,  n=3 → 6,  n=4 → 10
-    """
-    return level * (level + 1) // 2
-
-
-def score_criterion(level: Optional[int], max_points: float = POINTS_PER_CRITERION) -> float:  # noqa: ARG001
-    """Convert level (1–4) to cumulative triangular points for this criterion.
-
-    Returns 0.0 if level is None (missing/not yet scored).
-    max_points is kept for API compatibility but is unused (max is always 10).
-    """
-    if level is None:
-        return 0.0
-    if level not in (1, 2, 3, 4):
-        return 0.0
-    return float(triangular_points(level))
-
-
-def calculate_orid_sel_score(
-    orid_levels: dict[str, object],
-    sel_levels: dict[str, object],
-) -> dict:
-    """Calculate ORID, SEL subtotals and totalScore.
-
-    Args:
-        orid_levels: dict mapping criterion_id → raw level value.
-                     Expected keys: O1, R1, I1, D1
-        sel_levels:  dict mapping criterion_id → raw level value.
-                     Expected keys: SEL_SA, SEL_SM, SEL_SOA, SEL_RS, SEL_RD
-                     (legacy SEL_EA/PT/RA aliases are normalized)
-
-    Returns:
-        {
-          "oridSubtotal": float,
-          "selSubtotal": float,
-          "totalScore": int,   # clamped 0–90
-          "maxTotal": 90,
-          "oridBreakdown": { criterion_id: float },
-          "selBreakdown": { criterion_id: float },
-          "missing": [criterion_id, ...],  # criteria with no level
-        }
-    """
-    orid_breakdown: dict[str, float] = {}
-    sel_breakdown: dict[str, float] = {}
-    missing: list[str] = []
-
-    # Normalize legacy SEL ids (SEL_EA → SEL_SA, etc.) before scoring
-    normalized_sel: dict[str, object] = {}
-    for raw_key, raw_val in (sel_levels or {}).items():
-        sid = normalize_sel_criterion_id(str(raw_key))
-        if sid:
-            _merge_level_prefer_higher(normalized_sel, sid, raw_val)
-
-    for cid in ORID_CRITERION_IDS:
-        raw = orid_levels.get(cid)
-        level = parse_level(raw)
-        if level is None:
-            missing.append(cid)
-        orid_breakdown[cid] = score_criterion(level)
-
-    for cid in SEL_CRITERION_IDS:
-        raw = normalized_sel.get(cid)
-        level = parse_level(raw)
-        if level is None:
-            missing.append(cid)
-        sel_breakdown[cid] = score_criterion(level)
-
-    orid_subtotal = round(sum(orid_breakdown.values()), 2)
-    sel_subtotal = round(sum(sel_breakdown.values()), 2)
-    total_raw = orid_subtotal + sel_subtotal
-    total_score = clamp_total_score(total_raw)
-
-    return {
-        "oridSubtotal": orid_subtotal,
-        "selSubtotal": sel_subtotal,
-        "totalScore": total_score,
-        "maxTotal": TOTAL_MAX,
-        "oridBreakdown": orid_breakdown,
-        "selBreakdown": sel_breakdown,
-        "missing": missing,
-    }
-
-
-def clamp_total_score(score: float) -> int:
-    """Clamp score to valid range 0–90 and return as int."""
-    return max(0, min(TOTAL_MAX, round(score)))
 
 
 STAGE_TO_ORID_CRITERION = {"O": "O1", "R": "R1", "I": "I1", "D": "D1"}

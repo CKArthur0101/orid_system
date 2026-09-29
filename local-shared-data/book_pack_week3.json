@@ -112,10 +112,8 @@
   "writing_rubric": {
     "schema": "writing_rubric_v1",
     "version": 1,
-    "purpose": "primary_orid_feedback_and_research_scoring",
+    "purpose": "primary_orid_feedback_and_stage_completion",
     "score_range": "1-4",
-    "scoring_formula": "triangular_cumulative_v1",
-    "scoring_note": "level n → n*(n+1)/2 pts (1→1, 2→3, 3→6, 4→10); ORID max 40",
     "ok_rule": "level_3_or_4_true_level_1_or_2_false",
     "student_bands": {
       "1": "開始寫",
@@ -181,9 +179,8 @@
   "sel_rubric": {
     "schema": "sel_rubric_v1",
     "version": 1,
-    "purpose": "auxiliary_guidance_and_research_scoring",
+    "purpose": "auxiliary_guidance_and_observational_evidence",
     "framework": "CASEL_five_competencies",
-    "scoring_formula": "triangular_cumulative_v1",
     "student_language_policy": "Do not mention SEL dimension names to students; convert them into concrete questions.",
     "by_stage": {
       "O": [],

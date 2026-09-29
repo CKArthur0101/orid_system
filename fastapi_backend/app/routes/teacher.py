@@ -286,10 +286,6 @@ def _extract_submission_research_fields(content: str | None) -> dict[str, str]:
         fields[f"{stage}_feedback_ok"] = ""
         fields[f"{stage}_rubric_focus"] = ""
         fields[f"{stage}_rubric_level_estimate"] = ""
-    # Score fields
-    fields["total_score"] = ""
-    fields["orid_subtotal"] = ""
-    fields["sel_subtotal"] = ""
     # Badge snapshot
     fields["earned_badges"] = ""
 
@@ -320,16 +316,6 @@ def _extract_submission_research_fields(content: str | None) -> dict[str, str]:
             if isinstance(meta, dict):
                 fields[f"{stage}_rubric_focus"] = str(meta.get("rubric_focus") or "").strip()
                 fields[f"{stage}_rubric_level_estimate"] = str(meta.get("rubric_level_estimate") or "").strip()
-
-    # Score snapshot from writing content
-    score_snap = obj.get("score")
-    if isinstance(score_snap, dict):
-        if score_snap.get("totalScore") is not None:
-            fields["total_score"] = str(score_snap["totalScore"])
-        if score_snap.get("oridSubtotal") is not None:
-            fields["orid_subtotal"] = str(score_snap["oridSubtotal"])
-        if score_snap.get("selSubtotal") is not None:
-            fields["sel_subtotal"] = str(score_snap["selSubtotal"])
 
     # Badge snapshot from writing content
     earned_badges = obj.get("earnedBadges")
@@ -811,34 +797,37 @@ async def get_writing_rubric(
     user: User = Depends(current_active_user),
 ):
     """
-    Return the writing_rubric for the given week from the reading's book_pack.
-    Used by the teacher dashboard to display scoring criteria when grading post-tests.
+    Return the code-shipped unified writing rubric for known experiment weeks.
+
+    Stored reading packs may contain rubric snapshots from an older deployment,
+    so the executable in-code configuration must take precedence.
     """
     await _get_allowed_class_ids(db, user)  # auth check
 
-    reading_title = READING_TITLE_TEMPLATE.format(week=week)
-    r_res = await db.execute(
-        select(Reading)
-        .where(Reading.title == reading_title)
-        .order_by(Reading.created_at.desc())
-        .limit(1)
-    )
-    reading = r_res.scalars().first()
-
     rubric: dict = {}
+    try:
+        from app.routes.orid import BOOK_PACK_BY_WEEK
+        rubric = (BOOK_PACK_BY_WEEK.get(week) or {}).get("writing_rubric") or {}
+    except Exception:
+        pass
+
+    if not rubric:
+        reading_title = READING_TITLE_TEMPLATE.format(week=week)
+        r_res = await db.execute(
+            select(Reading)
+            .where(Reading.title == reading_title)
+            .order_by(Reading.created_at.desc())
+            .limit(1)
+        )
+        reading = r_res.scalars().first()
+    else:
+        reading = None
+
     if reading and (reading.content or "").strip():
         try:
             from app.routes.orid import load_book_pack_from_reading
             bp = load_book_pack_from_reading(reading)
             rubric = (bp or {}).get("writing_rubric") or {}
-        except Exception:
-            pass
-
-    if not rubric:
-        # Fall back to in-code pack
-        try:
-            from app.routes.orid import BOOK_PACK_BY_WEEK
-            rubric = (BOOK_PACK_BY_WEEK.get(week) or {}).get("writing_rubric") or {}
         except Exception:
             pass
 
@@ -922,8 +911,6 @@ async def export_class_csv(
             earned_evt = next((e for e in events if e.badge_id == bid), None)
             fields[f"{bid}_earned"] = "1" if earned_evt else "0"
             fields[f"{bid}_earned_at"] = earned_evt.created_at.isoformat() if earned_evt else ""
-        total_scores = [e.total_score for e in events if e.total_score is not None]
-        fields["badge_max_score"] = str(max(total_scores)) if total_scores else ""
         fields["badge_feedback_count"] = str(max((e.feedback_count or 0) for e in events) if events else 0)
         fields["badge_prompt_view_count"] = str(max((e.prompt_view_count or 0) for e in events) if events else 0)
         fields["badge_word_count"] = str(max((e.word_count or 0) for e in events) if events else 0)
@@ -946,16 +933,14 @@ async def export_class_csv(
         "badge_30_earned", "badge_30_earned_at",
         "badge_60_earned", "badge_60_earned_at",
         "badge_90_earned", "badge_90_earned_at",
-        "badge_max_score", "badge_feedback_count",
+        "badge_feedback_count",
         "badge_prompt_view_count", "badge_word_count",
     ]
     writer.writerow([
         "姓名", "學生信箱", "研究組別", "目前階段", "對話輪數",
         "寫作完成格數", "回饋點擊次數", "回饋通過次數", "回饋通過格數",
         "後測_O", "後測_R", "後測_I", "後測_D", "後測_ALL",
-        # System AI scores are exploratory only (not formal RQ1/RQ2 DVs).
-        "ai_system_total_score_exploratory", "ai_system_orid_score_exploratory",
-        "ai_system_sel_score_exploratory", "earned_badges_participation",
+        "earned_badges_participation",
         *research_headers,
         *badge_headers,
     ])
@@ -980,9 +965,6 @@ async def export_class_csv(
             pts.get("I", ""),
             pts.get("D", ""),
             pts.get("ALL", ""),
-            research_fields.get("total_score", ""),
-            research_fields.get("orid_subtotal", ""),
-            research_fields.get("sel_subtotal", ""),
             research_fields.get("earned_badges", ""),
             *(research_fields.get(h, "") for h in research_headers),
             *(badge_fields.get(h, "") for h in badge_headers),
@@ -1003,10 +985,6 @@ async def export_class_csv(
 
 def _avg(values: list[float]) -> float:
     return round(sum(values) / len(values), 2) if values else 0.0
-
-
-def _avg_or_none(values: list[float]) -> float | None:
-    return round(sum(values) / len(values), 2) if values else None
 
 
 def _research_condition_for_student(student: User) -> str:
@@ -1030,9 +1008,6 @@ def _empty_research_student_row(student: User, week: int) -> ResearchStudentRow:
         revision_count=0,
         guide_use_count=0,
         badge_count=0,
-        orid_score=None,
-        sel_score=None,
-        total_score=None,
         is_submitted=False,
     )
 
@@ -1060,9 +1035,6 @@ def _summary_to_research_student_row(
         revision_count=summary.revision_count,
         guide_use_count=summary.guide_use_count,
         badge_count=summary.badge_count,
-        orid_score=summary.orid_score,
-        sel_score=summary.sel_score,
-        total_score=summary.total_score,
         is_submitted=summary.is_submitted,
     )
 
@@ -1119,7 +1091,6 @@ async def teacher_research_overview(
             summary_cards=ResearchSummaryCards(
                 total_students=0, experimental_count=0, control_count=0,
                 submitted_count=0, submission_rate=0.0, avg_guide_use_count=0.0,
-                avg_total_score=None,
             ),
             group_comparison=[],
             weekly_trends=[],
@@ -1154,8 +1125,6 @@ async def teacher_research_overview(
 
     total_rows = len(student_rows_out)
     submitted_count = sum(1 for r in student_rows_out if r.is_submitted)
-    total_scores = [r.total_score for r in student_rows_out if r.total_score is not None]
-
     summary_cards = ResearchSummaryCards(
         total_students=len(students),
         experimental_count=experimental_count,
@@ -1163,7 +1132,6 @@ async def teacher_research_overview(
         submitted_count=submitted_count,
         submission_rate=round(submitted_count / total_rows, 4) if total_rows else 0.0,
         avg_guide_use_count=_avg([r.guide_use_count for r in student_rows_out]),
-        avg_total_score=_avg_or_none(total_scores),
     )
 
     group_comparison: list[ResearchGroupComparisonRow] = []
@@ -1179,9 +1147,6 @@ async def teacher_research_overview(
                 avg_revision_count=_avg([r.revision_count for r in cond_rows]),
                 avg_guide_use_count=_avg([r.guide_use_count for r in cond_rows]),
                 avg_badge_count=_avg([r.badge_count for r in cond_rows]),
-                avg_orid_score=_avg_or_none([r.orid_score for r in cond_rows if r.orid_score is not None]),
-                avg_sel_score=_avg_or_none([r.sel_score for r in cond_rows if r.sel_score is not None]),
-                avg_total_score=_avg_or_none([r.total_score for r in cond_rows if r.total_score is not None]),
                 submission_rate=round(cond_submitted / len(cond_rows), 4) if cond_rows else 0.0,
             )
         )
@@ -1218,9 +1183,6 @@ async def teacher_research_overview(
                     avg_revision_count=_avg([r.revision_count for r in rows]),
                     avg_guide_use_count=_avg([r.guide_use_count for r in rows]),
                     avg_badge_count=_avg([r.badge_count for r in rows]),
-                    avg_orid_score=_avg_or_none([r.orid_score for r in rows if r.orid_score is not None]),
-                    avg_sel_score=_avg_or_none([r.sel_score for r in rows if r.sel_score is not None]),
-                    avg_total_score=_avg_or_none([r.total_score for r in rows if r.total_score is not None]),
                     student_count=len({r.student_id for r in rows}),
                 )
             )
@@ -1302,12 +1264,7 @@ async def export_research_csv(
     writer.writerow([
         "student_id", "student_email", "student_name", "condition", "week", "task_type",
         "word_count", "save_count", "revision_count", "guide_use_count",
-        "badge_count", "earned_badges",
-        # Exploratory system AI scores — NOT formal RQ1/RQ2 dependent variables.
-        "ai_system_orid_score_exploratory",
-        "ai_system_sel_score_exploratory",
-        "ai_system_total_score_exploratory",
-        "is_submitted",
+        "badge_count", "earned_badges", "is_submitted",
     ])
     for row in overview.student_rows:
         writer.writerow([
@@ -1323,9 +1280,6 @@ async def export_research_csv(
             row.guide_use_count,
             row.badge_count,
             _ordered_badges(badges_by_student_week.get((row.student_id, int(row.week)), set())),
-            row.orid_score if row.orid_score is not None else "",
-            row.sel_score if row.sel_score is not None else "",
-            row.total_score if row.total_score is not None else "",
             _csv_bool(row.is_submitted),
         ])
 

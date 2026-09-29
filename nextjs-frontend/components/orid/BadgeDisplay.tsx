@@ -139,7 +139,13 @@ export function BadgeDisplay({
                         ? "銀"
                         : id === "badge_90"
                           ? "金"
-                          : "整"}
+                          : id === "badge_synthesis_content"
+                            ? "整"
+                            : id === "badge_synthesis_coherence"
+                              ? "順"
+                              : id === "badge_synthesis_reflection"
+                                ? "思"
+                                : "行"}
                 </span>
               ) : (
                 <LockedBadgeCircle size={size} />

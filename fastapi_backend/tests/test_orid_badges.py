@@ -3,14 +3,14 @@ from __future__ import annotations
 
 from app.services.orid_badges import (
     BADGE_ORDER,
-    _score_from_writing_obj,
     calculate_earned_badges,
-    calculate_earned_synthesis_badge,
+    calculate_earned_synthesis_badges,
     get_new_badges,
     should_show_badge_modal,
     stages_passed_from_orid_levels,
     stages_passed_from_writing_obj,
 )
+from app.content.synthesis_rubric import first_synthesis_gap, synthesis_fallback_reply
 
 
 class TestCalculateEarnedBadges:
@@ -67,15 +67,6 @@ class TestCalculateEarnedBadges:
         assert "badge_60" in result
         assert "badge_90" in result
 
-    def test_score_alone_does_not_unlock(self):
-        result = calculate_earned_badges(
-            has_writing_content=False,
-            has_used_feedback_or_prompt=False,
-            stages_passed=None,
-            total_score=90,
-        )
-        assert result == []
-
 
 class TestStagesPassedHelpers:
     def test_from_writing_ok(self):
@@ -125,60 +116,66 @@ class TestShouldShowBadgeModal:
 
 
 def test_badge_order_covers_orid_track_plus_synthesis():
-    assert len(BADGE_ORDER) == 5
+    assert len(BADGE_ORDER) == 8
     assert "badge_start" in BADGE_ORDER
     assert "badge_90" in BADGE_ORDER
-    assert "badge_synthesis_start" in BADGE_ORDER
+    assert "badge_synthesis_content" in BADGE_ORDER
+    assert "badge_synthesis_action" in BADGE_ORDER
 
 
 class TestCalculateEarnedSynthesisBadge:
-    def test_no_content_no_badge(self):
-        assert calculate_earned_synthesis_badge(
-            has_synthesis_content=False, has_used_synthesis_guide=False
-        ) == []
+    def test_missing_levels_give_no_badges(self):
+        assert calculate_earned_synthesis_badges(rubric_levels={}) == []
 
-    def test_content_without_guide_use_no_badge(self):
-        assert calculate_earned_synthesis_badge(
-            has_synthesis_content=True, has_used_synthesis_guide=False
-        ) == []
-
-    def test_content_plus_guide_use_gives_badge(self):
-        result = calculate_earned_synthesis_badge(
-            has_synthesis_content=True, has_used_synthesis_guide=True
+    def test_only_level_three_or_four_earn_matching_badges(self):
+        result = calculate_earned_synthesis_badges(
+            rubric_levels={
+                "content_integration": 3,
+                "coherence": 2,
+                "reflection_depth": "4 精進",
+                "action_application": 1,
+            }
         )
-        assert result == ["badge_synthesis_start"]
+        assert result == ["badge_synthesis_content", "badge_synthesis_reflection"]
+
+    def test_all_four_criteria_can_earn_four_badges(self):
+        result = calculate_earned_synthesis_badges(
+            rubric_levels={
+                "content_integration": 3,
+                "coherence": 3,
+                "reflection_depth": 3,
+                "action_application": 3,
+            }
+        )
+        assert result == [
+            "badge_synthesis_content",
+            "badge_synthesis_coherence",
+            "badge_synthesis_reflection",
+            "badge_synthesis_action",
+        ]
 
     def test_independent_from_orid_stage_badges(self):
         """The synthesis badge must not imply/require any O/R/I/D stage badge."""
-        synth = calculate_earned_synthesis_badge(
-            has_synthesis_content=True, has_used_synthesis_guide=True
+        synth = calculate_earned_synthesis_badges(
+            rubric_levels={"content_integration": 3}
         )
         orid = calculate_earned_badges(
             has_writing_content=False,
             has_used_feedback_or_prompt=False,
             stages_passed=None,
         )
-        assert synth == ["badge_synthesis_start"]
+        assert synth == ["badge_synthesis_content"]
         assert orid == []
 
-
-class TestScoreFromWritingObj:
-    def test_persisted_score_snapshot(self):
-        obj = {"score": {"totalScore": 12, "maxTotal": 90}}
-        snap, total = _score_from_writing_obj(obj)
-        assert total == 12
-        assert snap["totalScore"] == 12
-
-    def test_compute_from_feedback_meta(self):
-        obj = {
-            "stages": {
-                "O": {
-                    "feedback": {
-                        "d1": {"meta": {"rubric_level_estimate": "2 接近", "rubric_focus": "O1"}}
-                    }
-                }
-            }
+    def test_first_gap_and_fallback_guidance_target_same_criterion(self):
+        levels = {
+            "content_integration": 3,
+            "coherence": 3,
+            "reflection_depth": 2,
+            "action_application": 1,
         }
-        snap, total = _score_from_writing_obj(obj)
-        assert total == 3
-        assert snap["totalScore"] == 3
+        focus = first_synthesis_gap(levels)
+        assert focus == "reflection_depth"
+        reply = synthesis_fallback_reply(focus)
+        assert "為什麼" in reply
+        assert "下一次遇到" not in reply

@@ -57,11 +57,7 @@ from app.prompts.builders.coach_chat import (
 from app.prompts.playbook_variants import pick_variant
 from app.utils import strip_markdown_for_student_chat
 from app.services.orid_rubric_scoring import (
-    ORID_CRITERION_IDS,
-    SEL_CRITERION_IDS,
     apply_single_level_estimate,
-    calculate_orid_sel_score,
-    clamp_total_score,
     collect_levels_from_writing_obj,
     extract_orid_levels_from_rubric_meta,
     parse_level,
@@ -69,21 +65,25 @@ from app.services.orid_rubric_scoring import (
 )
 from app.services.orid_badges import (
     calculate_earned_badges,
-    calculate_earned_synthesis_badge,
+    calculate_earned_synthesis_badges,
     get_new_badges,
     get_earned_badges_from_db,
     load_session_progress,
     record_badge_events,
     stages_passed_from_orid_levels,
     stages_passed_from_writing_obj,
-    update_session_score_snapshot,
+)
+from app.content.synthesis_rubric import (
+    SYNTHESIS_CRITERIA_ORDER,
+    first_synthesis_gap,
+    normalize_synthesis_levels,
+    synthesis_fallback_reply,
 )
 from app.services.orid_research_summary import (
     bump_guide_use,
     bump_save_and_maybe_revision,
     mark_submitted,
     sync_badges,
-    sync_scores,
 )
 from app.prompts.policy.student_input_bucket import (
     classify_student_input,
@@ -971,7 +971,7 @@ def _orid_stage_d1_from_writing_content(raw: str | None) -> dict[str, str]:
 
 
 def _strip_system_score_from_writing_content(content: str) -> str:
-    """Remove exploratory AI score snapshot from writing JSON (control group)."""
+    """Remove retired AI score snapshots from writing JSON."""
     try:
         obj = json.loads(content)
         if isinstance(obj, dict) and "score" in obj:
@@ -3435,11 +3435,7 @@ async def get_orid_progress(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
-    """Return persisted badges and score for the student's session/week.
-
-    Control sessions never receive system AI scores (research: exploratory scores
-    are experimental-only; formal RQ1/RQ2 use human rubrics).
-    """
+    """Return persisted badges for the student's session/week."""
     r = await db.execute(select(OridSession).filter(OridSession.id == session_id))
     session = r.scalars().first()
     if not session or session.user_id != user.id:
@@ -3456,9 +3452,6 @@ async def get_orid_progress(
         writing_content=writing_content,
         empty_writing_factory=_ensure_orid_writing_v1,
     )
-    if is_control_condition(session.condition, default=DEFAULT_ORID_CONDITION):
-        progress["totalScore"] = None
-        progress["score"] = {}
     return OridProgressRead(**progress)
 
 
@@ -3497,12 +3490,9 @@ async def record_prompt_usage(
     stages_passed: set[str] = set()
     current_badges: list[str] = []
     if is_synthesis_week:
-        # Even-week integration badge — independent of the O/R/I/D stage
-        # track; rewards starting the integrated draft + viewing the guide.
-        current_badges = calculate_earned_synthesis_badge(
-            has_synthesis_content=has_content,
-            has_used_synthesis_guide=True,
-        )
+        # The fixed-prompt control path has no rubric assessor. Do not award
+        # quality badges from writing length or prompt views alone.
+        current_badges = []
     else:
         try:
             writing_raw = await _fetch_latest_writing_content_for_week(
@@ -3537,7 +3527,6 @@ async def record_prompt_usage(
             task_type="synthesis" if is_synthesis_week else "orid_stage",
             condition=session.condition,
             new_badge_ids=new_badges,
-            total_score=None,
             word_count=word_count,
             feedback_count=0,
             prompt_view_count=new_prompt_total,
@@ -3667,6 +3656,9 @@ async def writing_coach_chat(
     fb_imp: Optional[str] = None
     fb_praise: Optional[str] = None
     coach_meta: dict[str, Any] = {}
+    synthesis_levels: dict[str, int] = {}
+    synthesis_focus: str | None = None
+    synthesis_sel_focus: str | None = None
     feedback_strength = detect_feedback_strength(stage_ctx, body) if source == "feedback_button" else None
 
     if source == "feedback_button":
@@ -4107,11 +4099,38 @@ async def writing_coach_chat(
         oa_syn: list[dict[str, str]] = [{"role": "system", "content": sys_p}]
         oa_syn.extend(hist_syn)
         try:
-            ai_reply = await _chat_completion(
+            raw_synthesis = await _chat_completion(
                 oa_syn,
-                max_completion_tokens=OPENAI_MAX_COMPLETION_TOKENS,
+                max_completion_tokens=max(700, OPENAI_MAX_COMPLETION_TOKENS),
                 temperature=OPENAI_TEMPERATURE if OPENAI_TEMPERATURE is not None else ORID_MAIN_FALLBACK_TEMPERATURE,
+                response_format={"type": "json_object"},
             )
+            parsed_synthesis = extract_json_object(raw_synthesis)
+            synthesis_levels = normalize_synthesis_levels(
+                parsed_synthesis.get("rubric_levels")
+            )
+            if len(synthesis_levels) == len(SYNTHESIS_CRITERIA_ORDER):
+                gap = first_synthesis_gap(synthesis_levels)
+                requested_focus = str(parsed_synthesis.get("focus") or "").strip()
+                focus_is_valid = (
+                    requested_focus
+                    if requested_focus in SYNTHESIS_CRITERIA_ORDER
+                    and synthesis_levels.get(requested_focus, 0) < 3
+                    else None
+                )
+                synthesis_focus = focus_is_valid or gap
+                requested_sel = str(parsed_synthesis.get("sel_focus") or "").strip().upper()
+                synthesis_sel_focus = (
+                    requested_sel
+                    if requested_sel in {"SEL_SA", "SEL_SM", "SEL_SOA", "SEL_RS", "SEL_RD"}
+                    else None
+                )
+                ai_reply = str(parsed_synthesis.get("reply") or "").strip()
+                if gap is None or focus_is_valid is None or not ai_reply:
+                    ai_reply = synthesis_fallback_reply(synthesis_focus)
+            else:
+                synthesis_focus = "content_integration"
+                ai_reply = synthesis_fallback_reply(synthesis_focus)
         except Exception:
             ai_reply = "我這邊有點忙不過來，你先儲存草稿，等一下再試試看。"
         if not (ai_reply or "").strip():
@@ -4119,6 +4138,13 @@ async def writing_coach_chat(
         coach_meta["synthesis_context"] = True
         coach_meta["synthesis_phase"] = syn_phase
         coach_meta["feedback_round"] = syn_round
+        if synthesis_levels:
+            coach_meta["synthesis_rubric_levels"] = synthesis_levels
+            coach_meta["synthesis_focus"] = synthesis_focus
+            coach_meta["synthesis_sel_focus"] = synthesis_sel_focus
+            coach_meta["synthesis_complete"] = all(
+                synthesis_levels.get(key, 0) >= 3 for key in SYNTHESIS_CRITERIA_ORDER
+            )
         if reading_ex:
             coach_meta["reading_excerpt_injected"] = True
         await bump_guide_use(db, user_id=user.id, week=data.week, session_id=session.id, amount=1)
@@ -4171,10 +4197,8 @@ async def writing_coach_chat(
         },
     )
 
-    # ---- Scoring + badge computation (must not fail the chat reply) ----
-    score_result: dict[str, Any] = {}
+    # ---- Rubric progress + badge computation (must not fail the chat reply) ----
     badge_meta: dict[str, Any] = {}
-    rubric_levels_snapshot: dict[str, int] = {}
     if source == "feedback_button":
         # Research summary: "取得回饋" was used regardless of ok/not-ok outcome
         # below — counts as one guiding-resource use for the experimental group.
@@ -4221,29 +4245,10 @@ async def writing_coach_chat(
                     orid_levels=orid_levels,
                     sel_levels=sel_levels,
                 )
-            score_result = calculate_orid_sel_score(orid_levels, sel_levels)
-
-            # Build rubric_levels snapshot: integer 1–4 per criterion (for frontend/research)
-            rubric_levels_snapshot: dict[str, int] = {}
-            for cid in ORID_CRITERION_IDS:
-                lv = parse_level(orid_levels.get(cid))
-                if lv is not None:
-                    rubric_levels_snapshot[cid] = lv
-            for cid in SEL_CRITERION_IDS:
-                lv = parse_level(sel_levels.get(cid))
-                if lv is not None:
-                    rubric_levels_snapshot[cid] = lv
-
-            # Badge evaluation — stage progress (not total-score thresholds)
+            # Badge evaluation uses ORID stage progress only.
             has_content = bool((body or "").strip())
-            total_score_int = score_result.get("totalScore") if score_result else None
             stage_u = (stage_ctx or "O").strip().upper()
             is_control = is_control_condition(condition, default=DEFAULT_ORID_CONDITION)
-            # Control should not reach here (Phase 4 403); if it does, skip system scores.
-            if is_control:
-                score_result = {}
-                total_score_int = None
-                rubric_levels_snapshot = {}
             stages_passed: set[str] = set()
             if saved_obj is not None:
                 try:
@@ -4267,7 +4272,6 @@ async def writing_coach_chat(
                 has_writing_content=has_content,
                 has_used_feedback_or_prompt=True,
                 stages_passed=stages_passed,
-                total_score=total_score_int,
             )
             new_badges = get_new_badges(prev_badges, current_badges)
             try:
@@ -4281,31 +4285,11 @@ async def writing_coach_chat(
                         task_type="orid_stage",
                         condition=condition,
                         new_badge_ids=new_badges,
-                        total_score=total_score_int,
                         word_count=len(body) if body else 0,
                         feedback_count=1,
                         prompt_view_count=0,
                         used_feedback_or_prompt=True,
                     )
-                if total_score_int is not None:
-                    await update_session_score_snapshot(
-                        db,
-                        user_id=user.id,
-                        session_id=session.id,
-                        week=week_num,
-                        total_score=total_score_int,
-                    )
-                # Research summary keyed by the real academic week (1–6) from
-                # the request (same as week_num after Phase 5 fix).
-                await sync_scores(
-                    db,
-                    user_id=user.id,
-                    week=week_num,
-                    session_id=session.id,
-                    orid_score=score_result.get("oridSubtotal") if score_result else None,
-                    sel_score=score_result.get("selSubtotal") if score_result else None,
-                    total_score=total_score_int,
-                )
                 await sync_badges(
                     db,
                     user_id=user.id,
@@ -4316,7 +4300,7 @@ async def writing_coach_chat(
                 await db.commit()
             except Exception:
                 logger.exception(
-                    "badge/score persistence failed",
+                    "badge persistence failed",
                     extra={"session_id": str(session.id)},
                 )
             badge_meta = {
@@ -4326,16 +4310,12 @@ async def writing_coach_chat(
 
         except Exception:
             logger.exception(
-                "feedback scoring/badge block failed; returning chat reply without score meta",
+                "feedback progress/badge block failed; returning chat reply without badge meta",
                 extra={"session_id": str(session.id), "stage": stage_ctx},
             )
-            score_result = {}
             badge_meta = {}
-            rubric_levels_snapshot = {}
     elif source == "synthesis_feedback":
-        # Even-week integration badge only — independent of the O/R/I/D
-        # stage-progress track (badge_30/60/90). Rewards starting the
-        # integrated draft + using the synthesis guide/AI feedback once.
+        # One independent badge per integrated-writing criterion at level 3+.
         try:
             try:
                 week_num = int(data.week)
@@ -4347,9 +4327,8 @@ async def writing_coach_chat(
             prev_badges = await get_earned_badges_from_db(
                 db, user_id=user.id, session_id=session.id, week=week_num
             )
-            current_synth_badges = calculate_earned_synthesis_badge(
-                has_synthesis_content=bool(body),
-                has_used_synthesis_guide=True,
+            current_synth_badges = calculate_earned_synthesis_badges(
+                rubric_levels=synthesis_levels,
             )
             new_synth_badges = get_new_badges(prev_badges, current_synth_badges)
             if new_synth_badges:
@@ -4362,7 +4341,6 @@ async def writing_coach_chat(
                     task_type="synthesis",
                     condition=condition,
                     new_badge_ids=new_synth_badges,
-                    total_score=None,
                     word_count=len(body) if body else 0,
                     feedback_count=1,
                     prompt_view_count=0,
@@ -4397,8 +4375,6 @@ async def writing_coach_chat(
             "opening_hint": opening_hint,
             **({"rubric_focus": rf} if (rf := (fb_rubric.get("rubric_focus") if source == "feedback_button" else None)) else {}),
             **({"rubric_level_estimate": rl} if (rl := (fb_rubric.get("rubric_level_estimate") if source == "feedback_button" else None)) else {}),
-            **({"rubric_levels": rubric_levels_snapshot} if (source == "feedback_button" and rubric_levels_snapshot) else {}),
-            **({"score": score_result} if score_result else {}),
             **badge_meta,
         }
     )
@@ -4765,9 +4741,7 @@ async def create_writing(
     if not data.content.strip():
         raise HTTPException(status_code=400, detail="content is empty")
 
-    content_str = data.content.strip()
-    if is_control_condition(session.condition, default=DEFAULT_ORID_CONDITION):
-        content_str = _strip_system_score_from_writing_content(content_str)
+    content_str = _strip_system_score_from_writing_content(data.content.strip())
 
     ins = pg_insert(OridWeekSubmission).values(
         id=uuid4(),
@@ -4855,12 +4829,7 @@ async def update_writing(
     if not content:
         raise HTTPException(status_code=400, detail="content is empty")
 
-    sess_r = await db.execute(select(OridSession).filter(OridSession.id == w.session_id))
-    writing_session = sess_r.scalars().first()
-    if writing_session and is_control_condition(
-        writing_session.condition, default=DEFAULT_ORID_CONDITION
-    ):
-        content = _strip_system_score_from_writing_content(content)
+    content = _strip_system_score_from_writing_content(content)
 
     w.content = content
     await db.commit()

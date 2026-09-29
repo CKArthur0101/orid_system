@@ -120,6 +120,7 @@ celerybeat.pid
 .env.prod
 .env.*.local
 .venv
+.pnpm-store/
 env/
 venv/
 ENV/

@@ -24,7 +24,13 @@ export function BadgeModal({ badgeId, bookId, week, onClose }: BadgeModalProps) 
           ? "銀"
           : badgeId === "badge_90"
             ? "金"
-            : "整";
+            : badgeId === "badge_synthesis_content"
+              ? "整"
+              : badgeId === "badge_synthesis_coherence"
+                ? "順"
+                : badgeId === "badge_synthesis_reflection"
+                  ? "思"
+                  : "行";
 
   return (
     <div

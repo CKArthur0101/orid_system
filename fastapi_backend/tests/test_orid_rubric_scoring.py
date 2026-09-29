@@ -1,19 +1,52 @@
 """Tests for orid_rubric_scoring service."""
 from __future__ import annotations
 
-import pytest
 from app.services.orid_rubric_scoring import (
-    TOTAL_MAX,
     apply_single_level_estimate,
-    calculate_orid_sel_score,
-    clamp_total_score,
     collect_levels_from_writing_obj,
     extract_orid_levels_from_rubric_meta,
     parse_level,
     primary_orid_level_from_rubric_meta,
-    score_criterion,
-    triangular_points,
 )
+from app.content.rubrics import (
+    WEEK1_ORID_RUBRIC,
+    WEEK1_SEL_RUBRIC,
+    WEEK3_ORID_RUBRIC,
+    WEEK3_SEL_RUBRIC,
+    WEEK5_ORID_RUBRIC,
+    WEEK5_SEL_RUBRIC,
+)
+
+
+def test_rubrics_do_not_define_ai_numeric_scoring():
+    for rubric in (
+        WEEK1_ORID_RUBRIC,
+        WEEK1_SEL_RUBRIC,
+        WEEK3_ORID_RUBRIC,
+        WEEK3_SEL_RUBRIC,
+        WEEK5_ORID_RUBRIC,
+        WEEK5_SEL_RUBRIC,
+    ):
+        assert "scoring_formula" not in rubric
+        assert "scoring_note" not in rubric
+        assert "total_score" not in rubric
+
+
+def test_all_books_share_identical_orid_and_sel_standards():
+    assert WEEK1_ORID_RUBRIC == WEEK3_ORID_RUBRIC == WEEK5_ORID_RUBRIC
+    assert WEEK1_SEL_RUBRIC == WEEK3_SEL_RUBRIC == WEEK5_SEL_RUBRIC
+
+    # Separate objects prevent a book-specific runtime mutation from leaking.
+    assert WEEK1_ORID_RUBRIC is not WEEK3_ORID_RUBRIC
+    assert WEEK3_ORID_RUBRIC is not WEEK5_ORID_RUBRIC
+    assert WEEK1_SEL_RUBRIC is not WEEK3_SEL_RUBRIC
+    assert WEEK3_SEL_RUBRIC is not WEEK5_SEL_RUBRIC
+
+
+def test_unified_d_level_three_requires_action_and_story_alignment():
+    level_three = WEEK1_ORID_RUBRIC["by_stage"]["D"][0]["levels"][2]["desc"]
+    assert "具體可行" in level_three
+    assert "呼應故事體會" in level_three
 
 
 class TestParseLevel:
@@ -38,104 +71,6 @@ class TestParseLevel:
 
     def test_garbage_returns_none(self):
         assert parse_level("abc") is None
-
-
-class TestTriangularPoints:
-    def test_level1(self):
-        assert triangular_points(1) == 1
-
-    def test_level2(self):
-        assert triangular_points(2) == 3
-
-    def test_level3(self):
-        assert triangular_points(3) == 6
-
-    def test_level4(self):
-        assert triangular_points(4) == 10
-
-
-class TestScoreCriterion:
-    def test_level1(self):
-        assert score_criterion(1) == pytest.approx(1.0)
-
-    def test_level2(self):
-        assert score_criterion(2) == pytest.approx(3.0)
-
-    def test_level3(self):
-        assert score_criterion(3) == pytest.approx(6.0)
-
-    def test_level4(self):
-        assert score_criterion(4) == pytest.approx(10.0)
-
-    def test_none_gives_zero(self):
-        assert score_criterion(None) == 0.0
-
-
-class TestClampTotalScore:
-    def test_normal(self):
-        assert clamp_total_score(55.5) == 56
-
-    def test_above_max(self):
-        assert clamp_total_score(100) == TOTAL_MAX
-
-    def test_below_zero(self):
-        assert clamp_total_score(-5) == 0
-
-    def test_exact_max(self):
-        assert clamp_total_score(90) == 90
-
-
-class TestCalculateOridSelScore:
-    def test_all_level4_gives_90(self):
-        orid = {"O1": 4, "R1": 4, "I1": 4, "D1": 4}
-        sel = {"SEL_SA": 4, "SEL_SM": 4, "SEL_SOA": 4, "SEL_RS": 4, "SEL_RD": 4}
-        result = calculate_orid_sel_score(orid, sel)
-        assert result["totalScore"] == 90
-        assert result["oridSubtotal"] == pytest.approx(40.0)
-        assert result["selSubtotal"] == pytest.approx(50.0)
-        assert result["missing"] == []
-
-    def test_legacy_sel_aliases_normalize(self):
-        orid = {"O1": 4, "R1": 4, "I1": 4, "D1": 4}
-        # Legacy: EA→SA, PT_R/PT_I→SOA (max), RA→RD; VR ignored; SM/RS still missing
-        sel = {"SEL_EA": 4, "SEL_PT_R": 3, "SEL_VR": 4, "SEL_PT_I": 4, "SEL_RA": 4}
-        result = calculate_orid_sel_score(orid, sel)
-        assert result["oridSubtotal"] == pytest.approx(40.0)
-        # SA=10, SOA=10 (max of 6/10), RD=10; SM/RS missing → 30
-        assert result["selSubtotal"] == pytest.approx(30.0)
-        assert result["totalScore"] == 70
-        assert "SEL_SM" in result["missing"]
-        assert "SEL_RS" in result["missing"]
-
-    def test_all_level1_gives_minimum(self):
-        orid = {"O1": 1, "R1": 1, "I1": 1, "D1": 1}
-        sel = {"SEL_SA": 1, "SEL_SM": 1, "SEL_SOA": 1, "SEL_RS": 1, "SEL_RD": 1}
-        result = calculate_orid_sel_score(orid, sel)
-        # triangular: 4 * 1 + 5 * 1 = 9
-        assert result["totalScore"] == 9
-        assert result["oridSubtotal"] == pytest.approx(4.0)
-        assert result["selSubtotal"] == pytest.approx(5.0)
-
-    def test_missing_criteria_reported(self):
-        result = calculate_orid_sel_score({}, {})
-        assert "O1" in result["missing"]
-        assert "SEL_SA" in result["missing"]
-        assert result["totalScore"] == 0
-
-    def test_partial_scores(self):
-        orid = {"O1": 3, "R1": 2}  # I1, D1 missing
-        sel = {"SEL_SA": 3, "SEL_RD": 4}
-        result = calculate_orid_sel_score(orid, sel)
-        # triangular: ORID: 6 + 3 + 0 + 0 = 9; SEL: SA=6 + RD=10 = 16; Total: 25
-        assert result["totalScore"] == 25
-        assert "I1" in result["missing"]
-        assert "D1" in result["missing"]
-
-    def test_score_never_exceeds_90(self):
-        orid = {"O1": 4, "R1": 4, "I1": 4, "D1": 4}
-        sel = {"SEL_SA": 4, "SEL_SM": 4, "SEL_SOA": 4, "SEL_RS": 4, "SEL_RD": 4}
-        result = calculate_orid_sel_score(orid, sel)
-        assert result["totalScore"] <= 90
 
 
 class TestExtractOridLevels:
@@ -174,9 +109,6 @@ class TestApplySingleLevelEstimate:
             sel_levels=sel,
         )
         assert orid == {"O1": 2}
-        result = calculate_orid_sel_score(orid, sel)
-        # triangular: O1 level 2 = 3 pts
-        assert result["totalScore"] == 3
 
     def test_plain_string_without_focus_uses_stage(self):
         orid: dict = {}
@@ -189,8 +121,6 @@ class TestApplySingleLevelEstimate:
             sel_levels=sel,
         )
         assert orid == {"R1": 3}
-        # triangular: R1 level 3 = 6 pts
-        assert calculate_orid_sel_score(orid, sel)["totalScore"] == 6
 
     def test_collect_from_writing_obj(self):
         writing = {
@@ -221,8 +151,7 @@ class TestApplySingleLevelEstimate:
         }
         orid, sel = collect_levels_from_writing_obj(writing)
         assert orid == {"O1": 2, "R1": 3}
-        # triangular: O1 level 2 = 3, R1 level 3 = 6 → total 9
-        assert calculate_orid_sel_score(orid, sel)["totalScore"] == 9
+        assert sel == {}
 
 
 def test_primary_orid_level_from_rubric_meta_dict():

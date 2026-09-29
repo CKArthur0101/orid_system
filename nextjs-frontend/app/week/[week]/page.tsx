@@ -19,12 +19,12 @@ import {
   ORID_BADGE_ORDER,
   SYNTHESIS_BADGE_ORDER,
   type BadgeId,
+  type SynthesisCriterionId,
   calculateEarnedBadges,
   getNewlyEarnedBadges,
   stagesPassedFromWritingContent,
   stagesPassedFromWritingOk,
 } from "@/lib/orid/badgeRules";
-import { type ScoreResult } from "@/lib/orid/rubricScoring";
 import {
   DRAFT_SAVE_ENCOURAGEMENT,
   STAGE_MISSION_META,
@@ -74,8 +74,9 @@ type OridWritingV1 = {
   synthesis_align_scaffold?: string;
   synthesis_short_draft?: string;
   synthesis_active_phase?: string;
-  /** Persisted score snapshot for reload / research export */
-  score?: Pick<ScoreResult, "totalScore" | "maxTotal">;
+  synthesis_rubric_levels?: Partial<Record<SynthesisCriterionId, number>>;
+  synthesis_focus?: SynthesisCriterionId | null;
+  synthesis_sel_focus?: string | null;
   earnedBadges?: BadgeId[];
 };
 
@@ -133,17 +134,9 @@ function localDraftStorageKey(sessionId: string, week: number) {
 
 function mergeProgressIntoWriting(
   writing: OridWritingV1,
-  totalScore: number | null,
   badges: BadgeId[],
-  options?: { includeScore?: boolean },
 ): OridWritingV1 {
   const next: OridWritingV1 = { ...writing };
-  const includeScore = options?.includeScore !== false;
-  if (includeScore && totalScore != null) {
-    next.score = { totalScore, maxTotal: 90 };
-  } else if (!includeScore) {
-    delete next.score;
-  }
   if (badges.length > 0) {
     next.earnedBadges = Array.from(new Set(badges)) as BadgeId[];
   }
@@ -151,15 +144,12 @@ function mergeProgressIntoWriting(
 }
 
 function extractProgressFromWriting(writing: OridWritingV1): {
-  totalScore: number | null;
   earnedBadges: BadgeId[];
 } {
-  const totalScore =
-    writing.score?.totalScore != null ? Number(writing.score.totalScore) : null;
   const earnedBadges = Array.isArray(writing.earnedBadges)
     ? (writing.earnedBadges.filter(Boolean) as BadgeId[])
     : [];
-  return { totalScore, earnedBadges };
+  return { earnedBadges };
 }
 
 const STAGE_CARD_META: Record<StageKey, { title: string; question: string }> = {
@@ -328,9 +318,6 @@ function normalizeWritingContent(raw: unknown, week: number): OridWritingV1 {
     stages,
     ...(flow ? { week2_flow: flow } : {}),
     ...(typeof o?.synthesis_draft === "string" ? { synthesis_draft: o.synthesis_draft } : {}),
-    ...(typeof o?.score?.totalScore === "number"
-      ? { score: { totalScore: o.score.totalScore, maxTotal: 90 } }
-      : {}),
     ...(Array.isArray(o?.earnedBadges)
       ? { earnedBadges: o.earnedBadges.filter(Boolean) as BadgeId[] }
       : {}),
@@ -351,6 +338,15 @@ function normalizeWritingContent(raw: unknown, week: number): OridWritingV1 {
     if (typeof o.synthesis_align_scaffold === "string") out.synthesis_align_scaffold = o.synthesis_align_scaffold;
     if (typeof o.synthesis_short_draft === "string") out.synthesis_short_draft = o.synthesis_short_draft;
     if (typeof o.synthesis_active_phase === "string") out.synthesis_active_phase = o.synthesis_active_phase;
+    if (o.synthesis_rubric_levels && typeof o.synthesis_rubric_levels === "object") {
+      out.synthesis_rubric_levels = o.synthesis_rubric_levels;
+    }
+    if (typeof o.synthesis_focus === "string" || o.synthesis_focus === null) {
+      out.synthesis_focus = o.synthesis_focus;
+    }
+    if (typeof o.synthesis_sel_focus === "string" || o.synthesis_sel_focus === null) {
+      out.synthesis_sel_focus = o.synthesis_sel_focus;
+    }
     return out;
   }
 
@@ -525,8 +521,7 @@ export default function WeekBookPage() {
     return [opening, ...feedback];
   }, [synthMessages, synthesisOpeningText]);
 
-  // Score and badge state
-  const [totalScore, setTotalScore] = useState<number | null>(null);
+  // Badge state
   const [earnedBadges, setEarnedBadges] = useState<BadgeId[]>([]);
   const [badgeModalQueue, setBadgeModalQueue] = useState<BadgeId[]>([]);
   const [promptViewCount, setPromptViewCount] = useState(0);
@@ -631,7 +626,6 @@ export default function WeekBookPage() {
       setFocusStage("O");
       setMessages([]);
       setSeededInitial(false);
-      setTotalScore(null);
       setEarnedBadges([]);
       setBadgeModalQueue([]);
       setProgressHydratedSessionId(null);
@@ -949,9 +943,6 @@ export default function WeekBookPage() {
           const parsed = parseWritingRecordContent(latest.content, weekNum);
           setWritingData(parsed);
           const fromWriting = extractProgressFromWriting(parsed);
-          if (!isControlConditionValue(condition) && fromWriting.totalScore != null) {
-            setTotalScore(fromWriting.totalScore);
-          }
           if (fromWriting.earnedBadges.length > 0) {
             setEarnedBadges((prev) =>
               Array.from(new Set([...prev, ...fromWriting.earnedBadges])) as BadgeId[],
@@ -967,9 +958,6 @@ export default function WeekBookPage() {
                 const normalized = normalizeWritingContent(parsed, weekNum);
                 setWritingData(normalized);
                 const fromWriting = extractProgressFromWriting(normalized);
-                if (!isControlConditionValue(condition) && fromWriting.totalScore != null) {
-                  setTotalScore(fromWriting.totalScore);
-                }
                 if (fromWriting.earnedBadges.length > 0) {
                   setEarnedBadges((prev) =>
                     Array.from(new Set([...prev, ...fromWriting.earnedBadges])) as BadgeId[],
@@ -1011,9 +999,6 @@ export default function WeekBookPage() {
         });
         if (!res.ok) return;
         const data = await res.json();
-        if (!isControlConditionValue(condition) && data?.totalScore != null) {
-          setTotalScore(Number(data.totalScore));
-        }
         if (Array.isArray(data?.earnedBadges) && data.earnedBadges.length > 0) {
           setEarnedBadges((prev) =>
             Array.from(new Set([...prev, ...(data.earnedBadges as BadgeId[])])) as BadgeId[],
@@ -1052,13 +1037,10 @@ export default function WeekBookPage() {
 
   async function persistWritingSnapshot(
     snapshot: OridWritingV1,
-    totalScore: number | null,
     badges: BadgeId[],
   ) {
     if (!sessionId || !readingId) return;
-    const payload = mergeProgressIntoWriting(snapshot, totalScore, badges, {
-      includeScore: !isControl,
-    });
+    const payload = mergeProgressIntoWriting(snapshot, badges);
     try {
       const r = await fetch(`/api/orid/writings`, {
         method: "POST",
@@ -1160,10 +1142,8 @@ export default function WeekBookPage() {
       const savedId = String(data?.meta?.saved_to_writing_id ?? "");
       if (isUuid(savedId)) setWritingId(savedId);
 
-      // Update score and badges from meta (with client-side fallback)
+      // Update badges from meta (with client-side fallback)
       const meta = data?.meta ?? {};
-      const scoreFromMeta =
-        meta.score?.totalScore != null ? Number(meta.score.totalScore) : null;
       let mergedBadges: BadgeId[] = Array.isArray(meta.earnedBadges)
         ? (meta.earnedBadges as BadgeId[])
         : [];
@@ -1182,18 +1162,12 @@ export default function WeekBookPage() {
         ? (meta.newlyEarnedBadges as BadgeId[])
         : getNewlyEarnedBadges(earnedBadges, allBadges);
 
-      const resolvedScore = scoreFromMeta ?? 0;
-      setWritingData(
-        mergeProgressIntoWriting(nextWriting, resolvedScore, allBadges, {
-          includeScore: !isControl,
-        }),
-      );
-      if (!isControl) setTotalScore(resolvedScore);
+      setWritingData(mergeProgressIntoWriting(nextWriting, allBadges));
       setEarnedBadges(allBadges);
       if (newOnes.length > 0) {
         setBadgeModalQueue((prev) => [...prev, ...newOnes.filter((b) => !prev.includes(b))]);
       }
-      await persistWritingSnapshot(nextWriting, resolvedScore, allBadges);
+      await persistWritingSnapshot(nextWriting, allBadges);
     } catch (e: any) {
       setFbError(e?.message ?? "回饋失敗");
     } finally {
@@ -1297,15 +1271,26 @@ export default function WeekBookPage() {
       if (isUuid(savedId)) setWritingId(savedId);
 
       const meta = data?.meta ?? {};
-      let nextWriting = writingData;
+      let nextWriting: OridWritingV1 = {
+        ...writingData,
+        ...(meta.synthesis_rubric_levels && typeof meta.synthesis_rubric_levels === "object"
+          ? { synthesis_rubric_levels: meta.synthesis_rubric_levels }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(meta, "synthesis_focus")
+          ? { synthesis_focus: meta.synthesis_focus ?? null }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(meta, "synthesis_sel_focus")
+          ? { synthesis_sel_focus: meta.synthesis_sel_focus ?? null }
+          : {}),
+      };
       if (feedbackRound === 1) {
         nextWriting = {
-          ...writingData,
+          ...nextWriting,
           synthesis_round1_completed: true,
           synthesis_feedback_baseline_draft: draft,
         };
-        setWritingData(nextWriting);
       }
+      setWritingData(nextWriting);
       if (Array.isArray(meta.earnedBadges)) {
         const merged = Array.from(
           new Set([...earnedBadges, ...(meta.earnedBadges as BadgeId[])]),
@@ -1317,9 +1302,9 @@ export default function WeekBookPage() {
         if (newOnes.length > 0) {
           setBadgeModalQueue((prev) => [...prev, ...newOnes.filter((b) => !prev.includes(b))]);
         }
-        await persistWritingSnapshot(nextWriting, totalScore, merged);
-      } else if (feedbackRound === 1) {
-        await persistWritingSnapshot(nextWriting, totalScore, earnedBadges);
+        await persistWritingSnapshot(nextWriting, merged);
+      } else {
+        await persistWritingSnapshot(nextWriting, earnedBadges);
       }
     } catch (e: any) {
       setFbError(e?.message ?? "整合回饋失敗");
@@ -1364,7 +1349,7 @@ export default function WeekBookPage() {
         if (newOnes.length > 0) {
           setBadgeModalQueue((prev) => [...prev, ...newOnes.filter((b) => !prev.includes(b))]);
         }
-        await persistWritingSnapshot(snapshot, totalScore, merged);
+        await persistWritingSnapshot(snapshot, merged);
       }
     } catch {
       // silently ignore prompt usage logging errors
@@ -1382,13 +1367,11 @@ export default function WeekBookPage() {
 
       if (label === "draft") {
         try {
-          const payload = mergeProgressIntoWriting(writingData, totalScore, earnedBadges, {
-            includeScore: !isControl,
-          });
+          const payload = mergeProgressIntoWriting(writingData, earnedBadges);
           if (typeof window !== "undefined") {
             localStorage.setItem(localDraftStorageKey(sessionId, weekNum), JSON.stringify(payload));
           }
-          await persistWritingSnapshot(writingData, totalScore, earnedBadges);
+          await persistWritingSnapshot(writingData, earnedBadges);
           setWritingData(payload);
           setSaveMsg(DRAFT_SAVE_ENCOURAGEMENT);
         } catch {
@@ -1397,9 +1380,7 @@ export default function WeekBookPage() {
         return;
       }
 
-      const payload = mergeProgressIntoWriting(writingData, totalScore, earnedBadges, {
-        includeScore: !isControl,
-      });
+      const payload = mergeProgressIntoWriting(writingData, earnedBadges);
       try {
         if (typeof window !== "undefined") {
           localStorage.setItem(localDraftStorageKey(sessionId, weekNum), JSON.stringify(payload));
