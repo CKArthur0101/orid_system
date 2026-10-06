@@ -21,6 +21,7 @@ from app.models import (
     Reading,
     OridSession,
     OridChatMessage,
+    OridSafetyEvent,
     OridWeekSubmission,
     OridFeedbackEvent,
     OridPostTestScore,
@@ -178,6 +179,19 @@ def _message_time_filters(
     clauses = [OridChatMessage.created_at >= lower]
     if upper is not None:
         clauses.append(OridChatMessage.created_at < upper)
+    return tuple(clauses)
+
+
+def _feedback_time_filters(
+    *,
+    lower: datetime | None,
+    upper: datetime | None,
+) -> tuple:
+    if lower is None:
+        return (OridFeedbackEvent.id.is_(None),)
+    clauses = [OridFeedbackEvent.created_at >= lower]
+    if upper is not None:
+        clauses.append(OridFeedbackEvent.created_at < upper)
     return tuple(clauses)
 
 
@@ -453,6 +467,7 @@ async def teacher_class_overview(
     msg_counts: dict[UUID, int] = {}
     last_activity: dict[UUID, object] = {}
     sessions_by_id: dict[UUID, OridSession] = {}
+    week_bounds_by_session: dict[UUID, tuple[datetime | None, datetime | None]] = {}
     if session_ids:
         sess_res = await db.execute(select(OridSession).where(OridSession.id.in_(session_ids)))
         for sess in sess_res.scalars().all():
@@ -461,6 +476,7 @@ async def teacher_class_overview(
             sess = sessions_by_id.get(sid)
             if not sess:
                 continue
+            week_bounds_by_session[sid] = await _week_chat_bounds(db, sess, week)
             rounds, last_at = await _session_message_stats(db, sess, week)
             msg_counts[sid] = rounds
             last_activity[sid] = last_at
@@ -488,25 +504,57 @@ async def teacher_class_overview(
     feedback_ok_counts: dict[UUID, int] = {}
     feedback_ok_stages: dict[UUID, int] = {}
     if session_ids:
-        fb_res = await db.execute(
-            select(
-                OridFeedbackEvent.user_id,
-                func.count(OridFeedbackEvent.id).label("clicks"),
-                func.sum(cast(OridFeedbackEvent.ok, Integer)).label("ok_cnt"),
-                func.count(
-                    func.distinct(
-                        case((OridFeedbackEvent.ok == True, OridFeedbackEvent.stage), else_=None)  # noqa: E712
-                    )
-                ).label("ok_stage_cnt"),
+        feedback_windows = []
+        for sid in session_ids:
+            lower, upper = week_bounds_by_session.get(sid, (None, None))
+            if lower is None:
+                continue
+            feedback_windows.append(
+                and_(
+                    OridFeedbackEvent.session_id == sid,
+                    *_feedback_time_filters(lower=lower, upper=upper),
+                )
             )
-            .where(OridFeedbackEvent.session_id.in_(session_ids))
-            .group_by(OridFeedbackEvent.user_id)
+        if feedback_windows:
+            fb_res = await db.execute(
+                select(
+                    OridFeedbackEvent.user_id,
+                    func.count(OridFeedbackEvent.id).label("clicks"),
+                    func.sum(cast(OridFeedbackEvent.ok, Integer)).label("ok_cnt"),
+                    func.count(
+                        func.distinct(
+                            case((OridFeedbackEvent.ok == True, OridFeedbackEvent.stage), else_=None)  # noqa: E712
+                        )
+                    ).label("ok_stage_cnt"),
+                )
+                .where(or_(*feedback_windows))
+                .group_by(OridFeedbackEvent.user_id)
+            )
+            for fb_row in fb_res.mappings().all():
+                uid = fb_row["user_id"]
+                feedback_clicks[uid] = int(fb_row["clicks"] or 0)
+                feedback_ok_counts[uid] = int(fb_row["ok_cnt"] or 0)
+                feedback_ok_stages[uid] = int(fb_row["ok_stage_cnt"] or 0)
+
+    safety_counts: dict[UUID, int] = {}
+    high_risk_safety_counts: dict[UUID, int] = {}
+    if session_ids:
+        safety_res = await db.execute(
+            select(
+                OridSafetyEvent.user_id,
+                func.count(OridSafetyEvent.id).label("event_count"),
+                func.sum(case((OridSafetyEvent.level >= 3, 1), else_=0)).label("high_risk_count"),
+            )
+            .where(
+                OridSafetyEvent.session_id.in_(session_ids),
+                OridSafetyEvent.week == week,
+            )
+            .group_by(OridSafetyEvent.user_id)
         )
-        for fb_row in fb_res.mappings().all():
-            uid = fb_row["user_id"]
-            feedback_clicks[uid] = int(fb_row["clicks"] or 0)
-            feedback_ok_counts[uid] = int(fb_row["ok_cnt"] or 0)
-            feedback_ok_stages[uid] = int(fb_row["ok_stage_cnt"] or 0)
+        for safety_row in safety_res.mappings().all():
+            uid = safety_row["user_id"]
+            safety_counts[uid] = int(safety_row["event_count"] or 0)
+            high_risk_safety_counts[uid] = int(safety_row["high_risk_count"] or 0)
 
     # ── 6. 各段「曾動筆」人數（可重疊；寫齊四段者同時計入 O～D）──────────────
     stage_distribution = {"NOT_STARTED": 0, "O": 0, "R": 0, "I": 0, "D": 0}
@@ -548,6 +596,8 @@ async def teacher_class_overview(
                 feedback_click_count=feedback_clicks.get(student.id, 0),
                 feedback_ok_count=feedback_ok_counts.get(student.id, 0),
                 feedback_ok_stages=feedback_ok_stages.get(student.id, 0),
+                safety_event_count=safety_counts.get(student.id, 0),
+                high_risk_safety_event_count=high_risk_safety_counts.get(student.id, 0),
             )
         )
 
@@ -607,9 +657,12 @@ async def teacher_student_summary(
     feedback_click_count = 0
     feedback_ok_count = 0
     feedback_ok_stages = 0
+    safety_event_count = 0
+    high_risk_safety_event_count = 0
 
     if session:
         interaction_count, last_activity_at = await _session_message_stats(db, session, week)
+        feedback_lower, feedback_upper = await _week_chat_bounds(db, session, week)
         writing_res = await db.execute(
             select(OridWeekSubmission).where(
                 OridWeekSubmission.user_id == student_id,
@@ -623,21 +676,40 @@ async def teacher_student_summary(
         stages_with_draft_list = _stages_with_draft(writing_content)
 
         # Feedback analytics from analytics tables
-        fb_res = await db.execute(
+        if feedback_lower is not None:
+            fb_res = await db.execute(
+                select(
+                    func.count(OridFeedbackEvent.id).label("clicks"),
+                    func.sum(cast(OridFeedbackEvent.ok, Integer)).label("ok_cnt"),
+                    func.count(
+                        func.distinct(
+                            case((OridFeedbackEvent.ok == True, OridFeedbackEvent.stage), else_=None)  # noqa: E712
+                        )
+                    ).label("ok_stage_cnt"),
+                ).where(
+                    OridFeedbackEvent.session_id == session.id,
+                    *_feedback_time_filters(lower=feedback_lower, upper=feedback_upper),
+                )
+            )
+            fb_row = fb_res.mappings().first()
+            feedback_click_count = int((fb_row["clicks"] if fb_row else None) or 0)
+            feedback_ok_count = int((fb_row["ok_cnt"] if fb_row else None) or 0)
+            feedback_ok_stages = int((fb_row["ok_stage_cnt"] if fb_row else None) or 0)
+
+        safety_res = await db.execute(
             select(
-                func.count(OridFeedbackEvent.id).label("clicks"),
-                func.sum(cast(OridFeedbackEvent.ok, Integer)).label("ok_cnt"),
-                func.count(
-                    func.distinct(
-                        case((OridFeedbackEvent.ok == True, OridFeedbackEvent.stage), else_=None)  # noqa: E712
-                    )
-                ).label("ok_stage_cnt"),
-            ).where(OridFeedbackEvent.session_id == session.id)
+                func.count(OridSafetyEvent.id).label("event_count"),
+                func.sum(case((OridSafetyEvent.level >= 3, 1), else_=0)).label("high_risk_count"),
+            ).where(
+                OridSafetyEvent.session_id == session.id,
+                OridSafetyEvent.week == week,
+            )
         )
-        fb_row = fb_res.mappings().first()
-        feedback_click_count = int((fb_row["clicks"] if fb_row else None) or 0)
-        feedback_ok_count = int((fb_row["ok_cnt"] if fb_row else None) or 0)
-        feedback_ok_stages = int((fb_row["ok_stage_cnt"] if fb_row else None) or 0)
+        safety_row = safety_res.mappings().first()
+        safety_event_count = int((safety_row["event_count"] if safety_row else None) or 0)
+        high_risk_safety_event_count = int(
+            (safety_row["high_risk_count"] if safety_row else None) or 0
+        )
 
         if interaction_count <= 0:
             stage = "NOT_STARTED"
@@ -662,6 +734,8 @@ async def teacher_student_summary(
         feedback_click_count=feedback_click_count,
         feedback_ok_count=feedback_ok_count,
         feedback_ok_stages=feedback_ok_stages,
+        safety_event_count=safety_event_count,
+        high_risk_safety_event_count=high_risk_safety_event_count,
     )
 
 

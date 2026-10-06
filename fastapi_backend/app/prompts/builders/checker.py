@@ -110,7 +110,12 @@ def build_book_grounding_checker_prompts(
     stage = (stage or "O").strip().upper()
     if stage not in {"O", "R", "I", "D"}:
         stage = "O"
-    book_context = build_book_context_block(book_pack, max_events=8, max_chars=1500)
+    book_context = build_book_context_block(
+        book_pack,
+        max_events=10,
+        max_excerpts=10,
+        max_chars=3200,
+    )
     sys = f"""
 你是「教材事實核對器」。
 你的任務：判斷學生這句話是否可由 BOOK_CONTEXT 支持。
@@ -120,14 +125,19 @@ def build_book_grounding_checker_prompts(
 
 輸出必須是純 JSON，不要多餘文字：
 {{
+  "status": "supported | ambiguous | contradicted",
   "grounded": boolean,
   "reason": string,
-  "unsupported_span": string
+  "unsupported_span": string,
+  "material_evidence": string
 }}
 
 欄位規範：
+- status：教材支持填 supported；學生沒有說清楚關鍵角色／動作／受詞／因果，無法核對時填 ambiguous；與教材明確不同時填 contradicted。
+- grounded：只有 status=supported 時為 true；ambiguous 或 contradicted 都為 false。
 - reason：20 字內，簡短說明（例：教材可支持 / 疑似新增書外事件）
-- unsupported_span：若 grounded=false，填學生原句中的關鍵片段；否則填空字串。
+- unsupported_span：若 grounded=false，必須逐字摘錄學生原句中最需要修改的短片段；不得改寫或自行補字。否則填空字串。
+- material_evidence：必須逐字摘錄 BOOK_CONTEXT 中支持判斷的教材事件或原文短句，不可改寫；若教材不足以核對可填空字串。
 
 目前階段：{stage}
 BOOK_CONTEXT：

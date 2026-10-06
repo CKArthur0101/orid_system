@@ -8,12 +8,6 @@ from app.prompts.policy.student_input_bucket import (
     BUCKET_TOO_SHORT,
     bucket_tone_hint_zh,
 )
-from app.prompts.templates.writing_feedback import (
-    BOOK_FACT_RULES,
-    FEW_SHOT_BLOCK,
-    SHARED_CORE,
-    STAGE_BLOCKS,
-)
 from app.services.rag import format_rag_context_for_prompt
 
 
@@ -307,10 +301,7 @@ def build_genai_feedback_prompts(
     input_bucket: str = "normal",
     rag_context: str = "",
 ) -> Tuple[str, str]:
-    """
-    兩層：共用核心 + 依 O/R/I/D 分流。
-    輸出純 JSON：praise, missing(≤1), suggestions(≤1), example, improved(多為 null)
-    """
+    """Build one concise rubric-first prompt for experimental-group feedback."""
     stage = stage if stage in {"O", "R", "I", "D"} else "O"
     book_title = (book_pack or {}).get("book_title", "本週繪本")
     guide = ((book_pack or {}).get("writing_guide", {}) or {}).get(stage, "")
@@ -320,123 +311,92 @@ def build_genai_feedback_prompts(
     characters_block = _characters_for_prompt(book_pack)
     themes_block = _themes_for_prompt(book_pack)
     d_action_scope = _d_action_scope_for_prompt(book_pack)
-    stage_block = STAGE_BLOCKS.get(stage, STAGE_BLOCKS["O"])
     rubric_block = _format_writing_rubric_for_prompt(book_pack, stage)
     sel_guidance_block = _format_sel_guidance_for_prompt(book_pack, stage)
-    rasf_block = _rasf_json_format_block(stage)
     revision_target = _stage_revision_target(stage)
     example_scaffold = _stage_example_scaffold(stage)
     bucket_hint = bucket_tone_hint_zh(input_bucket)
-    rag_block = ""
-    if stage != "D":
-        formatted_rag = format_rag_context_for_prompt(rag_context)
-        if formatted_rag:
-            rag_block = formatted_rag + "\n"
+    formatted_rag = format_rag_context_for_prompt(rag_context) if stage != "D" else ""
+    stage_rules = {
+        "O": (
+            "只評客觀觀察：重要人物，以及至少兩個彼此相關的正確事實；"
+            "若只寫一個事件，必須同時包含事件的前後變化，讓人看得出故事發展，才可達第 3 級。"
+            "單一孤立事實只算第 2 級。語意相同的改寫算正確，不要求逐字重述。"
+        ),
+        "R": (
+            "只評感受反應：必須同時有明確感受，以及造成該感受的書中事件或畫面。"
+            "只有感受或只有故事重述，最高第 2 級。"
+        ),
+        "I": (
+            "只評詮釋體會：必須同時有學到的道理或理解，以及支持該想法的書中內容。"
+            "只有口號式道理或只有故事重述，最高第 2 級。"
+            "生活連結是第 4 級表現，不是第 3 級必填。"
+        ),
+        "D": (
+            "只評行動決定：必須同時寫出適用的情況或對象，以及自己做得到、具體且呼應故事主題的行動。"
+            "不要求固定句型；情境、對象、做法不是固定三項必填，但至少要有情況或對象，加上具體行動。"
+            "只有『我要努力／分享／幫忙』等願望，最高第 2 級。"
+            "必須依整句語意判斷，不可用關鍵字清單評分。"
+        ),
+    }
+    primary_id = f"{stage}1"
+    material = (
+        f"角色：{characters_block}\n故事事件：\n{key_events_str}\n故事摘錄：\n{excerpts_block}"
+        if stage != "D"
+        else f"故事主題：{themes_block}\nD 段行動主題範圍：{d_action_scope}"
+    )
+    grounding_rule = (
+        "核對教材時看語意，不做逐字比對。只有明顯新增或寫錯人物、物品、事件才判未達標；"
+        "省略非必要細節、角色簡稱及同義改寫都可接受。"
+        if stage != "D"
+        else "D 段寫學生現實生活，不檢查是否出現書中人物、物品或情節。"
+    )
+    d_schema_rule = (
+        "d_action_assessment 必填，依整句語意填 has_self_action、action_is_concrete、"
+        "theme_aligned、evidence_quote、missing_dimension。"
+        if stage == "D"
+        else "d_action_assessment 填 null。"
+    )
 
-    book_fact_section = "" if stage == "D" else f"""
-{BOOK_FACT_RULES}
+    system_prompt = f"""你是國小五、六年級 ORID 寫作評量員。只輸出符合 schema 的 JSON。
 
-【教材不符時的回饋要求】
-學生寫了書中沒有或對不上的事 → ok 為 false；missing 可點名學生草稿裡不對的詞或事件類型，但**不要**直接提供書中完整事件答案；**禁止**用「對照摘要句」「對照摘錄句」等術語。suggestions 只請學生回到故事中找真正發生的事來改，仍**不要幫寫整句**。
-""".strip()
+【唯一通過標準】
+只依本段 ORID rubric 決定 ok：第 3／4 級為 true，第 1／2 級為 false。SEL 只供研究與提問，不得改變 ok。達到第 3 級後立即停止修改要求，missing=[]、suggestions=[]、example=null、draft_next_step=null。
+四段都採「兩個核心成分」原則，不以字數判斷：O 是相關事實／前後變化，R 是感受＋故事原因，I 是理解＋故事支持，D 是情況或對象＋具體行動。只碰到主題詞、只有結論或只有一個孤立資訊，不可判為第 3 級。
 
-    system_prompt = f"""
-你是國小五、六年級的 ORID 寫作回饋老師。下面分兩層：先**共用規則**，再**本段專屬規則**。請只輸出 JSON，不要廢話。
+【本段 {stage}】
+{stage_rules[stage]}
+{grounding_rule}
 
-====================
-一、共用核心規則
-====================
-{SHARED_CORE}
-
-{book_fact_section}
-
-【教材僅能由此來，不可編造情節】
+【教材】
 書名：{book_title}
-{"角色清單（學生寫的角色名必須對照這裡）：" + characters_block if stage != "D" else "書名已知；D 段不做角色名查核。"}
-{"故事摘要：" + chr(10) + key_events_str if stage != "D" else "D 段本書主題：" + themes_block + "（只用來判斷主題方向；不要要求引用角色、物品或情節。）"}
-{"" if stage != "D" else "D 段行動主題範圍：" + d_action_scope}
-{"故事摘錄（可以直接引用句子來引導學生）：" + chr(10) + excerpts_block if stage != "D" else ""}
-{rag_block if stage != "D" else ""}
-教師本段說明：{guide or "（未提供）"}
-{rubric_block if rubric_block else "（本週未提供 writing_rubric；仍依本段專屬規則回饋。）"}
+{material}
+{formatted_rag}
+教師說明：{guide or "（未提供）"}
+
+【正式 rubric】
+{rubric_block or "依本段規則判定 1～4 級。"}
 {sel_guidance_block}
 
-【語氣與長度感】
-學生常在一節課約 **40 分鐘**內寫完 ORID 四格，所以回饋要短、清楚、可立刻動筆。
-用字要適合國小五、六年級：短句、口語、容易懂。不要用「深化、完整度、精準、論述、脈絡、可執行」這類太大人的詞。
-本段修改落點：{revision_target}。
-一次只指出一個最重要的修改方向；suggestions 優先用 1 個短問句請學生照本段修改落點補／改。
-example 只能用這種填空支架：「{example_scaffold}」。不要直接提供故事事件內容，不要替學生完成句子。
-每個可見欄位都要短：praise、missing、suggestions 各最多 1 句；example 最多 1 個句型。
-學生可見文字不要像評分規準；不要對學生說 rubric、level、criteria、score、RASF、層級、等級、達標、精進、評分、規準。
+【回饋規則】
+- praise 只肯定學生原文中正確的內容，使用適合小學生的短句。
+- 未達標時只指出一個最重要缺口；suggestions 只給一個問題或短指令，修改落點是「{revision_target}」。
+- 不代寫答案。example 只能是「{example_scaffold}」這類留白句型或 null。
+- student_anchor_quote 原封不動摘錄學生原文 4～20 字；未達標時填 draft_next_step，達標時填 null。
+- rubric_focus 固定為 {primary_id}；rubric_level_estimate 至少包含 {primary_id}，值使用「1 起步／2 接近／3 達標／4 精進」。
+- {d_schema_rule}
+- 學生可見文字不得出現 rubric、level、RASF、層級、評分等術語。
 
-【本輪輸入語氣（仍只輸出 JSON）】
+【輸入狀態】
 {bucket_hint}
-
-====================
-二、本段專屬：{stage}
-====================
-{stage_block}
-
-====================
-三、JSON 欄位與品質
-====================
-- praise：**必須**看得出你有讀學生原文，盡量點到裡面**正確**的人/事/詞（若完全空白再用鼓勵下筆，禁止空泛罐頭讚美）。
-  若草稿含書裡沒有的情節：praise 只肯定書裡有的人名或寫作方向，**不要**把錯誤情節當成就。
-- missing：不多於 1 條，對準本段**一個**主問題（一刀）；用學生語說「還差哪一種句子」，不要寫成規準判語。
-- suggestions：不多於 1 條；用 **1 個短問句或短指令**引導學生自己改，必須明確使用「{revision_target}」；不要列多步驟，也不要把答案寫完。
-- example：只給本段填空支架「{example_scaffold}」或 null；不要填入完整角色、情節、原因與做法讓學生可直接複製。
-- improved：通常 null。
-
-{rasf_block}
-
-【輸出格式】只輸出純 JSON，不要 markdown，不要 ```。
-{{
-  "ok": boolean,
-  "praise": string,
-  "missing": string[],
-  "suggestions": string[],
-  "example": string or null,
-  "improved": null,
-  "rubric_focus": string,
-  "rubric_level_estimate": object,
-  "student_anchor_quote": string,
-  "draft_next_step": string,
-  "d_action_assessment": object or null
-}}
-- rubric_focus：本段 ORID 主向度 id（O1 / R1 / I1 / D1），必填。
-- rubric_level_estimate：依段填入多向度層級物件（見 RASF 規則），以「X 層級」格式填入。
-- student_anchor_quote / draft_next_step：見 RASF-Anchor 規則；草稿空白時可填 null。
-- D 段的 d_action_assessment 必填物件；其他段填 null。格式：{{"has_self_action": boolean, "action_is_concrete": boolean, "theme_aligned": boolean, "evidence_quote": string, "missing_dimension": string or null}}。
-
-{FEW_SHOT_BLOCK}
 """.strip()
 
-    o_summary_priority = ""
-    if stage == "O":
-        o_summary_priority = (
-            "若學生草稿已寫到多個事件且出現時間銜接，missing 請**優先**提醒「故事裡還有重要情節沒寫到」，不要直接提供那段完整事件答案；"
-            "**不要**在 missing／suggestions／example 裡寫「故事摘要」「對照摘要」「掃摘要」等詞。\n"
-            "suggestions 請用短問句提示學生自己回想 1 個尚未寫到的情節，不要直接把那個事件寫出來。\n"
-            "不要只要求加轉折詞、套先後句型或微調用詞，除非教材重點真的都已出現。\n\n"
-        )
-
-    o_plot_anchor = ""
-    if stage == "O" and _o_needs_book_plot_anchor(text=text, input_bucket=input_bucket):
-        o_plot_anchor = """
-【本輪特別：O 段草稿極短或學生表達卡住】
-suggestions 與 example **不可**整段只做「一步一步／慢慢來／先再最後」等抽象流程。
-suggestions 可問「故事裡還有哪一幕？」但不要直接提供那一幕；example 只能用本段填空支架，不要把完整答案寫好給學生複製。
-""".strip()
-
-    user_prompt = f"""
-學生「{stage}」段原文如下（你回饋時稱讚要對準這些字，不要重複罐頭句）：
+    user_prompt = f"""請評量以下學生「{stage}」段原文：
 
 ---
 {text}
 ---
 
-{o_summary_priority}{o_plot_anchor + chr(10) + chr(10) if o_plot_anchor else ""}請輸出 JSON。missing 與 suggestions 各至多 1 個字串且要短。若 rubric 等級 3 或 4（ok=true）：missing=[]、suggestions=[]、example=null、draft_next_step=null，不再要求任何修改。若等級 1 或 2（ok=false）：必須填 student_anchor_quote 與 draft_next_step（除非草稿空白）；suggestions 用 1 個短問句引導在 anchor 句前/後補寫，並明確使用「{revision_target}」；example 多數 null，若填只能用「{example_scaffold}」這類填空支架，不得放入可直接抄的完整角色、情節、原因或做法。improved 多數 null。
-""".strip()
+先依教材與正式 rubric 判級，再讓 ok 與 {primary_id} 層級完全一致。只輸出 JSON。""".strip()
 
     return system_prompt, user_prompt

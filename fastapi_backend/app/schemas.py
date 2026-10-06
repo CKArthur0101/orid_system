@@ -396,10 +396,9 @@ class OridWritingCreate(BaseModel):
     session_id: UUID
     week: int
     content: str
-    # "submit" only when the student explicitly submits ("提交我的寫作");
-    # omitted/"draft" covers autosave and the "儲存草稿" button — matches
-    # existing behavior where drafts and submissions share the same upsert.
-    save_intent: str = Field("draft", pattern="^(draft|submit)$")
+    # autosave protects content without recording a research behavior;
+    # draft/submit are explicit student actions.
+    save_intent: str = Field("draft", pattern="^(autosave|draft|submit)$")
 
 
 # ✅ 更新 writing 用（PUT）
@@ -461,6 +460,8 @@ class TeacherStudentRow(BaseModel):
     feedback_click_count: int = 0
     feedback_ok_count: int = 0
     feedback_ok_stages: int = 0   # # of stages with ≥1 ok=true event
+    safety_event_count: int = 0
+    high_risk_safety_event_count: int = 0
 
     @field_serializer("last_activity_at")
     def _ser_last_activity_at_row(self, v: datetime | None) -> str | None:
@@ -497,6 +498,8 @@ class TeacherStudentSummary(BaseModel):
     feedback_click_count: int = 0
     feedback_ok_count: int = 0
     feedback_ok_stages: int = 0
+    safety_event_count: int = 0
+    high_risk_safety_event_count: int = 0
 
     @field_serializer("last_activity_at")
     def _ser_last_activity_at_summary(self, v: datetime | None) -> str | None:

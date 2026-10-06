@@ -135,30 +135,28 @@ def test_genai_feedback_builder_changes_contract_by_stage():
         book_pack=_book_pack(),
     )
 
-    assert "角色清單（學生寫的角色名必須對照這裡）" in o_system
-    assert "書名已知；D 段不做角色名查核。" in d_system
-    assert "D 段本書主題：分享、關心他人" in d_system
-    assert "不用固定關鍵字、動詞清單或句型比對" in d_system
-    assert "不是三個必填欄位" in d_system
+    assert "角色：" in o_system
+    assert "D 段寫學生現實生活" in d_system
+    assert "故事主題：分享、關心他人" in d_system
+    assert "不是固定三項必填" in d_system
     assert "d_action_assessment" in d_system
     assert "theme_aligned" in d_system
-    assert "不可用關鍵字清單" in d_system
-    assert "必須承接學生原本的想法" in d_system
-    assert "example：只給本段填空支架" in o_system
+    assert "不可用關鍵字清單評分" in d_system
+    assert "example 只能是" in o_system
     assert "國小五、六年級" in o_system
-    assert "40 分鐘" in o_system
-    assert "一次只指出一個最重要的修改方向" in o_system
-    assert "1 個短問句" in o_system
-    assert "2～4 個" not in o_system
-    assert "學生「O」段原文如下" in o_user
-    assert "不要" in o_user and ("書裡" in o_user or "故事裡" in o_user)
+    assert "唯一通過標準" in o_system
+    assert "語意相同的改寫算正確" in o_system
+    assert "單一孤立事實只算第 2 級" in o_system
+    assert "四段都採「兩個核心成分」原則" in o_system
+    assert len(o_system) < 5000
+    assert "學生「O」段原文" in o_user
     assert "1 起步：只有感想，沒有寫出故事人物或事件。" in o_system
     assert "3 達標：能正確寫出人物與至少一件重要事件。" in o_system
-    assert "學生「D」段原文如下" in d_user
+    assert "學生「D」段原文" in d_user
     assert "對照上方「故事摘要」" not in d_user
     assert "student_anchor_quote" in o_system
     assert "draft_next_step" in o_system
-    assert "RASF-Anchor" in o_system
+    assert "RASF-Anchor" not in o_system
 
     rag_system, _ = build_genai_feedback_prompts(
         stage="O",
@@ -206,25 +204,25 @@ def test_genai_feedback_builder_changes_contract_by_stage():
         book_pack=_book_pack(),
         input_bucket="normal",
     )
-    assert "本輪特別：O 段草稿極短或學生表達卡住" in stuck_user
-    assert "本輪特別：O 段草稿極短或學生表達卡住" in stuck_user2
-    assert "不要把完整答案寫好給學生複製" in stuck_o
+    assert "只指出一個最重要缺口" in stuck_o
+    assert "還不會寫" in stuck_user
+    assert "不知道誰做了什麼" in stuck_user2
 
     r_system, _ = build_genai_feedback_prompts(
         stage="R",
         text="我覺得很開心",
         book_pack=_book_pack(),
     )
-    assert "1 個短問句" in r_system
-    assert "因為" in r_system
+    assert "感受" in r_system
+    assert "原因" in r_system
 
 
 def test_week1_formal_orid_and_sel_rubrics_are_available():
     assert WEEK1_ORID_RUBRIC["schema"] == "writing_rubric_v1"
-    assert WEEK1_ORID_RUBRIC["version"] == 5
+    assert WEEK1_ORID_RUBRIC["version"] == 6
     assert WEEK1_ORID_RUBRIC["by_stage"]["O"][0]["name"] == "客觀觀察"
     assert WEEK1_ORID_RUBRIC["by_stage"]["O"][0]["levels"][2]["desc"] == (
-        "正確寫出重要人物與事件，能看出故事的大致發展。"
+        "正確寫出至少兩個相關的重要事實，或一個包含前後變化的完整事件，能看出故事的大致發展。"
     )
     assert WEEK1_ORID_RUBRIC["by_stage"]["D"][0]["levels"][3]["desc"] == (
         "能進一步說明適用情境、做法或第一步，也能考慮可能遇到的困難與調整方式。"
@@ -263,11 +261,7 @@ def test_genai_feedback_prompt_uses_orid_as_primary_and_sel_as_auxiliary():
     assert "【ORID 主要評量標準" in r_system
     assert "ok 只依 ORID" in r_system
     assert "SEL 輔助引導" in r_system
-    assert "故事中哪一個地方讓你有這種感覺" in r_system
-    assert "你覺得阿松爺爺當時可能在想什麼" in r_system
     assert "不要在給學生的文字中直接使用「SEL」" in r_system
-    assert "研究對準" in r_system
-    assert "RQ1" in r_system and "RQ2" in r_system and "RQ3" in r_system
     assert "情緒覺察" in r_system
 
     i_system, _ = build_genai_feedback_prompts(
@@ -276,7 +270,7 @@ def test_genai_feedback_prompt_uses_orid_as_primary_and_sel_as_auxiliary():
         book_pack=pack,
     )
     assert "生活連結" in i_system
-    assert "對準 RQ1" in i_system
+    assert "生活連結是第 4 級表現" in i_system
 
     d_system, _ = build_genai_feedback_prompts(
         stage="D",
@@ -293,7 +287,7 @@ def test_genai_feedback_prompt_uses_orid_as_primary_and_sel_as_auxiliary():
     assert "不使用 SEL 輔助" in o_system
     assert "內部參考：情緒覺察" not in o_system
     assert "故事中哪一個地方讓你有這種感覺" not in o_system
-    assert "對準 RQ1" in o_system
+    assert "SEL 只供研究與提問，不得改變 ok" in o_system
 
 
 def test_normalize_feedback_focus_o_meta_stuck_prefers_spec_over_short_canned():
@@ -354,7 +348,7 @@ def test_coach_and_checker_builders_keep_expected_sections():
         opening_hint="先固定一種主要語言。",
         prev_ai_opener=None,
     )
-    assert "每段最多 2 句" in narration_system
+    assert "第二段最多 2 個短句" in narration_system
     assert "你已經做到：" in narration_system
     assert "再想一想：" in narration_system
     assert "可以這樣修改：" in narration_system
@@ -362,7 +356,7 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "書裡完全沒有的詞" in narration_system
     assert "RASF-Anchor" in narration_system
     assert "填空" in narration_system
-    assert "不要把事件答案寫給學生" in narration_system
+    assert "不要直接提供書中完整事件內容" in narration_system
     assert "照寫進去" not in narration_system
     assert "把柿子藏起來" in narration_system
     assert "不可再要求補" in narration_system
@@ -373,7 +367,7 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "循序漸進" in narration_system
     assert "【I 段" in narration_system
     assert "生活連結" in narration_system
-    assert "禁止「我們一步一步來」" in narration_system
+    assert "不要每則訊息都用同一套「一步一步」" in narration_system
     assert "2～4 個短任務" not in narration_system
     assert "可以這樣修改：" in narration_user
     assert "【輸入粗分類】mixed_script" in narration_user
@@ -456,7 +450,26 @@ def test_coach_and_checker_builders_keep_expected_sections():
     )
     assert "教材事實核對器" in checker_system
     assert "BOOK_CONTEXT" in checker_system
+    assert '"status": "supported | ambiguous | contradicted"' in checker_system
+    assert "不可只查單字" in checker_system
+    assert "禁止自行腦補" in checker_system
+    assert "必須逐字摘錄學生原句" in checker_system
     assert "學生句子" in checker_user
+
+
+def test_book_grounding_checker_context_includes_source_excerpts():
+    pack = {
+        **_book_pack(),
+        "story_excerpts": [{"page": 3, "text": "奶奶和孩子把柿子蒂當陀螺玩。"}],
+    }
+    checker_system, _ = build_book_grounding_checker_prompts(
+        student_text="奶奶拿柿子蒂投籃。",
+        book_pack=pack,
+        stage="O",
+    )
+
+    assert "教材原文摘錄" in checker_system
+    assert "把柿子蒂當陀螺玩" in checker_system
 
 
 def test_synthesis_pasted_stage_paragraphs_detection():
@@ -644,8 +657,8 @@ def test_apply_o_key_event_gaps_skips_when_pass_bar_met():
     assert "書裡還有這些情節" not in m[0]
 
 
-def test_apply_o_key_event_gaps_replaces_generic_o_when_events_missing():
-    # Thin O: character + only one beat → still below pass bar, gaps may fill in
+def test_apply_o_key_event_gaps_keeps_feedback_after_one_complete_event():
+    # One isolated event remains level 2 even when it is material-aligned.
     long_o = "一開始阿松爺爺把柿子都藏起來，玩得很開心。"
     key_events = [
         "阿松爺爺家的柿子很甜，但他一直想把柿子獨占起來，不想分給別人。",
@@ -663,10 +676,8 @@ def test_apply_o_key_event_gaps_replaces_generic_o_when_events_missing():
         missing=["你已經抓到重點事件了：下一步試著寫出故事裡還沒提到的一段"],
         suggestions=["先挑書裡一件你稿子上還沒寫到的事，用三句話寫出誰、做了什麼、後來怎麼了"],
     )
-    blob = m[0] + s[0]
-    assert "前後" in blob or "重要事件" in blob
-    assert not any(word in blob for word in ("倉庫", "柿子葉", "樹枝", "砍樹", "柿子蒂"))
-    assert "中間衝突" not in m[0]
+    assert m == ["你已經抓到重點事件了：下一步試著寫出故事裡還沒提到的一段"]
+    assert s == ["先挑書裡一件你稿子上還沒寫到的事，用三句話寫出誰、做了什麼、後來怎麼了"]
 
 
 def test_apply_o_key_event_gaps_guides_vague_change_without_revealing_answer():
@@ -688,7 +699,7 @@ def test_apply_o_key_event_gaps_guides_vague_change_without_revealing_answer():
     assert not any(word in blob for word in ("藏", "倉庫", "砍樹", "樹樁"))
 
 
-def test_apply_o_key_event_gaps_does_not_repeat_hiding_event():
+def test_apply_o_key_event_gaps_keeps_feedback_after_complete_hiding_event():
     draft = (
         "故事中，阿松爺爺一開始不太願意分享柿子，他把柿子藏起來，不想讓別人拿走。"
         "後來發生了一些事情，讓他慢慢開始改變。"
@@ -704,11 +715,8 @@ def test_apply_o_key_event_gaps_does_not_repeat_hiding_event():
         missing=["再補故事裡的一件事。"],
         suggestions=["寫出接著發生什麼。"],
     )
-    blob = m[0] + s[0]
-    assert "最後的改變還沒有說清楚" in m[0]
-    assert "故事最後發生了什麼" in s[0]
-    assert "藏" not in blob
-    assert "倉庫" not in blob
+    assert m == ["再補故事裡的一件事。"]
+    assert s == ["寫出接著發生什麼。"]
 
 
 def test_apply_o_key_event_gaps_skips_grounding_priority_missing():
@@ -785,3 +793,4 @@ def test_prompt_versions_cover_active_surfaces():
     assert PROMPT_VERSIONS["genai_feedback"] == "wf_v11"
     assert PROMPT_VERSIONS["feedback_narration"] == "fn_v12"
     assert PROMPT_VERSIONS["synthesis_coach"] == "sc_v14"
+    assert PROMPT_VERSIONS["book_grounding_checker"] == "bgc_v2"

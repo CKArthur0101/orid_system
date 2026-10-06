@@ -28,7 +28,7 @@ def _item(
 
 UNIFIED_ORID_RUBRIC: dict[str, Any] = {
     "schema": "writing_rubric_v1",
-    "version": 5,
+    "version": 6,
     "purpose": "primary_orid_feedback_and_stage_completion",
     "score_range": "1-4",
     "ok_rule": "level_3_or_4_true_level_1_or_2_false",
@@ -42,7 +42,7 @@ UNIFIED_ORID_RUBRIC: dict[str, Any] = {
                 [
                     "沒有寫到故事內容、明顯偏題，或只有個人看法。",
                     "寫到部分正確的人物或事件，但內容不完整，人物關係或事件順序不清楚。",
-                    "正確寫出重要人物與事件，能看出故事的大致發展。",
+                    "正確寫出至少兩個相關的重要事實，或一個包含前後變化的完整事件，能看出故事的大致發展。",
                     "能依序整理多個重要事件，並清楚呈現人物、事件或情節的變化。",
                 ],
             )
@@ -81,7 +81,7 @@ UNIFIED_ORID_RUBRIC: dict[str, Any] = {
                 [
                     "只有願望或口號，沒有寫出自己的實際行動。",
                     "有行動方向，但仍不清楚要做什麼，或與故事體會的連結較弱。",
-                    "寫出一個自己能做到、具體可行，而且呼應故事體會的行動。",
+                    "寫出適用的情況或對象，以及自己能做到、具體可行且呼應故事體會的行動。",
                     "能進一步說明適用情境、做法或第一步，也能考慮可能遇到的困難與調整方式。",
                 ],
             )

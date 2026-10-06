@@ -11,7 +11,9 @@ from fastapi_users.password import PasswordHelper
 from app.models import (
     ClassRoom,
     OridChatMessage,
+    OridFeedbackEvent,
     OridSession,
+    OridStageAttempt,
     OridWeekSubmission,
     Reading,
     StudentClassMembership,
@@ -104,6 +106,34 @@ async def teacher_setup(db_session):
         updated_at=base + timedelta(minutes=45),
     )
     db_session.add(w1_sub)
+    for at, text in (
+        (base + timedelta(minutes=10), "week 1 feedback"),
+        (base + timedelta(hours=2, minutes=30), "week 2 feedback"),
+    ):
+        attempt = OridStageAttempt(
+            id=uuid.uuid4(),
+            session_id=session.id,
+            user_id=student.id,
+            stage="O",
+            draft="d1",
+            student_text=text,
+            word_count=len(text),
+            created_at=at,
+        )
+        db_session.add(attempt)
+        await db_session.flush()
+        db_session.add(
+            OridFeedbackEvent(
+                id=uuid.uuid4(),
+                attempt_id=attempt.id,
+                session_id=session.id,
+                user_id=student.id,
+                stage="O",
+                draft="d1",
+                ok=False,
+                created_at=at,
+            )
+        )
     await db_session.commit()
     await db_session.refresh(session)
 
@@ -175,3 +205,18 @@ async def test_teacher_summary_interaction_count_matches_week(test_client, teach
     )
     assert r.status_code == 200
     assert r.json()["interaction_count"] == 1
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_teacher_summary_feedback_count_matches_week(test_client, teacher_setup):
+    classroom = teacher_setup["classroom"]
+    student = teacher_setup["student"]
+    headers = teacher_setup["teacher_headers"]
+
+    for week in (1, 2):
+        response = await test_client.get(
+            f"/teacher/classes/{classroom.id}/students/{student.id}/summary?week={week}",
+            headers=headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["feedback_click_count"] == 1

@@ -1,6 +1,5 @@
 import Link from "next/link";
 
-import { login } from "@/components/actions/login-action";
 import { DilabLogo } from "@/components/orid/DilabLogo";
 import { LoginCornerDecorations } from "@/components/orid/LoginCornerDecorations";
 
@@ -14,6 +13,7 @@ function loginErrorMessage(error: string | undefined, detail: string | undefined
   if (!error) return null;
   if (error === "validation") return "請確認帳號與密碼格式是否正確。";
   if (error === "auth") return detail?.trim() || "帳號或密碼不正確，請再試一次。";
+  if (error === "session") return "登入狀態已失效，請重新登入。";
   if (error === "server") return "系統暫時無法登入，請稍後再試。";
   return null;
 }
@@ -44,7 +44,7 @@ export default async function Page({
           </div>
         </div>
 
-        <form action={login} className="kid-shell p-5 sm:p-7">
+        <form action="/api/auth/login" method="post" className="kid-shell p-5 sm:p-7">
           <h2 className="mb-1 text-center text-lg font-bold text-amber-950 sm:text-xl">
             歡迎回來！
           </h2>

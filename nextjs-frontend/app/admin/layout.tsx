@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
 import { LogOut } from "lucide-react";
 
 import { logoutToLogin } from "@/lib/logout";
 import { cn } from "@/lib/utils";
+import { useAuthenticatedUser } from "@/lib/use-authenticated-user";
 
 const NAV = [
   { href: "/admin/users", label: "使用者" },
@@ -15,26 +15,21 @@ const NAV = [
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const [greeting, setGreeting] = useState<string | null>(null);
+  const auth = useAuthenticatedUser("admin");
+  const greeting = auth.status === "ready"
+    ? String(auth.user.display_name ?? auth.user.email ?? "").trim()
+    : null;
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const r = await fetch("/api/users/me", { credentials: "include", cache: "no-store" });
-        if (!r.ok || cancelled) return;
-        const u = await r.json().catch(() => null);
-        if (!u || cancelled) return;
-        const name = String(u.display_name ?? u.email ?? "").trim();
-        setGreeting(name);
-      } catch {
-        /* ignore */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  if (auth.status === "checking") {
+    return <div className="min-h-dvh bg-slate-50" aria-label="正在確認登入狀態" />;
+  }
+  if (auth.status === "error") {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-slate-50 px-4 text-center text-slate-800">
+        無法確認登入狀態，請重新整理後再試。
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">

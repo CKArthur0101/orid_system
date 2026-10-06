@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useParams } from "next/navigation";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { BookHelperAvatar } from "@/components/orid/BookIllustration";
 import { BadgeModal } from "@/components/orid/BadgeModal";
@@ -80,6 +80,23 @@ type OridWritingV1 = {
   earnedBadges?: BadgeId[];
 };
 
+type AutosaveStatus = "idle" | "saving" | "saved" | "error";
+
+type LocalDraftEnvelope = {
+  schema: "orid_local_draft_v2";
+  writing: OridWritingV1;
+  updatedAt: number;
+  pending: boolean;
+};
+
+type PendingAutosave = {
+  sessionId: string;
+  readingId: string;
+  week: number;
+  writing: OridWritingV1;
+  serialized: string;
+};
+
 type BookPackV1 = {
   schema: "book_pack_v1";
   book_title?: string;
@@ -130,6 +147,60 @@ function formatApiError(status: number, body: string, fallback: string) {
 
 function localDraftStorageKey(sessionId: string, week: number) {
   return `orid-writing-draft:${sessionId}:${week}`;
+}
+
+function readLocalDraftBackup(sessionId: string, week: number): LocalDraftEnvelope | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(localDraftStorageKey(sessionId, week));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as {
+      schema?: unknown;
+      writing?: unknown;
+      updatedAt?: unknown;
+      pending?: unknown;
+    };
+    if (parsed?.schema === "orid_local_draft_v2" && parsed?.writing) {
+      return {
+        schema: "orid_local_draft_v2",
+        writing: normalizeWritingContent(parsed.writing, week),
+        updatedAt: Number(parsed.updatedAt) || 0,
+        pending: !!parsed.pending,
+      };
+    }
+    // Legacy backups stored the writing object directly. Only restore these
+    // when no server copy exists because they have no reliable timestamp.
+    return {
+      schema: "orid_local_draft_v2",
+      writing: normalizeWritingContent(parsed, week),
+      updatedAt: 0,
+      pending: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalDraftBackup(
+  sessionId: string,
+  week: number,
+  writing: OridWritingV1,
+  pending: boolean,
+  updatedAt = Date.now(),
+) {
+  if (typeof window === "undefined") return;
+  const envelope: LocalDraftEnvelope = {
+    schema: "orid_local_draft_v2",
+    writing,
+    updatedAt,
+    pending,
+  };
+  window.localStorage.setItem(localDraftStorageKey(sessionId, week), JSON.stringify(envelope));
+}
+
+function hasStudentWriting(writing: OridWritingV1): boolean {
+  if (String(writing.synthesis_draft ?? "").trim()) return true;
+  return STAGES.some(({ key }) => String(writing.stages[key]?.d1 ?? "").trim());
 }
 
 function mergeProgressIntoWriting(
@@ -462,13 +533,24 @@ export default function WeekBookPage() {
 
   const emptyWriting = useMemo(() => createEmptyWriting(weekNum), [weekNum]);
   const [writingData, setWritingData] = useState<OridWritingV1>(emptyWriting);
+  const writingDataRef = useRef<OridWritingV1>(emptyWriting);
   const [writingId, setWritingId] = useState<string | null>(null);
   const [writingHydratedSessionId, setWritingHydratedSessionId] = useState<string | null>(null);
   const [writingSubmitting, setWritingSubmitting] = useState(false);
   const [writingError, setWritingError] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const [autosaveStatus, setAutosaveStatus] = useState<AutosaveStatus>("idle");
   const [encourageMsg, setEncourageMsg] = useState<string | null>(null);
   const encourageTimerRef = useRef<number | null>(null);
+  const autosaveDebounceRef = useRef<number | null>(null);
+  const autosaveDrainPromiseRef = useRef<Promise<void> | null>(null);
+  const latestAutosaveRef = useRef<PendingAutosave | null>(null);
+  const lastServerSnapshotRef = useRef<string | null>(null);
+  const autosaveContextRef = useRef<{
+    sessionId: string | null;
+    readingId: string | null;
+    week: number;
+  }>({ sessionId: null, readingId: null, week: weekNum });
   const [oridCanForceNew, setOridCanForceNew] = useState(false);
   const [priorWeekData, setPriorWeekData] = useState<OridWritingV1 | null>(null);
   const [focusStage, setFocusStage] = useState<StageKey>("O");
@@ -523,6 +605,7 @@ export default function WeekBookPage() {
 
   // Badge state
   const [earnedBadges, setEarnedBadges] = useState<BadgeId[]>([]);
+  const earnedBadgesRef = useRef<BadgeId[]>([]);
   const [badgeModalQueue, setBadgeModalQueue] = useState<BadgeId[]>([]);
   const [promptViewCount, setPromptViewCount] = useState(0);
   const [progressHydratedSessionId, setProgressHydratedSessionId] = useState<string | null>(null);
@@ -538,6 +621,100 @@ export default function WeekBookPage() {
 
   const showAiTyping = !!sessionId && fbLoading;
 
+  writingDataRef.current = writingData;
+  earnedBadgesRef.current = earnedBadges;
+  autosaveContextRef.current = { sessionId, readingId, week: weekNum };
+
+  const stageAutosaveSnapshot = useCallback((snapshot: OridWritingV1, badges: BadgeId[]) => {
+    const ctx = autosaveContextRef.current;
+    if (!ctx.sessionId || !ctx.readingId) return;
+    const payload = mergeProgressIntoWriting(snapshot, badges);
+    const serialized = JSON.stringify(payload);
+    latestAutosaveRef.current = {
+      sessionId: ctx.sessionId,
+      readingId: ctx.readingId,
+      week: ctx.week,
+      writing: payload,
+      serialized,
+    };
+    try {
+      writeLocalDraftBackup(ctx.sessionId, ctx.week, payload, true);
+    } catch {
+      // The server autosave can still succeed when browser storage is unavailable.
+    }
+    setAutosaveStatus("idle");
+  }, []);
+
+  const flushAutosave = useCallback(async (keepalive = false) => {
+    if (autosaveDrainPromiseRef.current) {
+      await autosaveDrainPromiseRef.current;
+      return;
+    }
+
+    const drain = (async () => {
+      while (true) {
+        const item = latestAutosaveRef.current;
+        if (!item) return;
+        if (item.serialized === lastServerSnapshotRef.current) {
+          try {
+            writeLocalDraftBackup(item.sessionId, item.week, item.writing, false);
+          } catch {
+            /* server copy is already safe */
+          }
+          setAutosaveStatus("saved");
+          return;
+        }
+
+        setAutosaveStatus("saving");
+        try {
+          const r = await fetch("/api/orid/writings", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              reading_id: item.readingId,
+              session_id: item.sessionId,
+              week: item.week,
+              content: item.serialized,
+              save_intent: "autosave",
+            }),
+            keepalive,
+          });
+          if (!r.ok) throw new Error(`autosave failed: ${r.status}`);
+          const data = await r.json().catch(() => null);
+          const currentSessionId = autosaveContextRef.current.sessionId;
+          if (currentSessionId !== item.sessionId) continue;
+          if (isUuid(data?.id)) setWritingId(String(data.id));
+          lastServerSnapshotRef.current = item.serialized;
+
+          if (latestAutosaveRef.current?.serialized === item.serialized) {
+            try {
+              writeLocalDraftBackup(item.sessionId, item.week, item.writing, false);
+            } catch {
+              /* server copy is already safe */
+            }
+            setAutosaveStatus("saved");
+            return;
+          }
+          // Content changed while this request was in flight. The loop writes
+          // the newest snapshot next, so an older response cannot win.
+        } catch {
+          setAutosaveStatus("error");
+          return;
+        }
+      }
+    })();
+
+    autosaveDrainPromiseRef.current = drain;
+    try {
+      await drain;
+    } finally {
+      if (autosaveDrainPromiseRef.current === drain) {
+        autosaveDrainPromiseRef.current = null;
+      }
+    }
+  }, []);
+
   useLayoutEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, showAiTyping, chatTab, synthesisOpeningText]);
@@ -547,6 +724,10 @@ export default function WeekBookPage() {
       if (encourageTimerRef.current !== null) {
         window.clearTimeout(encourageTimerRef.current);
         encourageTimerRef.current = null;
+      }
+      if (autosaveDebounceRef.current !== null) {
+        window.clearTimeout(autosaveDebounceRef.current);
+        autosaveDebounceRef.current = null;
       }
     };
   }, []);
@@ -619,6 +800,9 @@ export default function WeekBookPage() {
       setWritingHydratedSessionId(null);
       setWritingId(null);
       setWritingData(emptyWriting);
+      latestAutosaveRef.current = null;
+      lastServerSnapshotRef.current = null;
+      setAutosaveStatus("idle");
       setPriorWeekData(null);
       setFbError(null);
       setSaveMsg(null);
@@ -733,6 +917,17 @@ export default function WeekBookPage() {
     () => STAGES.every(({ key }) => String(writingData.stages[key].d1 ?? "").trim().length > 0),
     [writingData],
   );
+  const canSubmitWriting = isEvenWeek(weekNum)
+    ? String(writingData.synthesis_draft ?? "").trim().length > 0
+    : allStagesWritten;
+  const autosaveStatusText =
+    autosaveStatus === "saving"
+      ? "儲存中…"
+      : autosaveStatus === "saved"
+        ? "已自動儲存"
+        : autosaveStatus === "error"
+          ? "儲存失敗，稍後重試"
+          : "";
 
   const mainGridClass = showSynthesisColumn
     ? oridPanelCollapsed
@@ -917,7 +1112,7 @@ export default function WeekBookPage() {
   }, [readingId, readingReloadNonce]);
 
   useEffect(() => {
-    if (!sessionId || writingHydratedSessionId === sessionId) return;
+    if (!sessionId || !readingId || writingHydratedSessionId === sessionId) return;
     const ac = new AbortController();
 
     (async () => {
@@ -939,8 +1134,25 @@ export default function WeekBookPage() {
           setWritingId(null);
         }
 
+        const localBackup = readLocalDraftBackup(sessionId, weekNum);
         if (latest?.content) {
-          const parsed = parseWritingRecordContent(latest.content, weekNum);
+          const serverWriting = parseWritingRecordContent(latest.content, weekNum);
+          const serverUpdatedAt = Date.parse(String(latest.updated_at ?? "")) || 0;
+          const usePendingLocal = !!(
+            localBackup?.pending &&
+            localBackup.updatedAt > serverUpdatedAt
+          );
+          const parsed = usePendingLocal ? localBackup.writing : serverWriting;
+          lastServerSnapshotRef.current = JSON.stringify(serverWriting);
+          latestAutosaveRef.current = usePendingLocal
+            ? {
+                sessionId,
+                readingId,
+                week: weekNum,
+                writing: parsed,
+                serialized: JSON.stringify(parsed),
+              }
+            : null;
           setWritingData(parsed);
           const fromWriting = extractProgressFromWriting(parsed);
           if (fromWriting.earnedBadges.length > 0) {
@@ -949,38 +1161,122 @@ export default function WeekBookPage() {
             );
           }
         } else {
-          let restored = false;
-          if (typeof window !== "undefined") {
-            try {
-              const raw = localStorage.getItem(localDraftStorageKey(sessionId, weekNum));
-              if (raw) {
-                const parsed = JSON.parse(raw) as unknown;
-                const normalized = normalizeWritingContent(parsed, weekNum);
-                setWritingData(normalized);
-                const fromWriting = extractProgressFromWriting(normalized);
-                if (fromWriting.earnedBadges.length > 0) {
-                  setEarnedBadges((prev) =>
-                    Array.from(new Set([...prev, ...fromWriting.earnedBadges])) as BadgeId[],
-                  );
-                }
-                restored = true;
-              }
-            } catch {
-              /* ignore */
+          lastServerSnapshotRef.current = null;
+          if (localBackup) {
+            setWritingData(localBackup.writing);
+            latestAutosaveRef.current = {
+              sessionId,
+              readingId,
+              week: weekNum,
+              writing: localBackup.writing,
+              serialized: JSON.stringify(localBackup.writing),
+            };
+            const fromWriting = extractProgressFromWriting(localBackup.writing);
+            if (fromWriting.earnedBadges.length > 0) {
+              setEarnedBadges((prev) =>
+                Array.from(new Set([...prev, ...fromWriting.earnedBadges])) as BadgeId[],
+              );
             }
+          } else {
+            latestAutosaveRef.current = null;
+            setWritingData(createEmptyWriting(weekNum));
           }
-          if (!restored) setWritingData(createEmptyWriting(weekNum));
         }
       } catch {
         setWritingId(null);
-        setWritingData(createEmptyWriting(weekNum));
+        lastServerSnapshotRef.current = null;
+        const localBackup = readLocalDraftBackup(sessionId, weekNum);
+        if (localBackup) {
+          setWritingData(localBackup.writing);
+          latestAutosaveRef.current = {
+            sessionId,
+            readingId,
+            week: weekNum,
+            writing: localBackup.writing,
+            serialized: JSON.stringify(localBackup.writing),
+          };
+        } else {
+          latestAutosaveRef.current = null;
+          setWritingData(createEmptyWriting(weekNum));
+        }
       } finally {
         if (!ac.signal.aborted) setWritingHydratedSessionId(sessionId);
       }
     })();
 
     return () => ac.abort();
-  }, [sessionId, weekNum, writingHydratedSessionId, condition]);
+  }, [sessionId, readingId, weekNum, writingHydratedSessionId, condition]);
+
+  useEffect(() => {
+    if (!sessionId || !readingId || writingHydratedSessionId !== sessionId) return;
+    const payload = mergeProgressIntoWriting(writingData, earnedBadges);
+    const serialized = JSON.stringify(payload);
+
+    if (serialized === lastServerSnapshotRef.current) {
+      latestAutosaveRef.current = {
+        sessionId,
+        readingId,
+        week: weekNum,
+        writing: payload,
+        serialized,
+      };
+      return;
+    }
+    if (lastServerSnapshotRef.current === null && !hasStudentWriting(payload)) return;
+
+    stageAutosaveSnapshot(payload, earnedBadges);
+    if (autosaveDebounceRef.current !== null) {
+      window.clearTimeout(autosaveDebounceRef.current);
+    }
+    autosaveDebounceRef.current = window.setTimeout(() => {
+      autosaveDebounceRef.current = null;
+      void flushAutosave();
+    }, 2000);
+
+    return () => {
+      if (autosaveDebounceRef.current !== null) {
+        window.clearTimeout(autosaveDebounceRef.current);
+        autosaveDebounceRef.current = null;
+      }
+    };
+  }, [
+    writingData,
+    earnedBadges,
+    sessionId,
+    readingId,
+    writingHydratedSessionId,
+    stageAutosaveSnapshot,
+    flushAutosave,
+  ]);
+
+  useEffect(() => {
+    if (!sessionId || writingHydratedSessionId !== sessionId) return;
+    const intervalId = window.setInterval(() => {
+      const latest = latestAutosaveRef.current;
+      if (latest && latest.serialized !== lastServerSnapshotRef.current) {
+        void flushAutosave();
+      }
+    }, 30_000);
+    return () => window.clearInterval(intervalId);
+  }, [sessionId, writingHydratedSessionId, flushAutosave]);
+
+  useEffect(() => {
+    if (!sessionId || writingHydratedSessionId !== sessionId) return;
+    const flushPending = () => {
+      const latest = latestAutosaveRef.current;
+      if (!latest || latest.serialized === lastServerSnapshotRef.current) return;
+      void flushAutosave(true);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") flushPending();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pagehide", flushPending);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pagehide", flushPending);
+    };
+  }, [sessionId, writingHydratedSessionId, flushAutosave]);
 
   useEffect(() => {
     if (!sessionId || progressHydratedSessionId === sessionId) return;
@@ -1039,26 +1335,8 @@ export default function WeekBookPage() {
     snapshot: OridWritingV1,
     badges: BadgeId[],
   ) {
-    if (!sessionId || !readingId) return;
-    const payload = mergeProgressIntoWriting(snapshot, badges);
-    try {
-      const r = await fetch(`/api/orid/writings`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          reading_id: readingId,
-          session_id: sessionId,
-          week: weekNum,
-          content: JSON.stringify(payload),
-        }),
-      });
-      if (!r.ok) return;
-      const data = await r.json();
-      if (isUuid(data?.id)) setWritingId(String(data.id));
-    } catch {
-      // silent — progress restore still works from badge events
-    }
+    stageAutosaveSnapshot(snapshot, badges);
+    await flushAutosave();
   }
 
   async function runFeedback(stage: StageKey) {
@@ -1074,8 +1352,6 @@ export default function WeekBookPage() {
     setFbLoading(true);
     setFbError(null);
     const draft: DraftKey = "d1";
-    const optimisticStudent = `[${stage} 本段寫作]\n${text}`;
-    setMessages((prev) => [...prev, { role: "student", text: optimisticStudent, stage }]);
 
     try {
       const r = await fetch("/api/orid/writing-coach/chat", {
@@ -1097,6 +1373,8 @@ export default function WeekBookPage() {
       if (!r.ok) throw new Error(formatApiError(r.status, raw, "回饋失敗"));
 
       const data = raw ? JSON.parse(raw) : {};
+      const acceptedStudent = `[${stage} 本段寫作]\n${text}`;
+      setMessages((prev) => [...prev, { role: "student", text: acceptedStudent, stage }]);
       appendAiReply(data?.ai_reply, stage);
       const outStage = coerceStageKey(data?.stage, stage);
       const outDraft: DraftKey = normalizeDraftKey(data?.meta?.draft ?? data?.draft, draft);
@@ -1242,8 +1520,6 @@ export default function WeekBookPage() {
     fbInflightRef.current += 1;
     setFbLoading(true);
     setFbError(null);
-    const optimisticStudent = `[整合寫作]\n${draft}`;
-    setMessages((prev) => [...prev, { role: "student", text: optimisticStudent, stage: "ALL" }]);
 
     try {
       const r = await fetch("/api/orid/writing-coach/chat", {
@@ -1266,6 +1542,11 @@ export default function WeekBookPage() {
       if (!r.ok) throw new Error(formatApiError(r.status, raw, "整合回饋失敗"));
 
       const data = raw ? JSON.parse(raw) : {};
+      const acceptedStudent = `[整合寫作]\n${draft}`;
+      setMessages((prev) => [
+        ...prev,
+        { role: "student", text: acceptedStudent, stage: "ALL" },
+      ]);
       appendAiReply(data?.ai_reply, "ALL");
       const savedId = String(data?.meta?.saved_to_writing_id ?? "");
       if (isUuid(savedId)) setWritingId(savedId);
@@ -1365,31 +1646,22 @@ export default function WeekBookPage() {
       setSaveMsg(null);
       setEncourageMsg(null);
 
-      if (label === "draft") {
-        try {
-          const payload = mergeProgressIntoWriting(writingData, earnedBadges);
-          if (typeof window !== "undefined") {
-            localStorage.setItem(localDraftStorageKey(sessionId, weekNum), JSON.stringify(payload));
-          }
-          await persistWritingSnapshot(writingData, earnedBadges);
-          setWritingData(payload);
-          setSaveMsg(DRAFT_SAVE_ENCOURAGEMENT);
-        } catch {
-          setWritingError("無法寫入本機儲存");
-        }
-        return;
-      }
-
       const payload = mergeProgressIntoWriting(writingData, earnedBadges);
+      const content = JSON.stringify(payload);
+      if (autosaveDebounceRef.current !== null) {
+        window.clearTimeout(autosaveDebounceRef.current);
+        autosaveDebounceRef.current = null;
+      }
+      stageAutosaveSnapshot(payload, earnedBadges);
+      if (autosaveDrainPromiseRef.current) {
+        await flushAutosave();
+      }
       try {
-        if (typeof window !== "undefined") {
-          localStorage.setItem(localDraftStorageKey(sessionId, weekNum), JSON.stringify(payload));
-        }
+        writeLocalDraftBackup(sessionId, weekNum, payload, true);
       } catch {
-        /* ignore local backup failure; server submit may still succeed */
+        /* the explicit server save may still succeed */
       }
 
-      const content = JSON.stringify(payload);
       const r = await fetch(`/api/orid/writings`, {
         method: "POST",
         credentials: "include",
@@ -1399,7 +1671,7 @@ export default function WeekBookPage() {
           session_id: sessionId,
           week: weekNum,
           content,
-          save_intent: "submit",
+          save_intent: label,
         }),
       });
 
@@ -1409,16 +1681,40 @@ export default function WeekBookPage() {
       const data = text ? JSON.parse(text) : null;
       if (isUuid(data?.id)) setWritingId(String(data.id));
 
-      setWritingData(payload);
-      try {
-        if (typeof window !== "undefined") {
-          localStorage.removeItem(localDraftStorageKey(sessionId, weekNum));
+      lastServerSnapshotRef.current = content;
+      const newestPayload = mergeProgressIntoWriting(
+        writingDataRef.current,
+        earnedBadgesRef.current,
+      );
+      const newestSerialized = JSON.stringify(newestPayload);
+      if (newestSerialized === content) {
+        latestAutosaveRef.current = {
+          sessionId,
+          readingId,
+          week: weekNum,
+          writing: payload,
+          serialized: content,
+        };
+        setWritingData(payload);
+        try {
+          writeLocalDraftBackup(sessionId, weekNum, payload, false);
+        } catch {
+          /* ignore */
         }
-      } catch {
-        /* ignore */
+        setAutosaveStatus("saved");
+      } else {
+        // The student kept typing during the explicit save. Preserve that
+        // newer text locally and send it through autosave after this response.
+        stageAutosaveSnapshot(newestPayload, earnedBadgesRef.current);
+        void flushAutosave();
       }
-
-      setSaveMsg(allStagesWritten ? SUBMIT_ALL_DONE_ENCOURAGEMENT : SUBMIT_PARTIAL_ENCOURAGEMENT);
+      setSaveMsg(
+        label === "draft"
+          ? DRAFT_SAVE_ENCOURAGEMENT
+          : allStagesWritten
+            ? SUBMIT_ALL_DONE_ENCOURAGEMENT
+            : SUBMIT_PARTIAL_ENCOURAGEMENT,
+      );
     } catch (e: any) {
       setWritingError(e?.message ?? "儲存失敗");
     } finally {
@@ -1434,13 +1730,24 @@ export default function WeekBookPage() {
       setSaveMsg(null);
       setEncourageMsg(null);
 
-      const next: OridWritingV1 = {
-        ...writingData,
-        week: weekNum,
-        week2_flow: "synthesis",
-        synthesis_draft: writingData.synthesis_draft ?? "",
-      };
+      const next: OridWritingV1 = mergeProgressIntoWriting(
+        {
+          ...writingData,
+          week: weekNum,
+          week2_flow: "synthesis",
+          synthesis_draft: writingData.synthesis_draft ?? "",
+        },
+        earnedBadges,
+      );
       const content = JSON.stringify(next);
+      if (autosaveDebounceRef.current !== null) {
+        window.clearTimeout(autosaveDebounceRef.current);
+        autosaveDebounceRef.current = null;
+      }
+      stageAutosaveSnapshot(next, earnedBadges);
+      if (autosaveDrainPromiseRef.current) {
+        await flushAutosave();
+      }
       const r = await fetch(`/api/orid/writings`, {
         method: "POST",
         credentials: "include",
@@ -1450,6 +1757,7 @@ export default function WeekBookPage() {
           session_id: sessionId,
           week: weekNum,
           content,
+          save_intent: "draft",
         }),
       });
 
@@ -1459,15 +1767,22 @@ export default function WeekBookPage() {
       const data = text ? JSON.parse(text) : null;
       if (isUuid(data?.id)) setWritingId(String(data.id));
 
+      lastServerSnapshotRef.current = content;
+      latestAutosaveRef.current = {
+        sessionId,
+        readingId,
+        week: weekNum,
+        writing: next,
+        serialized: content,
+      };
       try {
-        if (typeof window !== "undefined") {
-          localStorage.removeItem(localDraftStorageKey(sessionId, weekNum));
-        }
+        writeLocalDraftBackup(sessionId, weekNum, next, false);
       } catch {
         /* ignore */
       }
 
       setWritingData(next);
+      setAutosaveStatus("saved");
       setSaveMsg("已進入整合寫作階段 ✅");
       setChatTab("synthesis");
     } catch (e: any) {
@@ -1559,15 +1874,26 @@ export default function WeekBookPage() {
                         複製
                       </button>
                     ) : null}
-                    {!(isEvenWeek(weekNum) && w2Phase === "orid_review") ? (
-                      <button
-                        type="button"
-                        className="kid-btn-3d-secondary shrink-0"
-                        disabled={!sessionId || !readingId || writingSubmitting}
-                        onClick={() => saveWriting("submit")}
-                      >
-                        {writingSubmitting ? "儲存中…" : "儲存"}
-                      </button>
+                    {isOddWeek(weekNum) ? (
+                      <>
+                        <button
+                          type="button"
+                          className="kid-btn-3d-secondary shrink-0"
+                          disabled={!sessionId || !readingId || writingSubmitting}
+                          onClick={() => saveWriting("draft")}
+                        >
+                          {writingSubmitting ? "儲存中…" : "儲存"}
+                        </button>
+                        <button
+                          type="button"
+                          className="kid-btn-3d-secondary shrink-0"
+                          disabled={!sessionId || !readingId || writingSubmitting || !canSubmitWriting}
+                          onClick={() => saveWriting("submit")}
+                          title="四段完成後正式提交"
+                        >
+                          提交
+                        </button>
+                      </>
                     ) : null}
                   </div>
                 </div>
@@ -1683,10 +2009,25 @@ export default function WeekBookPage() {
                   </button>
                 ) : null}
               </div>
-              {fbError && <div className="mt-1.5 whitespace-pre-wrap text-xs text-red-600 sm:text-sm">{fbError}</div>}
+              {fbError && !showSynthesisColumn ? (
+                <div className="mt-1.5 whitespace-pre-wrap text-xs text-red-600 sm:text-sm" role="alert">
+                  {fbError}
+                </div>
+              ) : null}
               {copyFlash && <div className="mt-1.5 text-xs font-medium text-emerald-700 sm:text-sm">{copyFlash}</div>}
               {encourageMsg && <div className="mt-1.5 text-xs font-medium text-amber-800 sm:text-sm">{encourageMsg}</div>}
               {saveMsg && <div className="mt-1.5 text-xs font-medium text-emerald-600 sm:text-sm">{saveMsg}</div>}
+              {autosaveStatusText && !showSynthesisColumn ? (
+                <div
+                  className={[
+                    "mt-1 text-[11px] sm:text-xs",
+                    autosaveStatus === "error" ? "text-red-600" : "text-amber-900/55",
+                  ].join(" ")}
+                  aria-live="polite"
+                >
+                  {autosaveStatusText}
+                </div>
+              ) : null}
               {writingError && <div className="mt-1.5 whitespace-pre-wrap text-xs text-red-600 sm:text-sm">{writingError}</div>}
             </div>
           </div>
@@ -1707,9 +2048,18 @@ export default function WeekBookPage() {
                   type="button"
                   className="kid-btn-3d-secondary shrink-0 !min-h-[32px] !px-3 !py-1 !text-xs"
                   disabled={!sessionId || !readingId || writingSubmitting}
-                  onClick={() => saveWriting("submit")}
+                  onClick={() => saveWriting("draft")}
                 >
                   {writingSubmitting ? "儲存中…" : "儲存"}
+                </button>
+                <button
+                  type="button"
+                  className="kid-btn-3d-secondary shrink-0 !min-h-[32px] !px-3 !py-1 !text-xs"
+                  disabled={!sessionId || !readingId || writingSubmitting || !canSubmitWriting}
+                  onClick={() => saveWriting("submit")}
+                  title="完成整合寫作後正式提交"
+                >
+                  提交
                 </button>
                 <button
                   type="button"
@@ -1768,11 +2118,19 @@ export default function WeekBookPage() {
                   });
                 }}
               />
+              {autosaveStatusText ? (
+                <div
+                  className={[
+                    "shrink-0 text-[11px] sm:text-xs",
+                    autosaveStatus === "error" ? "text-red-600" : "text-amber-900/55",
+                  ].join(" ")}
+                  aria-live="polite"
+                >
+                  {autosaveStatusText}
+                </div>
+              ) : null}
               {copyFlash && oridPanelCollapsed ? (
                 <div className="text-xs font-medium text-emerald-700">{copyFlash}</div>
-              ) : null}
-              {fbError && oridPanelCollapsed ? (
-                <div className="whitespace-pre-wrap text-xs text-red-600">{fbError}</div>
               ) : null}
               {!isControl ? (
                 <button
@@ -1799,6 +2157,11 @@ export default function WeekBookPage() {
                     </>
                   )}
                 </button>
+              ) : null}
+              {fbError ? (
+                <div className="whitespace-pre-wrap text-xs text-red-600 sm:text-sm" role="alert">
+                  {fbError}
+                </div>
               ) : null}
             </div>
           </div>

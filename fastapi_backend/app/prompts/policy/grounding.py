@@ -23,6 +23,16 @@ _STORY_CUE_KEYWORDS = [
 _COMMON_STORY_ANCHORS = {
     "故事", "書裡", "阿松", "爺爺", "奶奶", "小朋友", "孩子", "柿子", "樹", "分享", "最後",
 }
+# Use only high-confidence nouns for deterministic corrections. Chinese has no
+# word boundaries, so taking arbitrary characters after「吃／拿／用」can turn
+# valid text such as「用柿子蒂和小朋友」into the fake noun「柿子蒂和」.
+_HIGH_CONFIDENCE_CONCRETE_NOUNS: tuple[str, ...] = (
+    "地瓜", "番薯", "蕃薯", "馬鈴薯", "香蕉", "蘋果", "西瓜", "橘子",
+    "柳丁", "糖果", "巧克力", "蛋糕", "籃球", "足球", "電動",
+)
+_CONCRETE_NOUN_ACTION_RE = re.compile(
+    r"(?:吃|拿|用|要|給|送|帶|買|種)(?:了|著|着)?(?:一|個|顆|颗|片|根|些|份)?$"
+)
 _ABSURD_MISMATCH_KEYWORDS = [
     "火箭", "外星人", "魔法", "飛船", "超能力", "機器人", "總統", "炸彈", "核彈", "穿越",
 ]
@@ -53,6 +63,10 @@ _ACTION_EVENT_KEYWORDS = [
     "咬",
 ]
 _ACTION_EVENT_VERB_RE = r"(?:打|揍|毆|踢|砍|殺|欺負|霸凌|吃|咬)"
+_PERSON_TARGET_TERMS: tuple[str, ...] = (
+    "其他動物", "爺爺", "奶奶", "叔叔", "阿姨", "小朋友", "孩子", "同學", "朋友",
+    "爸爸", "媽媽", "先生", "太太", "獅子", "動物",
+)
 # Verb + nearby object that is already in the book → treat as paraphrase, not fabrication.
 _BOOK_ACTION_PARAPHRASE_ALLOW: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("砍", ("樹", "柿子樹", "樹樁", "樹椿", "光光", "砍掉", "砍光")),
@@ -102,7 +116,11 @@ def looks_unsafe_by_structure(text: str) -> bool:
 
 def normalize_match_text(text: str) -> str:
     t = re.sub(r"[\s「」『』\"'，。！？：；、（）()\[\]{}、]+", "", (text or "").strip())
-    return t.replace("\u4f54", "\u5360")
+    return (
+        t.replace("\u4f54", "\u5360")
+        .replace("哎喲", "哎唷")
+        .replace("樹椿", "樹樁")
+    )
 
 
 def extract_book_terms(book_pack: Optional[dict[str, Any]]) -> set[str]:
@@ -259,6 +277,16 @@ def strip_story_framing_for_grounding(text: str) -> str:
     return t
 
 
+def _has_unsupported_person_target(span: str, verb: str, reference_blob: str) -> bool:
+    """Catch a harmful/consuming verb aimed at a person absent from the material."""
+    s = normalize_match_text(span)
+    if verb not in s:
+        return False
+    suffix = s.split(verb, 1)[1]
+    target = next((term for term in _PERSON_TARGET_TERMS if suffix.startswith(term)), "")
+    return bool(target and f"{verb}{target}" not in reference_blob)
+
+
 def _action_span_supported_by_book(span: str, verb: str, reference_blob: str) -> bool:
     """True when the action span is literally in the book or a known in-book paraphrase."""
     s = normalize_match_text(span)
@@ -266,6 +294,13 @@ def _action_span_supported_by_book(span: str, verb: str, reference_blob: str) ->
         return False
     if s in reference_blob:
         return True
+    # A person immediately after a harmful/consuming verb is the target, not
+    # merely a nearby story character. Require that whole relation to appear
+    # in the material; do not approve it from fragments such as「爺爺吃」.
+    if verb in {"打", "揍", "毆", "踢", "殺", "欺負", "霸凌", "吃", "咬"} and (
+        _has_unsupported_person_target(s, verb, reference_blob)
+    ):
+        return False
     # Expanding windows around the verb: 「砍樹」「大口吃」等原文片段
     m = re.search(re.escape(verb), s)
     if m:
@@ -320,6 +355,8 @@ def _has_unsupported_action_event_claim(text_norm: str, reference_blob: str) -> 
         verb = m.group(0)
         if _action_span_supported_by_book(s, verb, reference_blob):
             continue
+        if _has_unsupported_person_target(s, verb, reference_blob):
+            return True
         if any(k in s for k in _ACTION_EVENT_KEYWORDS):
             i = m.start()
             left = s[max(0, i - 2) : i + 1]
@@ -348,6 +385,9 @@ def extract_unsupported_action_phrase(
         verb = m.group(0)
         if _action_span_supported_by_book(s, verb, reference_blob):
             continue
+        if _has_unsupported_person_target(s, verb, reference_blob):
+            phrase = re.sub(r"^(因為|所以|為了)", "", sp).strip() or sp.strip()
+            return phrase
         i = m.start()
         left = s[max(0, i - 2) : i + 1]
         right = s[i : min(len(s), i + 3)]
@@ -360,24 +400,21 @@ def extract_unsupported_action_phrase(
 def extract_wrong_concrete_noun(
     student_text: str, book_pack: Optional[dict[str, Any]]
 ) -> str:
-    """Return a short wrong noun (e.g. 地瓜) when student cites a concrete detail not in the book."""
+    """Return a high-confidence wrong noun without inventing Chinese word boundaries."""
     reference_blob = extract_story_reference_blob(book_pack)
     if not reference_blob:
         return ""
     text_norm = normalize_match_text(student_text)
-    for pattern in (r"吃([一-龥]{2,4})", r"拿([一-龥]{2,4})", r"用([一-龥]{2,4})"):
-        m = re.search(pattern, text_norm)
-        if not m:
+    for noun in _HIGH_CONFIDENCE_CONCRETE_NOUNS:
+        noun_norm = normalize_match_text(noun)
+        if not noun_norm or noun_norm in reference_blob:
             continue
-        noun = m.group(1)
-        if not noun or noun in reference_blob or noun in _COMMON_STORY_ANCHORS:
-            continue
-        # Avoid swallowing following verbs/clauses: 吃看到奶奶
-        if noun.startswith(("看", "到", "了", "完", "得", "著", "过", "過")):
-            continue
-        if any(v in noun for v in ("打", "砍", "殺", "踢", "揍")):
-            continue
-        return noun
+        start = text_norm.find(noun_norm)
+        while start >= 0:
+            prefix = text_norm[max(0, start - 6) : start]
+            if _CONCRETE_NOUN_ACTION_RE.search(prefix):
+                return noun
+            start = text_norm.find(noun_norm, start + len(noun_norm))
     return ""
 
 
@@ -764,6 +801,9 @@ _BOOK_SYNONYM_GROUPS: tuple[tuple[str, ...], ...] = (
     ("大口吃", "大口", "狼吞虎嚥"),
     ("藏進倉庫", "藏到倉庫", "藏進", "藏到屋後", "藏起來"),
     ("柿子蒂", "蒂"),
+    ("哎唷奶奶", "哎喲奶奶", "阿婆", "奶奶"),
+    ("用柿子蒂打陀螺", "拿柿子蒂打陀螺", "柿子蒂當陀螺", "柿子蒂陀螺"),
+    ("把葉子給大家", "拿葉子給大家", "給小朋友葉子", "把剩下的葉子提供給小朋友"),
 )
 
 
@@ -825,6 +865,26 @@ def student_uses_supported_event_paraphrase(
     draft = normalize_match_text(student_text)
     focus = normalize_match_text(focus_text)
     if not draft or not focus or not isinstance(book_pack, dict):
+        return False
+
+    reference_blob = extract_story_reference_blob(book_pack)
+    # A shared character name is not enough to make an entire event a
+    # paraphrase. Reject an explicit verb-person relation, while avoiding the
+    # broad action heuristic here because Chinese clause boundaries can make
+    # valid text such as「別人想吃，他也不給」look like「吃他」.
+    action_spans = re.findall(
+        rf"[一-龥]{{0,4}}{_ACTION_EVENT_VERB_RE}[一-龥]{{0,4}}",
+        focus,
+    )
+    for action_span in action_spans:
+        match = re.search(_ACTION_EVENT_VERB_RE, action_span)
+        if match and _has_unsupported_person_target(
+            action_span,
+            match.group(0),
+            reference_blob,
+        ):
+            return False
+    if extract_wrong_concrete_noun(focus, book_pack):
         return False
 
     for group in _event_paraphrase_groups_for_book(book_pack):

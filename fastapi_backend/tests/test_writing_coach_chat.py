@@ -10,10 +10,15 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import select
 
-from app.models import OridChatMessage, OridSession, OridWeekSubmission, Reading
+from app.models import OridChatMessage, OridSafetyEvent, OridSession, OridWeekSubmission, Reading
 from app.routes import orid
 from app.services import safety
 from app.services.orid_condition import CONTROL_AI_FORBIDDEN_DETAIL
+
+
+@pytest.fixture(autouse=True)
+def _disable_real_safety_api(monkeypatch):
+    monkeypatch.setattr(safety, "client", None)
 
 
 def _minimal_book_pack() -> str:
@@ -273,7 +278,12 @@ async def test_writing_coach_rejects_unsafe_text(
         headers=authenticated_user["headers"],
     )
     assert r.status_code == 400
-    assert "不適合送出" in r.text
+    assert "不要用傷人的話" in r.text
+    safety_event = (await db_session.execute(select(OridSafetyEvent))).scalars().one()
+    assert safety_event.level == 2
+    assert safety_event.category == "harassment"
+    assert safety_event.action == "block_and_rewrite"
+    assert len(safety_event.text_fingerprint) == 64
 
 
 @pytest.mark.asyncio(loop_scope="function")
@@ -334,7 +344,7 @@ class _FakeModerations:
         self._flagged = flagged
         self._categories = categories
 
-    async def create(self, input: str):
+    async def create(self, input: str, model: str | None = None):
         return SimpleNamespace(
             results=[_FakeModerationResult(self._flagged, self._categories)]
         )

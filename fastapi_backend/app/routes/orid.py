@@ -20,7 +20,7 @@ from openai import AsyncOpenAI, BadRequestError
 
 from app.database import get_async_session, User
 from app.users import current_active_user
-from app.models import Reading, OridSession, OridChatMessage, OridWeekSubmission, OridStageAttempt, OridFeedbackEvent, OridBadgeEvent
+from app.models import Reading, OridSession, OridChatMessage, OridSafetyEvent, OridWeekSubmission, OridStageAttempt, OridFeedbackEvent, OridBadgeEvent
 from app.schemas import (
     ReadingCreate, ReadingRead,
     OridSessionCreate, OridSessionRead,
@@ -83,6 +83,7 @@ from app.services.orid_research_summary import (
     bump_guide_use,
     bump_save_and_maybe_revision,
     mark_submitted,
+    sync_autosave_word_count,
     sync_badges,
 )
 from app.prompts.policy.student_input_bucket import (
@@ -130,6 +131,7 @@ from app.prompts.policy.turn_destination import (
 )
 from app.prompts.builders.checker import build_book_grounding_checker_prompts
 from app.prompts.policy.grounding import (
+    extract_story_reference_blob,
     extract_unsupported_action_phrase,
     extract_wrong_concrete_noun,
     book_contrast_noun_for,
@@ -137,6 +139,7 @@ from app.prompts.policy.grounding import (
     looks_obviously_offtopic,
     looks_likely_factual_mismatch,
     looks_likely_ungrounded_in_book,
+    normalize_match_text,
     scrub_false_book_absence_claims,
     scrub_false_synonym_mismatch_claims,
     student_uses_supported_event_paraphrase,
@@ -146,7 +149,7 @@ from app.prompts.parsers.json_payloads import (
     extract_json_object,
     parse_book_grounding_checker_json,
 )
-from app.services.safety import check_safety
+from app.services.safety import classify_safety, safety_text_fingerprint
 from app.services.rag import get_feedback_rag_context
 from app.services.orid_condition import (
     CONTROL_AI_FORBIDDEN_DETAIL,
@@ -163,8 +166,8 @@ from app.services.orid_writing_store import (
 # OpenAI settings (from env)
 # ----------------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
-OPENAI_REASONING_EFFORT = (os.getenv("OPENAI_REASONING_EFFORT") or "low").strip() or "low"
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-6-luna")
+OPENAI_REASONING_EFFORT = (os.getenv("OPENAI_REASONING_EFFORT") or "medium").strip() or "medium"
 
 OPENAI_MAX_COMPLETION_TOKENS = int(
     os.getenv("OPENAI_MAX_COMPLETION_TOKENS")
@@ -1746,6 +1749,8 @@ class BookGroundingCheck:
     grounded: Optional[bool]
     unsupported_span: str = ""
     reason: str = ""
+    status: str = ""
+    material_evidence: str = ""
 
 
 async def _llm_book_grounding_check(
@@ -1774,7 +1779,7 @@ async def _llm_book_grounding_check(
                 {"role": "system", "content": sys},
                 {"role": "user", "content": user_msg},
             ],
-            max_completion_tokens=min(200, OPENAI_MAX_COMPLETION_TOKENS),
+            max_completion_tokens=min(500, OPENAI_MAX_COMPLETION_TOKENS),
             temperature=0,
         )
         obj = parse_book_grounding_checker_json(raw)
@@ -1792,7 +1797,17 @@ async def _llm_book_grounding_check(
             return None
         span = str(obj.get("unsupported_span") or "").strip()
         reason = str(obj.get("reason") or "").strip()
-        return BookGroundingCheck(grounded=grounded, unsupported_span=span, reason=reason)
+        status = str(obj.get("status") or "").strip().lower()
+        if status not in {"supported", "ambiguous", "contradicted"}:
+            status = "supported" if grounded is True else ""
+        evidence = str(obj.get("material_evidence") or "").strip()
+        return BookGroundingCheck(
+            grounded=grounded,
+            unsupported_span=span,
+            reason=reason,
+            status=status,
+            material_evidence=evidence,
+        )
     except Exception:
         logger.warning("book grounding checker failed")
     return None
@@ -1816,16 +1831,22 @@ def _genai_grounding_user_hint(
     check: BookGroundingCheck,
     book_pack: Optional[dict[str, Any]],
 ) -> str:
-    span = (check.unsupported_span or "").strip() or "（書外情節）"
-    ref = _book_grounding_reference_line(book_pack)
-    ref_line = f"書裡可對照的一句：「{ref}」。" if ref else ""
+    span = (check.unsupported_span or "").strip() or "（需要核對的情節）"
+    evidence = (check.material_evidence or "").strip()
+    ref_line = f"教材依據：「{evidence}」。" if evidence else ""
     reason = (check.reason or "").strip()
     reason_line = f"核對說明：{reason}。" if reason else ""
+    if check.status == "ambiguous":
+        diagnosis = "學生這段省略了核對故事所需的關鍵資訊；不可自行補成教材中的事件。"
+        missing_rule = "missing 必須逐字引用該片段，請學生說清楚是誰做了什麼或動作的對象；"
+    else:
+        diagnosis = "學生草稿中有與教材不一致或教材未支持的具體情節。"
+        missing_rule = "missing 必須逐字引用該片段，溫和指出這件事和書裡不一樣；"
     return (
-        "【教材核對結果（極重要）】學生草稿中有書裡沒有的具體情節。\n"
-        f"疑似書外片段：「{span}」。{reason_line}{ref_line}\n"
-        "請 ok=false。missing 用**口語**溫和指出哪個詞或哪件事不在書裡，並自然帶一句書裡真的情況；"
-        "**禁止**只寫「對齊教材」或「請把內容對齊教材」。"
+        f"【教材核對結果（極重要）】{diagnosis}\n"
+        f"學生原文片段：「{span}」。{reason_line}{ref_line}\n"
+        f"請 ok=false。{missing_rule}"
+        "禁止改寫學生片段、禁止只寫『沒有說清楚』、禁止只寫『對齊教材』。"
         "suggestions 用**一個**問句引導學生改寫；example 只給句型支架，improved 填 null。\n\n"
     )
 
@@ -1844,7 +1865,12 @@ async def _llm_natural_grounding_correction(
     if not t or not isinstance(book_pack, dict):
         return None
     span = (check.unsupported_span or "").strip()
-    book_context = build_book_context_block(book_pack, max_events=6, max_chars=1400)
+    book_context = build_book_context_block(
+        book_pack,
+        max_events=10,
+        max_excerpts=8,
+        max_chars=3000,
+    )
     stage_u = (stage or "O").strip().upper()
     sys = f"""
 你是國小五、六年級的寫作回饋助手。
@@ -1858,6 +1884,7 @@ async def _llm_natural_grounding_correction(
 
 規則：
 - missing：只抓**一個**重點；溫和說哪個詞／哪件事不像書裡發生的；可帶一句書裡真的情節對照。
+- missing 必須逐字包含「疑似書外片段」中的文字，讓學生知道要改哪裡；禁止只說「沒有說清楚」。
 - suggestions：一個短問句或下一步，引導學生改用書裡真的事件再寫。
 - 禁止出現「對齊教材」「對照摘要」「掃摘要」。
 - 禁止把學生的錯誤情節當成真實發生去追問（例如不要問「為什麼爺爺吃奶奶」）。
@@ -1905,8 +1932,12 @@ def _grounding_fallback_lines(
         student_text, book_pack
     )
     parts: list[str] = []
+    status = (check.status if check else "").strip().lower()
     if span:
-        parts.append(f"你寫的「{span}」好像不是書裡發生的事")
+        if status == "ambiguous":
+            parts.append(f"你寫的「{span}」還看不出書裡是誰做了什麼，或動作的對象是什麼")
+        else:
+            parts.append(f"你寫的「{span}」和書裡發生的事情不一樣")
     wrong_noun = extract_wrong_concrete_noun(student_text, book_pack)
     if wrong_noun:
         contrast = book_contrast_noun_for(wrong_noun, book_pack)
@@ -1917,13 +1948,12 @@ def _grounding_fallback_lines(
     char_note = _book_grounding_character_note(student_text, book_pack)
     if char_note:
         parts.append(char_note)
-    ref = _book_grounding_reference_line(book_pack)
-    if ref:
-        parts.append(f"書裡比較像是「{ref}」")
     if not parts:
         parts.append("你剛寫的情節好像不是書裡發生的事")
     missing = "，".join(parts) + "。"
     stage_upper = (stage or "O").strip().upper()
+    if status == "ambiguous" and span:
+        return missing, f"請把「{span}」說清楚：這裡是誰做了什麼，或把什麼東西怎麼了？"
     suggestion_map = {
         "O": "你可以先想想：書裡是誰、做了什麼？再照那個方向改寫一句。",
         "R": "你可以先想想：書裡哪一幕讓你有這種感覺？再寫你的感受和原因。",
@@ -1931,6 +1961,55 @@ def _grounding_fallback_lines(
         "D": "你可以先想想：這本書想提醒你什麼？再寫你下次會怎麼做。",
     }
     return missing, suggestion_map.get(stage_upper, "先改用書裡真的人物和事件，再把意思寫清楚。")
+
+
+def _deterministic_concrete_grounding_feedback(
+    *,
+    student_text: str,
+    book_pack: Optional[dict[str, Any]],
+    stage: str,
+) -> Optional[Tuple[str, str]]:
+    """Lock clear fabricated actions/objects to one reproducible diagnosis."""
+    if (stage or "O").strip().upper() == "D":
+        return None
+    unsupported_action = extract_unsupported_action_phrase(student_text, book_pack)
+    wrong_noun = extract_wrong_concrete_noun(student_text, book_pack)
+    if not unsupported_action and not wrong_noun:
+        return None
+    return _grounding_fallback_lines(
+        student_text=student_text,
+        book_pack=book_pack,
+        stage=stage,
+    )
+
+
+def _semantic_material_grounding_feedback(
+    *,
+    student_text: str,
+    book_pack: Optional[dict[str, Any]],
+    stage: str,
+    check: Optional[BookGroundingCheck],
+) -> Optional[Tuple[str, str]]:
+    """Lock a claim-level semantic diagnosis that quotes the student's text."""
+    if (stage or "O").strip().upper() == "D" or check is None:
+        return None
+    if check.status not in {"ambiguous", "contradicted"} or check.grounded is not False:
+        return None
+    if check.status == "contradicted":
+        evidence = normalize_match_text(check.material_evidence or "")
+        reference = normalize_match_text(extract_story_reference_blob(book_pack))
+        if len(evidence) < 4 or evidence not in reference:
+            return None
+    span = (check.unsupported_span or "").strip()
+    text = (student_text or "").strip()
+    if not span or span not in text:
+        return None
+    return _grounding_fallback_lines(
+        student_text=text,
+        book_pack=book_pack,
+        stage=stage,
+        check=check,
+    )
 
 
 def _is_grounding_specific_message(text: str) -> bool:
@@ -1961,6 +2040,8 @@ def _is_grounding_specific_message(text: str) -> bool:
         "對回書裡",
         "改成書裡",
         "書裡實際",
+        "和書裡發生的事情不一樣",
+        "還看不出書裡是誰做了什麼",
     )
     return any(c in t for c in cues)
 
@@ -2190,6 +2271,14 @@ async def _enforce_feedback_book_grounding(
         )
 
     if use_llm_checker and check is not None:
+        semantic_feedback = _semantic_material_grounding_feedback(
+            student_text=t,
+            book_pack=book_pack,
+            stage=stage,
+            check=check,
+        )
+        if semantic_feedback is not None:
+            return False, [semantic_feedback[0]], [semantic_feedback[1]]
         if check.grounded is True:
             heuristic_bad = looks_likely_factual_mismatch(t, book_pack) or looks_likely_ungrounded_in_book(
                 t, book_pack, stage=stage
@@ -2793,9 +2882,10 @@ def _feedback_from_obj(
 
     example = str(example_raw).strip() if example_raw not in (None, "") else None
     improved = str(improved_raw).strip() if improved_raw not in (None, "") else None
+    rubric_meta = _rubric_meta_from_obj(obj)
 
     ctrl: Optional[Tuple[bool, list[str], list[str], Optional[str], Optional[str]]] = None
-    if (not missing) and (not suggestions):
+    if (not ok) and (not missing) and (not suggestions):
         ok2, miss2, sug2, ex2, pr2 = _control_feedback(stage, text)
         ok = ok or ok2
         missing = missing or miss2
@@ -2815,10 +2905,19 @@ def _feedback_from_obj(
     if improved and len(improved) > 120:
         improved = None
 
-    suggestions = scaffold_feedback_suggestions(stage, suggestions[:1])
-    example = scaffold_feedback_example(stage, example)
+    if ok:
+        # A passing rubric decision must not carry revision work. Otherwise the
+        # UI says「完成」while still pressuring the student to copy a suggestion.
+        missing = []
+        suggestions = []
+        example = None
+        improved = None
+        rubric_meta.pop("draft_next_step", None)
+    else:
+        suggestions = scaffold_feedback_suggestions(stage, suggestions[:1])
+        example = scaffold_feedback_example(stage, example)
 
-    return ok, missing[:1], suggestions[:1], example, improved, praise, _rubric_meta_from_obj(obj)
+    return ok, missing[:1], suggestions[:1], example, improved, praise, rubric_meta
 
 
 def _looks_valid_feedback_narration(text: str) -> bool:
@@ -2935,6 +3034,19 @@ async def _genai_feedback(
         result: Tuple[bool, list[str], list[str], Optional[str], Optional[str], Optional[str], dict[str, Any]],
     ) -> Tuple[bool, list[str], list[str], Optional[str], Optional[str], Optional[str], dict[str, Any]]:
         ok, miss, sug, ex, imp, praise, rubric = result
+        if grounding_check is not None:
+            rubric = {
+                **(rubric or {}),
+                "material_grounding_check": {
+                    "status": grounding_check.status or (
+                        "supported" if grounding_check.grounded is True else "legacy"
+                    ),
+                    "grounded": grounding_check.grounded,
+                    "student_quote": grounding_check.unsupported_span or None,
+                    "reason": grounding_check.reason or None,
+                    "material_evidence": grounding_check.material_evidence or None,
+                },
+            }
         if rag_ctx:
             rubric = {**(rubric or {}), "rag_context": rag_ctx}
         return ok, miss, sug, ex, imp, praise, rubric
@@ -2945,6 +3057,7 @@ async def _genai_feedback(
     grounding_targets_supported_paraphrase = bool(
         grounding_check is not None
         and grounding_check.grounded is False
+        and grounding_check.status not in {"ambiguous", "contradicted"}
         and student_uses_supported_event_paraphrase(
             text,
             book_pack,
@@ -3598,12 +3711,37 @@ async def writing_coach_chat(
         )
 
     if body:
-        unsafe, unsafe_reason = await check_safety(body, writing_coach=True)
-        if unsafe:
-            raise HTTPException(
-                status_code=400,
-                detail=f"這段內容目前不適合送出：{unsafe_reason}。請改成尊重、安全的說法後再試一次。",
+        safety = await classify_safety(body, writing_coach=True)
+        if safety.should_stop_feedback:
+            db.add(
+                OridSafetyEvent(
+                    user_id=user.id,
+                    session_id=session.id,
+                    week=data.week,
+                    stage=stage_ctx,
+                    source=source,
+                    level=safety.level,
+                    category=safety.category,
+                    action=safety.action.value,
+                    reason=safety.reason,
+                    provider=safety.provider,
+                    text_fingerprint=safety_text_fingerprint(body),
+                )
             )
+            await db.commit()
+            log = logger.error if safety.level >= 4 else logger.warning
+            log(
+                "ORID safety event user=%s session=%s week=%s stage=%s level=%s category=%s action=%s provider=%s",
+                user.id,
+                session.id,
+                data.week,
+                stage_ctx,
+                safety.level,
+                safety.category,
+                safety.action.value,
+                safety.provider,
+            )
+            raise HTTPException(status_code=400, detail=safety.student_message)
 
     input_bucket = classify_student_input(body) if body else classify_student_input("")
     draft_excerpt = truncate_student_draft_excerpt(body)
@@ -3706,6 +3844,16 @@ async def writing_coach_chat(
             input_bucket=input_bucket,
             grounding_check=grounding_check,
         )
+        locked_concrete_grounding = _semantic_material_grounding_feedback(
+            student_text=body,
+            book_pack=book_pack,
+            stage=stage_ctx,
+            check=grounding_check,
+        ) or _deterministic_concrete_grounding_feedback(
+            student_text=body,
+            book_pack=book_pack,
+            stage=stage_ctx,
+        )
         fb_missing, fb_sug = scrub_false_book_absence_claims(
             missing=fb_missing,
             suggestions=fb_sug,
@@ -3796,24 +3944,6 @@ async def writing_coach_chat(
             example=fb_ex,
             rubric_meta=fb_rubric,
         )
-        fb_ok, fb_missing, fb_sug, fb_ex, fb_rubric = _maybe_promote_o_pass(
-            stage=stage_ctx,
-            student_text=body,
-            ok=bool(fb_ok),
-            missing=fb_missing,
-            suggestions=fb_sug,
-            example=fb_ex,
-            rubric_meta=fb_rubric,
-        )
-        fb_ok, fb_missing, fb_sug, fb_ex, fb_rubric = _maybe_demote_o_thin_pass(
-            stage=stage_ctx,
-            student_text=body,
-            ok=bool(fb_ok),
-            missing=fb_missing,
-            suggestions=fb_sug,
-            example=fb_ex,
-            rubric_meta=fb_rubric,
-        )
         if not fb_ok:
             if not _d_policy_feedback_is_locked(stage_ctx, fb_rubric):
                 fb_missing, fb_sug, fb_ex = scrub_revision_prompts_already_in_draft(
@@ -3846,6 +3976,24 @@ async def writing_coach_chat(
                 missing=fb_missing,
                 suggestions=fb_sug,
             )
+
+        # A clear fabricated action/object is an assessment decision, not a
+        # narration choice. Reapply it after all generic feedback rewrites so
+        # identical drafts cannot alternate between "off-book" and "unclear".
+        if locked_concrete_grounding is not None:
+            fb_ok = False
+            fb_missing = [locked_concrete_grounding[0]]
+            fb_sug = [locked_concrete_grounding[1]]
+            fb_ex = None
+            fb_imp = None
+            fb_praise = scrub_praise_for_grounding_issue(
+                stage=stage_ctx,
+                praise=fb_praise,
+                missing=fb_missing,
+                student_text=body,
+                book_pack=book_pack,
+            )
+            grounding_issue = True
 
         # ── Experimental-group completion path (genai, fb_ok=True) ──────────
         # Hard constraint: only runs when genai_path is True.
@@ -4049,6 +4197,17 @@ async def writing_coach_chat(
                     praise=fb_praise,
                     student_draft=body,
                 )
+            if locked_concrete_grounding is not None:
+                ai_reply = format_control_feedback_reply(
+                    ok=False,
+                    missing=fb_missing,
+                    suggestions=fb_sug,
+                    stage=stage_ctx,
+                    book_anchor=anchor_line,
+                    example=None,
+                    praise=fb_praise,
+                    student_draft=body,
+                )
             await _try_dual_write_feedback(
                 db,
                 session_id=session.id,
@@ -4183,6 +4342,23 @@ async def writing_coach_chat(
     ai_reply = strip_markdown_for_student_chat((ai_reply or "").strip())
     if source == "feedback_button" and display_nm:
         ai_reply = _remove_student_name_from_feedback(ai_reply, display_nm)
+
+    output_safety = await classify_safety(ai_reply, writing_coach=True)
+    if output_safety.should_stop_feedback:
+        logger.error(
+            "ORID unsafe model output replaced session=%s week=%s stage=%s level=%s category=%s provider=%s",
+            session.id,
+            data.week,
+            stage_ctx,
+            output_safety.level,
+            output_safety.category,
+            output_safety.provider,
+        )
+        ai_reply = (
+            "我們先用尊重、安全的方式繼續寫。"
+            "請回到自己的故事、感受或下一個能做到的行動，再寫一句試試看。"
+        )
+        coach_meta["output_safety_filtered"] = True
 
     db.add(OridChatMessage(session_id=session.id, stage=stage_ctx, sender="ai", text=ai_reply))
     await db.commit()
@@ -4493,6 +4669,16 @@ async def writing_feedback(
         input_bucket=wf_input_bucket,
         grounding_check=grounding_check,
     )
+    locked_concrete_grounding = _semantic_material_grounding_feedback(
+        student_text=text,
+        book_pack=book_pack,
+        stage=data.stage,
+        check=grounding_check,
+    ) or _deterministic_concrete_grounding_feedback(
+        student_text=text,
+        book_pack=book_pack,
+        stage=data.stage,
+    )
     missing, suggestions = scrub_false_book_absence_claims(
         missing=missing,
         suggestions=suggestions,
@@ -4579,24 +4765,6 @@ async def writing_feedback(
         example=example,
         rubric_meta=rubric_snap,
     )
-    ok, missing, suggestions, example, rubric_snap = _maybe_promote_o_pass(
-        stage=data.stage,
-        student_text=text,
-        ok=bool(ok),
-        missing=missing,
-        suggestions=suggestions,
-        example=example,
-        rubric_meta=rubric_snap,
-    )
-    ok, missing, suggestions, example, rubric_snap = _maybe_demote_o_thin_pass(
-        stage=data.stage,
-        student_text=text,
-        ok=bool(ok),
-        missing=missing,
-        suggestions=suggestions,
-        example=example,
-        rubric_meta=rubric_snap,
-    )
     if not ok:
         if not _d_policy_feedback_is_locked(data.stage, rubric_snap):
             missing, suggestions, example = scrub_revision_prompts_already_in_draft(
@@ -4628,6 +4796,22 @@ async def writing_feedback(
             student_text=text,
             missing=missing,
             suggestions=suggestions,
+        )
+
+    # Keep both feedback endpoints consistent: only a high-confidence concrete
+    # material error may override the rubric decision after wording cleanup.
+    if locked_concrete_grounding is not None:
+        ok = False
+        missing = [locked_concrete_grounding[0]]
+        suggestions = [locked_concrete_grounding[1]]
+        example = None
+        improved = None
+        praise = scrub_praise_for_grounding_issue(
+            stage=data.stage,
+            praise=praise,
+            missing=missing,
+            student_text=text,
+            book_pack=book_pack,
         )
 
     wf_meta: dict[str, Any] = {
@@ -4768,13 +4952,22 @@ async def create_writing(
         week=data.week,
         empty_factory=_ensure_orid_writing_v1,
     )
-    await bump_save_and_maybe_revision(
-        db,
-        user_id=user.id,
-        week=data.week,
-        session_id=data.session_id,
-        writing_obj=writing_obj,
-    )
+    if data.save_intent == "autosave":
+        await sync_autosave_word_count(
+            db,
+            user_id=user.id,
+            week=data.week,
+            session_id=data.session_id,
+            writing_obj=writing_obj,
+        )
+    else:
+        await bump_save_and_maybe_revision(
+            db,
+            user_id=user.id,
+            week=data.week,
+            session_id=data.session_id,
+            writing_obj=writing_obj,
+        )
     if data.save_intent == "submit":
         await mark_submitted(db, user_id=user.id, week=data.week, session_id=data.session_id)
 

@@ -177,6 +177,30 @@ async def bump_save_and_maybe_revision(
         )
 
 
+async def sync_autosave_word_count(
+    db: AsyncSession,
+    *,
+    user_id: UUID,
+    week: int,
+    session_id: UUID,
+    writing_obj: dict[str, Any] | None,
+) -> None:
+    """Refresh the latest word count without recording a student action.
+
+    Autosave must not touch save/revision counters or the research fingerprint.
+    The fingerprint remains the baseline from the last explicit draft/submit.
+    """
+    try:
+        async with db.begin_nested():
+            summary = await get_or_create_summary(
+                db, user_id=user_id, week=week, session_id=session_id
+            )
+            summary.word_count = compute_word_count(writing_obj, week)
+            await db.flush()
+    except Exception:
+        logger.warning("research summary sync_autosave_word_count failed", exc_info=True)
+
+
 async def mark_submitted(
     db: AsyncSession,
     *,

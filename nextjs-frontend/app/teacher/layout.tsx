@@ -1,33 +1,27 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { LogOut } from "lucide-react";
 import { DilabLogo } from "@/components/orid/DilabLogo";
 import { TeacherDashboardSideDecor } from "@/components/orid/TeacherDashboardDecor";
 import { logoutToLogin } from "@/lib/logout";
+import { useAuthenticatedUser } from "@/lib/use-authenticated-user";
 
 export default function TeacherLayout({ children }: { children: React.ReactNode }) {
-  const [greeting, setGreeting] = useState<string | null>(null);
+  const auth = useAuthenticatedUser("teacher");
+  const greeting = auth.status === "ready"
+    ? String(auth.user.display_name ?? "").trim() || String(auth.user.email ?? "").trim()
+    : null;
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const r = await fetch("/api/users/me", { credentials: "include", cache: "no-store" });
-        if (!r.ok || cancelled) return;
-        const u = await r.json().catch(() => null);
-        if (!u || cancelled) return;
-        const loginId = String(u.email ?? "").trim();
-        const name = String(u.display_name ?? "").trim() || loginId;
-        setGreeting(name);
-      } catch {
-        /* ignore */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  if (auth.status === "checking") {
+    return <div className="orid-forest-page min-h-dvh" aria-label="正在確認登入狀態" />;
+  }
+  if (auth.status === "error") {
+    return (
+      <div className="orid-forest-page flex min-h-dvh items-center justify-center px-4 text-center text-amber-950">
+        無法確認登入狀態，請重新整理後再試。
+      </div>
+    );
+  }
 
   return (
     <div className="orid-forest-page relative min-h-screen overflow-x-hidden">

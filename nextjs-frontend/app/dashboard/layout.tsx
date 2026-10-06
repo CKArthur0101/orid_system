@@ -10,6 +10,7 @@ import { LeaveWritingConfirmModal } from "@/components/orid/LeaveWritingConfirmM
 import { BADGE_ORDER, type BadgeId } from "@/lib/orid/badgeRules";
 import { logoutToLogin } from "@/lib/logout";
 import { STUDENT_HOME, isStudentWeekWritingPath } from "@/lib/student-routes";
+import { useAuthenticatedUser } from "@/lib/use-authenticated-user";
 
 const SHELL_CLASS = "mx-auto w-full max-w-[min(100vw-1.5rem,1920px)]";
 
@@ -26,30 +27,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const router = useRouter();
   const lockWeekWritingLayout = isStudentWeekWritingPath(pathname);
   const isDashboardHome = pathname === STUDENT_HOME;
-  const [greeting, setGreeting] = useState<string | null>(null);
+  const auth = useAuthenticatedUser("student");
   const [leaveIntent, setLeaveIntent] = useState<LeaveIntent | null>(null);
   const [topBarBadges, setTopBarBadges] = useState<TopBarBadges | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const r = await fetch("/api/users/me", { credentials: "include", cache: "no-store" });
-        if (!r.ok || cancelled) return;
-        const u = await r.json().catch(() => null);
-        if (!u || cancelled) return;
-        const role = String(u.role ?? "student").toLowerCase();
-        const loginId = String(u.email ?? "").trim();
-        const name = String(u.display_name ?? "").trim() || loginId;
-        setGreeting(role === "student" ? `${name} 同學` : name);
-      } catch {
-        /* ignore */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const greeting = auth.status === "ready"
+    ? `${String(auth.user.display_name ?? "").trim() || String(auth.user.email ?? "").trim()} 同學`
+    : null;
 
   useEffect(() => {
     if (!lockWeekWritingLayout) {
@@ -101,6 +85,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     if (intent === "logout") {
       void logoutToLogin();
     }
+  }
+
+  if (auth.status === "checking") {
+    return <div className="orid-forest-page min-h-dvh" aria-label="正在確認登入狀態" />;
+  }
+  if (auth.status === "error") {
+    return (
+      <div className="orid-forest-page flex min-h-dvh items-center justify-center px-4 text-center text-amber-950">
+        無法確認登入狀態，請重新整理後再試。
+      </div>
+    );
   }
 
   return (

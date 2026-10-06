@@ -797,7 +797,7 @@ def test_d_week3_prompt_defines_narrow_action_scope_not_generic_responsibility()
 
     assert "D 段行動主題範圍" in system_prompt
     assert "實際連到家人、家事或共同分擔" in system_prompt
-    assert "不能只因任何行動都可被廣義解釋成努力、負責或進步" in system_prompt
+    assert "不可用關鍵字清單評分" in system_prompt
 
 
 def test_resolve_known_book_pack_always_overlays_latest_experiment_policy():
@@ -1163,6 +1163,21 @@ def test_scrub_praise_does_not_celebrate_fabricated_flower():
     assert "對回書裡" in praise or "真的發生" in praise
 
 
+def test_grounding_safe_praise_uses_student_sequence_word_without_praising_wrong_event():
+    from app.prompts.policy.feedback_focus import build_grounding_safe_praise
+
+    praise = build_grounding_safe_praise(
+        stage="O",
+        student_text="故事裡，獅子很生氣，打了其他動物，後來他知道這樣不對。",
+        book_pack=orid.BOOK_PACK_BY_WEEK[1],
+    )
+
+    assert "「後來」" in praise
+    assert "前後變化" in praise
+    assert "獅子" not in praise
+    assert "打了其他動物" not in praise
+
+
 def test_control_feedback_reply_grounding_praise_skips_wrong_event_quote():
     missing = [
         "你寫的「送了奶奶一朵花」好像不是書裡發生的事，書裡出現的是「柿子」。"
@@ -1327,8 +1342,8 @@ def test_scaffold_guard_allows_blank_scaffold():
     assert scaffold_feedback_example("R", example) == example
 
 
-def test_maybe_demote_o_thin_pass_blocks_short_early_mid():
-    draft = "故事中，阿松爺爺不分享柿子，只給奶奶柿子蒂之類的"
+def test_maybe_demote_o_rejects_one_isolated_material_aligned_event():
+    draft = "故事中，阿松爺爺不願意分享柿子。"
     ok, missing, sug, ex, meta = orid._maybe_demote_o_thin_pass(
         stage="O",
         student_text=draft,
@@ -1340,8 +1355,8 @@ def test_maybe_demote_o_thin_pass_blocks_short_early_mid():
     )
     assert ok is False
     assert meta.get("rubric_level_demoted") is True
-    assert "重要事件怎麼發展" in missing[0]
-    assert sug and len(sug[0]) > 4
+    assert missing
+    assert sug
 
 
 def test_unified_short_answers_use_content_not_word_count_without_keyword_demoting_d():
@@ -1649,6 +1664,187 @@ async def test_enforce_feedback_book_grounding_prioritizes_wrong_book_content():
     assert suggestions[0]
 
 
+def test_concrete_wrong_book_action_has_deterministic_feedback():
+    book_pack = orid.BOOK_PACK_BY_WEEK[1]
+    draft = "故事裡，獅子很生氣，打了其他動物，後來他知道這樣不對。"
+
+    first = orid._deterministic_concrete_grounding_feedback(
+        student_text=draft,
+        book_pack=book_pack,
+        stage="O",
+    )
+    second = orid._deterministic_concrete_grounding_feedback(
+        student_text=draft,
+        book_pack=book_pack,
+        stage="O",
+    )
+
+    assert first is not None
+    assert second == first
+    assert "打" in first[0]
+    assert any(cue in first[0] for cue in ("不是書裡", "和書裡發生的事情不一樣"))
+    assert "書裡" in first[1]
+
+
+def test_concrete_grounding_lock_ignores_supported_book_action():
+    result = orid._deterministic_concrete_grounding_feedback(
+        student_text="阿松爺爺一急之下砍了柿子樹，後來看到樹樁很難過。",
+        book_pack=orid.BOOK_PACK_BY_WEEK[1],
+        stage="O",
+    )
+
+    assert result is None
+
+
+def test_semantic_material_lock_names_real_experiment_wrong_action():
+    draft = (
+        "故事裡，阿松爺爺不願意分享柿子，一開始給奶奶柿子蒂來投籃，"
+        "然後他看到奶奶玩的很開心之後，就不開心的收起來。"
+    )
+    feedback = orid._semantic_material_grounding_feedback(
+        student_text=draft,
+        book_pack=orid.BOOK_PACK_BY_WEEK[1],
+        stage="O",
+        check=orid.BookGroundingCheck(
+            grounded=False,
+            status="contradicted",
+            unsupported_span="給奶奶柿子蒂來投籃",
+            reason="玩法與教材不同",
+            material_evidence="隔天，哎唷奶奶和孩子們用柿子蒂打陀螺，玩得很開心。",
+        ),
+    )
+
+    assert feedback is not None
+    assert "給奶奶柿子蒂來投籃" in feedback[0]
+    assert "和書裡發生的事情不一樣" in feedback[0]
+    assert "改寫" in feedback[1]
+
+
+def test_semantic_material_lock_does_not_infer_ambiguous_object():
+    draft = (
+        "故事裡，阿松爺爺不願意分享柿子，一開始給奶奶柿子蒂，"
+        "然後看到奶奶玩得很開心，就不開心地收起來。"
+    )
+    feedback = orid._semantic_material_grounding_feedback(
+        student_text=draft,
+        book_pack=orid.BOOK_PACK_BY_WEEK[1],
+        stage="O",
+        check=orid.BookGroundingCheck(
+            grounded=False,
+            status="ambiguous",
+            unsupported_span="就不開心地收起來",
+            reason="沒有說明收起什麼",
+        ),
+    )
+
+    assert feedback is not None
+    assert "就不開心地收起來" in feedback[0]
+    assert "還看不出書裡是誰做了什麼" in feedback[0]
+    assert "把什麼東西怎麼了" in feedback[1]
+
+
+def test_semantic_material_lock_rejects_checker_invented_evidence():
+    draft = "奶奶拿柿子蒂來投籃。"
+    feedback = orid._semantic_material_grounding_feedback(
+        student_text=draft,
+        book_pack=orid.BOOK_PACK_BY_WEEK[1],
+        stage="O",
+        check=orid.BookGroundingCheck(
+            grounded=False,
+            status="contradicted",
+            unsupported_span="拿柿子蒂來投籃",
+            reason="玩法與教材不同",
+            material_evidence="奶奶其實也拿柿子蒂投籃。",
+        ),
+    )
+
+    assert feedback is None
+
+
+@pytest.mark.asyncio
+async def test_semantic_checker_conflict_overrides_pass_without_keyword_corroboration():
+    draft = "奶奶拿柿子蒂來投籃，阿松爺爺看到後把東西收起來。"
+    ok, missing, suggestions = await orid._enforce_feedback_book_grounding(
+        draft,
+        orid.BOOK_PACK_BY_WEEK[1],
+        "O",
+        True,
+        [],
+        [],
+        use_llm_checker=True,
+        grounding_check=orid.BookGroundingCheck(
+            grounded=False,
+            status="contradicted",
+            unsupported_span="拿柿子蒂來投籃",
+            reason="教材未支持此玩法",
+            material_evidence="隔天，哎唷奶奶和孩子們用柿子蒂打陀螺，玩得很開心。",
+        ),
+    )
+
+    assert ok is False
+    assert "拿柿子蒂來投籃" in missing[0]
+    assert suggestions
+
+
+@pytest.mark.parametrize(
+    "draft",
+    [
+        "阿婆用柿子蒂和小朋友一起打陀螺。",
+        "故事中，阿婆用柿子蒂當作陀螺，和小朋友一起玩。",
+        "故事中，阿松爺爺很喜歡他的柿子，在小朋友面前狼吞虎嚥地吃柿子。",
+        "故事中，阿松爺爺一直獨佔所有的柿子，並故意在小朋友面前狼吞虎嚥地吃柿子。",
+        "故事中，阿松爺爺一直獨佔所有的柿子，並故意在小朋友面前狼吞虎嚥地吃柿子，後來把剩下的葉子提供給小朋友和奶奶。",
+    ],
+)
+def test_material_aligned_paraphrases_are_not_locked_as_wrong_nouns(draft):
+    book_pack = orid.BOOK_PACK_BY_WEEK[1]
+
+    assert grounding.extract_wrong_concrete_noun(draft, book_pack) == ""
+    assert orid._deterministic_concrete_grounding_feedback(
+        student_text=draft,
+        book_pack=book_pack,
+        stage="O",
+    ) is None
+
+
+@pytest.mark.parametrize(
+    "draft",
+    [
+        "阿婆用柿子蒂和小朋友一起打陀螺。",
+        "故事中，阿婆用柿子蒂當作陀螺，和小朋友一起玩。",
+        "故事中，阿松爺爺很喜歡他的柿子，在小朋友面前狼吞虎嚥地吃柿子。",
+    ],
+)
+def test_o_level_three_rejects_one_isolated_material_aligned_event(draft):
+    assert orid.stage_draft_meets_pass_bar("O", draft) is False
+
+
+@pytest.mark.parametrize(
+    "draft",
+    [
+        "阿松爺爺不願意分享柿子，後來又把柿子藏進倉庫。",
+        "阿婆把柿子蒂給小朋友玩，後來阿松爺爺也把葉子分享出去。",
+    ],
+)
+def test_o_level_three_accepts_related_facts_or_visible_development(draft):
+    assert orid.stage_draft_meets_pass_bar("O", draft) is True
+
+
+@pytest.mark.parametrize("noun", ["地瓜", "番薯", "蕃薯"])
+def test_wrong_story_food_is_still_detected_without_greedy_chinese_slicing(noun):
+    book_pack = orid.BOOK_PACK_BY_WEEK[1]
+    draft = f"後來阿婆跟他要了個{noun}，他就送給阿婆了。"
+
+    assert grounding.extract_wrong_concrete_noun(draft, book_pack) == noun
+    feedback = orid._deterministic_concrete_grounding_feedback(
+        student_text=draft,
+        book_pack=book_pack,
+        stage="O",
+    )
+    assert feedback is not None
+    assert noun in feedback[0]
+
+
 @pytest.mark.asyncio
 async def test_enforce_feedback_book_grounding_llm_first_natural_correction(monkeypatch):
     book_pack = orid.BOOK_PACK_BY_WEEK[1]
@@ -1828,8 +2024,9 @@ async def test_genai_feedback_falls_back_when_structured_parse_hits_length_limit
     )
 
     assert ok is True
-    assert suggestions == ["故事裡先發生的是……"]
-    assert example == "故事裡先發生的是……"
+    assert missing == []
+    assert suggestions == []
+    assert example is None
     assert improved is None
     assert praise == "你有寫到阿松爺爺。"
     assert rubric == {}

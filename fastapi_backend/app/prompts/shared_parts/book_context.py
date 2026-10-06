@@ -86,6 +86,7 @@ def build_book_context_block(
     book_pack: Optional[dict[str, Any]],
     *,
     max_events: int = 6,
+    max_excerpts: int = 0,
     max_chars: int = 950,
 ) -> str:
     """
@@ -117,6 +118,19 @@ def build_book_context_block(
     events: list[str] = []
     if isinstance(key_events, list):
         events = [str(x).strip() for x in key_events if str(x).strip()][:max_events]
+
+    raw_excerpts = book_pack.get("story_excerpts") or []
+    excerpts: list[str] = []
+    if max_excerpts > 0 and isinstance(raw_excerpts, list):
+        for item in raw_excerpts:
+            if isinstance(item, dict):
+                text = str(item.get("text") or "").strip()
+            else:
+                text = str(item or "").strip()
+            if text:
+                excerpts.append(text)
+            if len(excerpts) >= max_excerpts:
+                break
 
     core_theme = book_pack.get("core_theme") or []
     themes: list[str] = []
@@ -156,6 +170,7 @@ def build_book_context_block(
         f"- 場景：{'、'.join(settings) if settings else '（未提供）'}",
         f"- 角色：{'、'.join(char_lines) if char_lines else '（未提供）'}",
         f"- 重要事件（依序）：{' / '.join(events) if events else '（未提供）'}",
+        *([f"- 教材原文摘錄：{' / '.join(excerpts)}"] if excerpts else []),
         f"- 寫作提示：{' | '.join(guide_parts) if guide_parts else '（未提供）'}",
     ]
     if task_hints:

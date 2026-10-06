@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import uuid
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi_users.password import PasswordHelper
@@ -22,6 +24,7 @@ from app.services.orid_research_summary import (
     compute_content_fingerprint,
     compute_word_count,
     normalize_writing_text,
+    sync_autosave_word_count,
     task_type_for_week,
 )
 from app.services.orid_condition import CONTROL_AI_FORBIDDEN_DETAIL
@@ -114,6 +117,48 @@ class TestComputeContentFingerprint:
         assert compute_content_fingerprint(obj1, week=1) == compute_content_fingerprint(obj2, week=1)
 
 
+@pytest.mark.asyncio(loop_scope="function")
+async def test_autosave_service_only_refreshes_word_count(monkeypatch):
+    summary = SimpleNamespace(
+        word_count=3,
+        save_count=4,
+        revision_count=2,
+        content_fingerprint="explicit-save-baseline",
+        is_submitted=False,
+        guide_use_count=5,
+    )
+
+    class NestedTransaction:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    db = MagicMock()
+    db.begin_nested.return_value = NestedTransaction()
+    db.flush = AsyncMock()
+    monkeypatch.setattr(
+        "app.services.orid_research_summary.get_or_create_summary",
+        AsyncMock(return_value=summary),
+    )
+    writing_obj = json.loads(_writing_v1(1, "自動儲存的新內容"))
+
+    await sync_autosave_word_count(
+        db,
+        user_id=uuid.uuid4(),
+        week=1,
+        session_id=uuid.uuid4(),
+        writing_obj=writing_obj,
+    )
+
+    assert summary.word_count == len("自動儲存的新內容")
+    assert summary.save_count == 4
+    assert summary.revision_count == 2
+    assert summary.content_fingerprint == "explicit-save-baseline"
+    assert summary.is_submitted is False
+    assert summary.guide_use_count == 5
+
 # ---------------------------------------------------------------------------
 # API tests — save_intent → is_submitted / save_count / revision_count
 # ---------------------------------------------------------------------------
@@ -145,6 +190,70 @@ async def _fetch_summary(db_session, *, user_id, week, session_id) -> OridWeekly
 
 
 @pytest.mark.asyncio(loop_scope="function")
+@pytest.mark.parametrize("condition", ["experimental", "control"])
+async def test_autosave_is_shared_and_does_not_pollute_research_actions(
+    condition, test_client, db_session, authenticated_user
+):
+    user = authenticated_user["user"]
+    user.orid_condition = condition
+    reading = Reading(title=f"自動儲存測試-{condition}", content="{}")
+    db_session.add(reading)
+    await db_session.commit()
+    await db_session.refresh(reading)
+
+    session = OridSession(user_id=user.id, reading_id=reading.id, condition=condition)
+    db_session.add(session)
+    await db_session.commit()
+    await db_session.refresh(session)
+
+    async def save(text: str, intent: str):
+        response = await test_client.post(
+            "/orid/writings",
+            json={
+                "reading_id": str(reading.id),
+                "session_id": str(session.id),
+                "week": 1,
+                "content": _writing_v1(1, text),
+                "save_intent": intent,
+            },
+            headers=authenticated_user["headers"],
+        )
+        assert response.status_code == 200, response.text
+
+    await save("自動版本一", "autosave")
+    await save("自動版本二", "autosave")
+    summary = await _fetch_summary(db_session, user_id=user.id, week=1, session_id=session.id)
+    assert summary is not None
+    assert summary.word_count == len("自動版本二")
+    assert summary.save_count == 0
+    assert summary.revision_count == 0
+    assert summary.content_fingerprint is None
+    assert summary.is_submitted is False
+    assert summary.guide_use_count == 0
+
+    # The first explicit action establishes the research baseline.
+    await save("自動版本二", "draft")
+    baseline = compute_content_fingerprint(
+        json.loads(_writing_v1(1, "自動版本二")), week=1
+    )
+    assert summary.save_count == 1
+    assert summary.revision_count == 0
+    assert summary.content_fingerprint == baseline
+
+    # A newer autosave updates protected content and word_count only.
+    await save("學生主動修改後", "autosave")
+    assert summary.word_count == len("學生主動修改後")
+    assert summary.save_count == 1
+    assert summary.revision_count == 0
+    assert summary.content_fingerprint == baseline
+
+    await save("學生主動修改後", "draft")
+    assert summary.save_count == 2
+    assert summary.revision_count == 1
+    assert summary.is_submitted is False
+
+
+@pytest.mark.asyncio(loop_scope="function")
 async def test_draft_save_bumps_save_count_but_not_submitted(test_client, db_session, authenticated_user):
     user = authenticated_user["user"]
     reading = Reading(title="第1週 研究測試", content="{}")
@@ -164,6 +273,7 @@ async def test_draft_save_bumps_save_count_but_not_submitted(test_client, db_ses
             "session_id": str(session.id),
             "week": 1,
             "content": _writing_v1(1, "第一次草稿"),
+            "save_intent": "draft",
         },
         headers=authenticated_user["headers"],
     )
@@ -201,6 +311,7 @@ async def test_submit_marks_submitted_and_changed_content_bumps_revision(
             "session_id": str(session.id),
             "week": 3,
             "content": _writing_v1(3, "草稿版本一"),
+            "save_intent": "draft",
         },
         headers=authenticated_user["headers"],
     )
@@ -234,6 +345,7 @@ async def test_submit_marks_submitted_and_changed_content_bumps_revision(
             "session_id": str(session.id),
             "week": 3,
             "content": _writing_v1(3, "草稿版本二，內容已修改"),
+            "save_intent": "draft",
         },
         headers=authenticated_user["headers"],
     )

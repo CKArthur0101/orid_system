@@ -286,15 +286,21 @@ def o_draft_meets_pass_bar(student_text: str) -> bool:
         return False
     event_cues = (
         "做", "說", "拿", "給", "找", "問", "請", "叫", "看", "寫", "讀",
-        "吃", "藏", "砍", "離開", "回來", "發現", "變成", "幫",
+        "吃", "藏", "砍", "離開", "回來", "發現", "變成", "幫", "分享",
+        "玩", "採", "種", "送", "不願意", "不肯", "獨占", "獨佔",
     )
     event_hits = sum(1 for cue in event_cues if cue in t)
     has_development = any(
         cue in t
         for cue in ("一開始", "接著", "然後", "後來", "最後", "結果", "但是", "卻", "才")
     )
-    has_two_clauses = len([part for part in re.split(r"[，。！？；,.!?;]", t) if part.strip()]) >= 2
-    return event_hits >= 2 and (has_development or has_two_clauses)
+    clauses = [part for part in re.split(r"[，。！？；,.!?;]", t) if part.strip()]
+    eventful_clause_count = sum(
+        1 for part in clauses if any(cue in part for cue in event_cues)
+    )
+    # Passing O needs development, not one isolated fact. Semantic correctness
+    # and importance are still checked against the active book pack.
+    return event_hits >= 2 and (has_development or eventful_clause_count >= 2)
 
 
 def o_draft_arc_flags(student_text: str) -> tuple[bool, bool, bool]:
@@ -689,6 +695,8 @@ _GROUNDING_MISSING_CUES = (
     "對回書裡",
     "改成書裡",
     "書裡實際",
+    "和書裡發生的事情不一樣",
+    "還看不出書裡是誰做了什麼",
 )
 
 
@@ -748,6 +756,19 @@ def build_grounding_safe_praise(
     if s == "O":
         if name_bit:
             return f"{name_bit}事件要再對回書裡真的發生的事。"
+        sequence_word = next(
+            (
+                word
+                for word in ("一開始", "接著", "然後", "後來", "最後")
+                if word in (student_text or "")
+            ),
+            "",
+        )
+        if sequence_word:
+            return (
+                f"你有用「{sequence_word}」整理事情的前後變化，"
+                "我有看到你在寫故事順序；只是情節要再對回書裡。"
+            )
         return "你有試著寫出人物和事件，這是 O 段需要的方向；只是情節要再對回書裡。"
     if s == "R":
         if name_bit:

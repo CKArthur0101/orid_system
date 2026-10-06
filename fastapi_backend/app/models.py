@@ -87,6 +87,31 @@ class OridChatMessage(Base):
     session = relationship("OridSession", back_populates="messages")
 
 
+class OridSafetyEvent(Base):
+    """Privacy-minimized safety decision log; student text is not duplicated."""
+
+    __tablename__ = "orid_safety_events"
+    __table_args__ = (
+        Index("ix_orid_safety_events_user_created_at", "user_id", "created_at"),
+        Index("ix_orid_safety_events_session_created_at", "session_id", "created_at"),
+        Index("ix_orid_safety_events_level_created_at", "level", "created_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False, index=True)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("orid_sessions.id"), nullable=False, index=True)
+    week = Column(Integer, nullable=False)
+    stage = Column(String(4), nullable=False)
+    source = Column(String(32), nullable=False)
+    level = Column(Integer, nullable=False)
+    category = Column(String(64), nullable=False)
+    action = Column(String(32), nullable=False)
+    reason = Column(String(128), nullable=False)
+    provider = Column(String(32), nullable=False)
+    text_fingerprint = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class OridWeekSubmission(Base):
     """Official submitted ORID JSON per user/session/week; re-submit overwrites the same PK row."""
 

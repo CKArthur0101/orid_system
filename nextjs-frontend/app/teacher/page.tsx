@@ -11,6 +11,7 @@ import {
   FileText,
   Clock,
   ThumbsUp,
+  AlertTriangle,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -44,6 +45,8 @@ type StudentRow = {
   feedback_click_count: number;
   feedback_ok_count: number;
   feedback_ok_stages: number;
+  safety_event_count: number;
+  high_risk_safety_event_count: number;
 };
 
 type Overview = {
@@ -72,6 +75,8 @@ type StudentSummary = {
   feedback_click_count: number;
   feedback_ok_count: number;
   feedback_ok_stages: number;
+  safety_event_count: number;
+  high_risk_safety_event_count: number;
 };
 
 type OridChatLogRow = {
@@ -407,6 +412,14 @@ export default function TeacherDashboardPage() {
     const total = overview.students.reduce((s, r) => s + r.interaction_count, 0);
     return +(total / overview.students.length).toFixed(1);
   }, [overview?.students]);
+  const highRiskSafetyCount = useMemo(
+    () =>
+      (overview?.students ?? []).reduce(
+        (sum, row) => sum + (row.high_risk_safety_event_count ?? 0),
+        0
+      ),
+    [overview?.students]
+  );
 
   const stageDist = overview?.stage_distribution ?? { NOT_STARTED: 0, O: 0, R: 0, I: 0, D: 0 };
   const classTotal = overview?.total_students ?? 0;
@@ -542,6 +555,16 @@ export default function TeacherDashboardPage() {
               />
             </div>
 
+            {highRiskSafetyCount > 0 && (
+              <div className="flex items-start gap-3 rounded-lg border-2 border-red-300 bg-red-50 px-4 py-3 text-red-950">
+                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                <div>
+                  <p className="font-semibold">本週有 {highRiskSafetyCount} 筆高風險安全提醒</p>
+                  <p className="text-sm text-red-800/80">請在下方學生清單查看標記並主動關心；系統不在此頁顯示敏感原文。</p>
+                </div>
+              </div>
+            )}
+
             {/* Charts row */}
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               <Card className={TEACHER_CARD}>
@@ -609,6 +632,7 @@ export default function TeacherDashboardPage() {
                           <th className="px-4 py-2.5">階段</th>
                           <th className="px-4 py-2.5 text-center">寫作</th>
                           <th className="px-4 py-2.5 text-center">回饋 ok</th>
+                          <th className="px-4 py-2.5 text-center">安全提醒</th>
                           <th className="w-8" />
                         </tr>
                       </thead>
@@ -616,7 +640,8 @@ export default function TeacherDashboardPage() {
                         {(overview?.students ?? []).map((row) => {
                           const writePct = Math.round((row.writing_completed_stages / 4) * 100);
                           const okPct = Math.round((row.feedback_ok_stages / 4) * 100);
-                          const needsAttention = row.interaction_count === 0;
+                          const hasHighRisk = (row.high_risk_safety_event_count ?? 0) > 0;
+                          const needsAttention = row.interaction_count === 0 || hasHighRisk;
                           return (
                             <tr
                               key={row.student_id}
@@ -629,7 +654,9 @@ export default function TeacherDashboardPage() {
                               <td className="whitespace-nowrap px-4 py-2.5 font-medium text-amber-950">
                                 {studentLabel(row)}
                                 {needsAttention && (
-                                  <span className="ml-1.5 whitespace-nowrap text-base text-orange-600">需關注</span>
+                                  <span className={`ml-1.5 whitespace-nowrap text-base ${hasHighRisk ? "font-semibold text-red-700" : "text-orange-600"}`}>
+                                    {hasHighRisk ? "安全提醒" : "需關注"}
+                                  </span>
                                 )}
                               </td>
                               <td className="px-4 py-2.5">
@@ -646,6 +673,15 @@ export default function TeacherDashboardPage() {
                               <td className="px-4 py-2.5">
                                 <MiniBar pct={okPct} color="#66b88f" />
                               </td>
+                              <td className="px-4 py-2.5 text-center">
+                                {(row.safety_event_count ?? 0) > 0 ? (
+                                  <span className={hasHighRisk ? "font-bold text-red-700" : "font-medium text-amber-700"}>
+                                    {row.safety_event_count}
+                                  </span>
+                                ) : (
+                                  <span className="text-amber-800/35">0</span>
+                                )}
+                              </td>
                               <td className="pr-3">
                                 <ChevronRight className="h-4 w-4 text-amber-800/40" />
                               </td>
@@ -654,7 +690,7 @@ export default function TeacherDashboardPage() {
                         })}
                         {!(overview?.students?.length) && (
                           <tr>
-                            <td colSpan={5} className="p-8 text-center text-amber-800/50">
+                            <td colSpan={6} className="p-8 text-center text-amber-800/50">
                               尚無學生資料
                             </td>
                           </tr>
@@ -758,7 +794,7 @@ export default function TeacherDashboardPage() {
                       </CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <div className="grid grid-cols-3 gap-3 text-center text-base">
+                      <div className="grid grid-cols-2 gap-3 text-center text-base lg:grid-cols-4">
                         <div className="rounded-xl border border-amber-100 bg-amber-50/70 p-3">
                           <p className="text-2xl font-bold text-amber-950">{studentDetail.feedback_click_count}</p>
                           <p className="mt-0.5 text-base text-amber-800/55">回饋使用次數</p>
@@ -770,6 +806,12 @@ export default function TeacherDashboardPage() {
                         <div className="rounded-xl border border-sky-100 bg-[#eef6fc] p-3">
                           <p className="text-2xl font-bold text-[#3d7eb0]">{studentDetail.feedback_ok_stages}/4</p>
                           <p className="mt-0.5 text-base text-amber-800/55">通過格數</p>
+                        </div>
+                        <div className={`rounded-xl border p-3 ${(studentDetail.high_risk_safety_event_count ?? 0) > 0 ? "border-red-200 bg-red-50" : "border-amber-100 bg-amber-50/70"}`}>
+                          <p className={`text-2xl font-bold ${(studentDetail.high_risk_safety_event_count ?? 0) > 0 ? "text-red-700" : "text-amber-950"}`}>
+                            {studentDetail.safety_event_count ?? 0}
+                          </p>
+                          <p className="mt-0.5 text-base text-amber-800/55">安全提醒次數</p>
                         </div>
                       </div>
                     </CardContent>

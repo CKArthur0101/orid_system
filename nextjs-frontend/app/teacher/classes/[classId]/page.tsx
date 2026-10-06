@@ -9,6 +9,8 @@ type OverviewRow = {
   current_stage: string;
   interaction_count: number;
   writing_completed_stages: number;
+  safety_event_count: number;
+  high_risk_safety_event_count: number;
 };
 
 type Overview = {
@@ -82,6 +84,7 @@ export default function TeacherClassOverviewPage({ params }: { params: Promise<{
               <th className="p-2 text-left">目前階段</th>
               <th className="p-2 text-left">互動次數</th>
               <th className="p-2 text-left">寫作完成段數</th>
+              <th className="p-2 text-left">安全提醒</th>
               <th className="p-2 text-left">操作</th>
             </tr>
           </thead>
@@ -92,6 +95,9 @@ export default function TeacherClassOverviewPage({ params }: { params: Promise<{
                 <td className="p-2">{row.current_stage}</td>
                 <td className="p-2">{row.interaction_count}</td>
                 <td className="p-2">{row.writing_completed_stages}</td>
+                <td className={`p-2 ${row.high_risk_safety_event_count > 0 ? "font-bold text-red-700" : ""}`}>
+                  {row.safety_event_count ?? 0}
+                </td>
                 <td className="p-2">
                   <Link
                     className="rounded border px-2 py-1 hover:bg-muted"
