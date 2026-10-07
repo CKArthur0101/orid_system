@@ -451,8 +451,10 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "教材事實核對器" in checker_system
     assert "BOOK_CONTEXT" in checker_system
     assert '"status": "supported | ambiguous | contradicted"' in checker_system
+    assert '"claims"' in checker_system
     assert "不可只查單字" in checker_system
     assert "禁止自行腦補" in checker_system
+    assert "一些東西／那些東西／把東西收起來" in checker_system
     assert "必須逐字摘錄學生原句" in checker_system
     assert "學生句子" in checker_user
 
@@ -470,6 +472,18 @@ def test_book_grounding_checker_context_includes_source_excerpts():
 
     assert "教材原文摘錄" in checker_system
     assert "把柿子蒂當陀螺玩" in checker_system
+
+
+def test_book_grounding_checker_keeps_all_stage_for_even_week_synthesis():
+    checker_system, _ = build_book_grounding_checker_prompts(
+        student_text="故事裡的情節讓我學到分享，下次我會借文具給同學。",
+        book_pack=_book_pack(),
+        stage="ALL",
+    )
+
+    assert "目前階段：ALL" in checker_system
+    assert "ALL 代表偶數週整合短文" in checker_system
+    assert "自己的感受、想法、生活經驗、體會與未來行動不需要出現在教材" in checker_system
 
 
 def test_synthesis_pasted_stage_paragraphs_detection():
@@ -544,6 +558,24 @@ def test_synthesis_hard_stitched_orid_forces_coherence_priority():
         "所以下次當球場上有人想加入我們，我會先說好啊，再約他一起練投籃。"
     )
     assert looks_like_hard_stitched_orid_synthesis(integrated) is False
+
+    naturally_connected = (
+        "阿松爺爺一開始獨占甜柿子，不願意和大家分享，後來甚至砍掉柿子樹，"
+        "看到只剩樹樁時才非常後悔。我看到這裡覺得很難過，因為他為了保住自己的東西，"
+        "反而失去了珍惜的柿子樹。這讓我明白，和別人分享不一定會讓自己失去，"
+        "反而可能讓大家都更快樂。下次同學忘記帶彩色筆時，我會先問他需要哪一支，"
+        "再借給他一起使用。"
+    )
+    assert find_abrupt_orid_boundaries(naturally_connected) == []
+    assert looks_like_hard_stitched_orid_synthesis(naturally_connected) is False
+
+    naturally_connected_prompt = build_synthesis_coach_system_prompt(
+        book_context=build_book_context_block(_book_pack()),
+        week1_orid_lines={"O": "", "R": "", "I": "", "D": ""},
+        student_text=naturally_connected,
+    )
+    assert "銜接還不夠（完整 ≠ 連貫）" not in naturally_connected_prompt
+    assert "不可只因還能再加一個更漂亮的橋句就判第 2 級" in naturally_connected_prompt
 
     # Weaker case: only one abrupt transition (R→I has a connector, I→D doesn't)
     # should not fire the full force-block — avoids over-triggering on essays
@@ -792,5 +824,5 @@ def test_prompt_versions_cover_active_surfaces():
     }.issubset(PROMPT_VERSIONS.keys())
     assert PROMPT_VERSIONS["genai_feedback"] == "wf_v11"
     assert PROMPT_VERSIONS["feedback_narration"] == "fn_v12"
-    assert PROMPT_VERSIONS["synthesis_coach"] == "sc_v14"
-    assert PROMPT_VERSIONS["book_grounding_checker"] == "bgc_v2"
+    assert PROMPT_VERSIONS["synthesis_coach"] == "sc_v15"
+    assert PROMPT_VERSIONS["book_grounding_checker"] == "bgc_v3"

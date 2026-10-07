@@ -1743,6 +1743,109 @@ def test_semantic_material_lock_does_not_infer_ambiguous_object():
     assert "把什麼東西怎麼了" in feedback[1]
 
 
+def test_semantic_material_lock_rejects_real_experiment_vague_references():
+    draft = (
+        "我看到阿松爺爺一直不分享，只分享一些無聊的東西，但他看到哎唷奶奶"
+        "把那些無聊的東西變有趣之後，他就開始一直把東西收起來。"
+    )
+    feedback = orid._semantic_material_grounding_feedback(
+        student_text=draft,
+        book_pack=orid.BOOK_PACK_BY_WEEK[1],
+        stage="O",
+        check=orid.BookGroundingCheck(
+            grounded=False,
+            status="ambiguous",
+            unsupported_span="只分享一些無聊的東西",
+            reason="沒有指出分享的物品",
+        ),
+    )
+
+    assert feedback is not None
+    assert "只分享一些無聊的東西" in feedback[0]
+    assert "哎唷奶奶" not in feedback[0]
+
+
+def test_o_reference_clarity_gate_catches_real_experiment_text_without_model_help():
+    draft = (
+        "我看到阿松爺爺一直不分享，只分享一些無聊的東西，但是他看到哎唷奶奶"
+        "把那些無聊的東西變得有趣之後，他就開始一直把東西收起來。"
+    )
+    check = orid._o_reference_clarity_check(student_text=draft, stage="O")
+
+    assert check is not None
+    assert check.status == "ambiguous"
+    assert check.grounded is False
+    assert check.unsupported_span == "一些無聊的東西"
+
+
+def test_o_reference_clarity_gate_allows_concrete_objects_and_non_o_reflection():
+    concrete_o = "阿松爺爺只給奶奶柿子蒂和葉子等東西，後來又把柿子藏起來。"
+    reflective_r = "我覺得那些無聊的東西變有趣很神奇，因為奶奶很有創意。"
+
+    assert orid._o_reference_clarity_check(student_text=concrete_o, stage="O") is None
+    assert orid._o_reference_clarity_check(student_text=reflective_r, stage="R") is None
+
+
+@pytest.mark.asyncio
+async def test_claim_level_checker_problem_overrides_incorrect_overall_supported(monkeypatch):
+    draft = "奶奶拿柿子蒂來投籃，後來阿松爺爺把東西收起來。"
+    raw = {
+        "status": "supported",
+        "grounded": True,
+        "reason": "教材支持",
+        "unsupported_span": "",
+        "material_evidence": "",
+        "claims": [
+            {
+                "student_quote": "奶奶拿柿子蒂來投籃",
+                "status": "contradicted",
+                "reason": "玩法與教材不同",
+                "material_evidence": "隔天，哎唷奶奶和孩子們用柿子蒂打陀螺，玩得很開心。",
+            },
+            {
+                "student_quote": "阿松爺爺把東西收起來",
+                "status": "ambiguous",
+                "reason": "沒有說明收起什麼",
+                "material_evidence": "",
+            },
+        ],
+    }
+
+    async def fake_completion(*args, **kwargs):
+        import json
+
+        return json.dumps(raw, ensure_ascii=False)
+
+    monkeypatch.setattr(orid, "client", object())
+    monkeypatch.setattr(orid, "_chat_completion", fake_completion)
+    check = await orid._llm_book_grounding_check(
+        student_text=draft,
+        stage="O",
+        book_pack=orid.BOOK_PACK_BY_WEEK[1],
+    )
+
+    assert check is not None
+    assert check.status == "contradicted"
+    assert check.grounded is False
+    assert check.unsupported_span == "奶奶拿柿子蒂來投籃"
+    assert len(check.claims) == 2
+
+
+def test_feedback_card_keeps_specific_ambiguous_revision_question():
+    reply = format_control_feedback_reply(
+        ok=False,
+        missing=["你寫的「就不開心地收起來」還看不出書裡是誰做了什麼，或動作的對象是什麼。"],
+        suggestions=["請把「就不開心地收起來」說清楚：這裡是誰做了什麼，或把什麼東西怎麼了？"],
+        stage="O",
+        book_anchor="阿松爺爺把柿子藏進倉庫",
+        praise="",
+        student_draft="看到奶奶玩得很開心，就不開心地收起來。",
+    )
+
+    assert "請把「就不開心地收起來」說清楚" in reply
+    assert "書裡的人物是" not in reply
+
+
 def test_semantic_material_lock_rejects_checker_invented_evidence():
     draft = "奶奶拿柿子蒂來投籃。"
     feedback = orid._semantic_material_grounding_feedback(

@@ -6,7 +6,7 @@ import json
 from app.prompts.shared_parts.book_context import build_book_context_block
 from app.prompts.templates.checker import BOOK_GROUNDING_RULES, ORID_CHECKER_STAGE_RULES
 
-Stage = str  # "O" | "R" | "I" | "D"
+Stage = str  # "O" | "R" | "I" | "D" | "ALL"
 
 
 def build_orid_checker_prompts(
@@ -108,7 +108,7 @@ def build_book_grounding_checker_prompts(
     Decide whether the student's claim is supported by BOOK_CONTEXT facts.
     """
     stage = (stage or "O").strip().upper()
-    if stage not in {"O", "R", "I", "D"}:
+    if stage not in {"O", "R", "I", "D", "ALL"}:
         stage = "O"
     book_context = build_book_context_block(
         book_pack,
@@ -129,7 +129,15 @@ def build_book_grounding_checker_prompts(
   "grounded": boolean,
   "reason": string,
   "unsupported_span": string,
-  "material_evidence": string
+  "material_evidence": string,
+  "claims": [
+    {{
+      "student_quote": string,
+      "status": "supported | ambiguous | contradicted",
+      "reason": string,
+      "material_evidence": string
+    }}
+  ]
 }}
 
 欄位規範：
@@ -138,6 +146,8 @@ def build_book_grounding_checker_prompts(
 - reason：20 字內，簡短說明（例：教材可支持 / 疑似新增書外事件）
 - unsupported_span：若 grounded=false，必須逐字摘錄學生原句中最需要修改的短片段；不得改寫或自行補字。否則填空字串。
 - material_evidence：必須逐字摘錄 BOOK_CONTEXT 中支持判斷的教材事件或原文短句，不可改寫；若教材不足以核對可填空字串。
+- claims：列出學生文字中每個具體故事主張，不可把整段合併成一項。student_quote 必須逐字摘錄；每一項分別核對人物、動作、物品、對象與前後關係。
+- 整體 status 取 claims 中最嚴重者：contradicted 優先，其次 ambiguous；只有全部 supported 才能填 supported。
 
 目前階段：{stage}
 BOOK_CONTEXT：

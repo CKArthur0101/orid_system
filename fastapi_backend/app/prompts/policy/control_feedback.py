@@ -104,12 +104,18 @@ def format_control_feedback_reply(
     student_draft: str = "",
 ) -> str:
     """控制組／無第二段 LLM 時的確定性三段式；語意貼近 GenAI 規則。"""
+    original_missing = list(missing or [])
+    original_suggestions = list(suggestions or [])
+    preserve_grounding_diagnosis = missing_looks_book_grounding_priority(original_missing)
     missing, suggestions = normalize_feedback_focus(
         stage=stage,
         missing=missing,
         suggestions=suggestions,
         student_text=student_draft,
     )
+    if preserve_grounding_diagnosis:
+        missing = original_missing[:1]
+        suggestions = original_suggestions[:1]
     m0 = (missing[0] if missing else "").strip()
     s0 = (suggestions[0] if suggestions else "").strip()
     anchor = (book_anchor or "").strip()
@@ -174,8 +180,19 @@ def format_control_feedback_reply(
             "D": "我們先想想書裡帶給你的提醒，再把你下次會做的行動寫清楚。",
         }
         base_line3 = grounding_stem_map.get(s_up, "我們先對回書裡真的人物和事情，再照順序把內容寫清楚。")
+        specific_grounding_question = bool(
+            s0
+            and (
+                "「" in s0
+                or "哪裡" in s0
+                or "什麼" in s0
+                or "誰" in s0
+            )
+        )
         snippet = _draft_snippet(st)
-        if snippet:
+        if specific_grounding_question:
+            line3_custom = s0
+        elif snippet:
             line3_custom = f"在你寫的「{snippet}」附近，把不對的地方改回書裡真的說法。想先改哪一個字？"
         else:
             line3_custom = base_line3
@@ -222,7 +239,7 @@ def format_control_feedback_reply(
         # Book-specific event guidance is already the final scaffold. Do not
         # overwrite it with the generic O revision target or append an example.
         line3 = s0
-    else:
+    elif line3_custom is None:
         target = _revision_target_for_stage(s_up)
         line3 = f"{target}。{_revision_question_for_stage(s_up)}\n例如：{scaffold_for_stage(s_up)}"
 

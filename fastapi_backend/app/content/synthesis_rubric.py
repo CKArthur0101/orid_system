@@ -116,6 +116,16 @@ def first_synthesis_gap(levels: dict[str, Any] | None) -> str | None:
     return None
 
 
+def lock_synthesis_content_for_grounding(levels: dict[str, Any] | None) -> dict[str, int]:
+    """A material ambiguity or contradiction cannot earn content integration."""
+    normalized = normalize_synthesis_levels(levels)
+    normalized["content_integration"] = min(
+        normalized.get("content_integration", 2),
+        2,
+    )
+    return normalized
+
+
 def synthesis_fallback_reply(focus: str | None) -> str:
     if focus is None:
         return (

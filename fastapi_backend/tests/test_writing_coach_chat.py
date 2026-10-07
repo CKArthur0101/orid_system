@@ -577,6 +577,86 @@ async def test_writing_coach_synthesis_feedback_uses_prior_orid_week(
 
 
 @pytest.mark.asyncio(loop_scope="function")
+async def test_synthesis_material_error_blocks_content_badge_and_completion(
+    test_client, db_session, authenticated_user, monkeypatch
+):
+    async def fake_grounding_check(**kwargs):
+        return orid.BookGroundingCheck(
+            grounded=False,
+            status="contradicted",
+            unsupported_span="阿松爺爺把地瓜分給大家",
+            reason="教材中的物品是柿子",
+            material_evidence="阿松爺爺家的柿子很甜，但他一直獨占，故意在大家面前大口吃。",
+        )
+
+    async def fake_chat_completion(messages, **kwargs):
+        return json.dumps(
+            {
+                "reply": (
+                    "你已經做到：\n四個部分都有寫到。\n"
+                    "再想一想：\n內容已完成。\n"
+                    "可以這樣修改：\n不需要修改。"
+                ),
+                "rubric_levels": {
+                    "content_integration": 4,
+                    "coherence": 4,
+                    "reflection_depth": 4,
+                    "action_application": 4,
+                },
+                "focus": None,
+                "sel_focus": None,
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(orid, "_llm_book_grounding_check", fake_grounding_check)
+    monkeypatch.setattr(orid, "_chat_completion", fake_chat_completion)
+
+    user = authenticated_user["user"]
+    pack = dict(orid.BOOK_PACK_BY_WEEK[1])
+    reading = Reading(title="第2週 教材核對", content=json.dumps(pack, ensure_ascii=False))
+    db_session.add(reading)
+    await db_session.commit()
+    await db_session.refresh(reading)
+    session = OridSession(
+        user_id=user.id,
+        reading_id=reading.id,
+        condition="genai",
+        current_stage="O",
+        stage_turn=0,
+    )
+    db_session.add(session)
+    await db_session.commit()
+    await db_session.refresh(session)
+
+    r = await test_client.post(
+        "/orid/writing-coach/chat",
+        json={
+            "session_id": str(session.id),
+            "student_text": (
+                "阿松爺爺把地瓜分給大家，我覺得分享很好，"
+                "也學到要關心別人，下次我會把文具借給同學。"
+            ),
+            "stage": "ALL",
+            "draft": "d1",
+            "source": "synthesis_feedback",
+            "week": 2,
+            "save_feedback": False,
+        },
+        headers=authenticated_user["headers"],
+    )
+
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["meta"]["synthesis_rubric_levels"]["content_integration"] == 2
+    assert data["meta"]["synthesis_focus"] == "content_integration"
+    assert data["meta"]["synthesis_complete"] is False
+    assert data["meta"]["synthesis_material_grounded"] is False
+    assert "阿松爺爺把地瓜分給大家" in data["ai_reply"]
+    assert "badge_synthesis_content" not in data["meta"]["earnedBadges"]
+
+
+@pytest.mark.asyncio(loop_scope="function")
 async def test_writing_coach_flags_wrong_food_sweet_potato(
     test_client, db_session, authenticated_user, monkeypatch
 ):

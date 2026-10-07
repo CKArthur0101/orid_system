@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 from typing import Optional, Any, Tuple, List, Dict, Union
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 import re
 import json
@@ -76,6 +76,7 @@ from app.services.orid_badges import (
 from app.content.synthesis_rubric import (
     SYNTHESIS_CRITERIA_ORDER,
     first_synthesis_gap,
+    lock_synthesis_content_for_grounding,
     normalize_synthesis_levels,
     synthesis_fallback_reply,
 )
@@ -1751,6 +1752,7 @@ class BookGroundingCheck:
     reason: str = ""
     status: str = ""
     material_evidence: str = ""
+    claims: list[dict[str, str]] = field(default_factory=list)
 
 
 async def _llm_book_grounding_check(
@@ -1801,12 +1803,50 @@ async def _llm_book_grounding_check(
         if status not in {"supported", "ambiguous", "contradicted"}:
             status = "supported" if grounded is True else ""
         evidence = str(obj.get("material_evidence") or "").strip()
+        claims: list[dict[str, str]] = []
+        raw_claims = obj.get("claims")
+        if isinstance(raw_claims, list):
+            for item in raw_claims:
+                if not isinstance(item, dict):
+                    continue
+                quote = str(item.get("student_quote") or "").strip()
+                claim_status = str(item.get("status") or "").strip().lower()
+                if not quote or quote not in t or claim_status not in {
+                    "supported", "ambiguous", "contradicted"
+                }:
+                    continue
+                claims.append(
+                    {
+                        "student_quote": quote,
+                        "status": claim_status,
+                        "reason": str(item.get("reason") or "").strip(),
+                        "material_evidence": str(item.get("material_evidence") or "").strip(),
+                    }
+                )
+        first_problem = next(
+            (item for item in claims if item["status"] == "contradicted"),
+            None,
+        ) or next(
+            (item for item in claims if item["status"] == "ambiguous"),
+            None,
+        )
+        if first_problem is not None:
+            status = first_problem["status"]
+            grounded = False
+            span = first_problem["student_quote"]
+            reason = first_problem["reason"] or reason
+            evidence = first_problem["material_evidence"] or evidence
+        elif claims and all(item["status"] == "supported" for item in claims):
+            status = "supported"
+            grounded = True
+            span = ""
         return BookGroundingCheck(
             grounded=grounded,
             unsupported_span=span,
             reason=reason,
             status=status,
             material_evidence=evidence,
+            claims=claims,
         )
     except Exception:
         logger.warning("book grounding checker failed")
@@ -1946,7 +1986,7 @@ def _grounding_fallback_lines(
         elif wrong_noun not in (span or ""):
             parts.append(f"「{wrong_noun}」這個詞好像不在這本書裡")
     char_note = _book_grounding_character_note(student_text, book_pack)
-    if char_note:
+    if char_note and status not in {"ambiguous", "contradicted"}:
         parts.append(char_note)
     if not parts:
         parts.append("你剛寫的情節好像不是書裡發生的事")
@@ -2009,6 +2049,43 @@ def _semantic_material_grounding_feedback(
         book_pack=book_pack,
         stage=stage,
         check=check,
+    )
+
+
+def _o_reference_clarity_check(
+    *,
+    student_text: str,
+    stage: str,
+) -> Optional[BookGroundingCheck]:
+    """Catch O claims that replace the material object with an unresolved evaluation."""
+    if (stage or "O").strip().upper() != "O":
+        return None
+    text = (student_text or "").strip()
+    if not text:
+        return None
+    patterns = (
+        r"(?:一些|那些|這些)[^，。！？；]{0,8}?(?:無聊|沒用|奇怪|普通|隨便)[^，。！？；]{0,3}?東西",
+        r"(?:很|太|有點|比較)?(?:無聊|沒用|奇怪|普通|隨便)的東西",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            span = match.group(0).strip()
+            return BookGroundingCheck(
+                grounded=False,
+                status="ambiguous",
+                unsupported_span=span,
+                reason="用評價代替具體教材物品",
+            )
+    return None
+
+
+def _synthesis_grounding_reply(missing: str, suggestion: str) -> str:
+    """Render a material-accuracy lock using the synthesis three-part contract."""
+    return (
+        "你已經做到：\n你有把故事和自己的想法放進整合稿。\n"
+        f"再想一想：\n{missing}\n"
+        f"可以這樣修改：\n{suggestion}"
     )
 
 
@@ -3045,6 +3122,7 @@ async def _genai_feedback(
                     "student_quote": grounding_check.unsupported_span or None,
                     "reason": grounding_check.reason or None,
                     "material_evidence": grounding_check.material_evidence or None,
+                    "claims": grounding_check.claims,
                 },
             }
         if rag_ctx:
@@ -3815,6 +3893,13 @@ async def writing_coach_chat(
                 stage=stage_ctx,
                 book_pack=book_pack,
             )
+        if genai_path:
+            clarity_check = _o_reference_clarity_check(
+                student_text=body,
+                stage=stage_ctx,
+            )
+            if clarity_check is not None:
+                grounding_check = clarity_check
         if not genai_path:
             fb_ok, fb_missing, fb_sug, fb_ex, fb_praise = _control_feedback(stage_ctx, body)
             fb_imp = None
@@ -4226,6 +4311,17 @@ async def writing_coach_chat(
             )
             # fb_ok is False in this branch; _maybe_advance_stage not called
     elif source == "synthesis_feedback":
+        synthesis_grounding_check = await _llm_book_grounding_check(
+            student_text=body,
+            stage="ALL",
+            book_pack=book_pack,
+        )
+        synthesis_grounding_lock = _semantic_material_grounding_feedback(
+            student_text=body,
+            book_pack=book_pack,
+            stage="ALL",
+            check=synthesis_grounding_check,
+        )
         prior_orid_week = prior_orid_week_for_synthesis(int(data.week or 1))
         prior_orid_raw = await _fetch_latest_writing_content_for_week(
             db, user.id, session.id, prior_orid_week
@@ -4292,6 +4388,17 @@ async def writing_coach_chat(
                 ai_reply = synthesis_fallback_reply(synthesis_focus)
         except Exception:
             ai_reply = "我這邊有點忙不過來，你先儲存草稿，等一下再試試看。"
+        if synthesis_grounding_lock is not None:
+            synthesis_levels = lock_synthesis_content_for_grounding(synthesis_levels)
+            synthesis_focus = "content_integration"
+            synthesis_sel_focus = None
+            ai_reply = _synthesis_grounding_reply(*synthesis_grounding_lock)
+            coach_meta["synthesis_material_grounded"] = False
+            coach_meta["synthesis_grounding_status"] = synthesis_grounding_check.status
+            coach_meta["synthesis_grounding_span"] = synthesis_grounding_check.unsupported_span
+        elif synthesis_grounding_check is not None:
+            coach_meta["synthesis_material_grounded"] = synthesis_grounding_check.grounded
+            coach_meta["synthesis_grounding_status"] = synthesis_grounding_check.status
         if not (ai_reply or "").strip():
             ai_reply = "我有看到你的整合草稿，你可以再說一下最想調整的是銜接、具體例子，還是心得的深度？"
         coach_meta["synthesis_context"] = True
@@ -4645,6 +4752,13 @@ async def writing_feedback(
             stage=data.stage,
             book_pack=book_pack,
         )
+    if genai_path:
+        clarity_check = _o_reference_clarity_check(
+            student_text=text,
+            stage=data.stage,
+        )
+        if clarity_check is not None:
+            grounding_check = clarity_check
     if not genai_path:
         ok, missing, suggestions, _, praise = _control_feedback(data.stage, text)
         example = None

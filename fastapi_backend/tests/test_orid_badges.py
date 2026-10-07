@@ -10,7 +10,11 @@ from app.services.orid_badges import (
     stages_passed_from_orid_levels,
     stages_passed_from_writing_obj,
 )
-from app.content.synthesis_rubric import first_synthesis_gap, synthesis_fallback_reply
+from app.content.synthesis_rubric import (
+    first_synthesis_gap,
+    lock_synthesis_content_for_grounding,
+    synthesis_fallback_reply,
+)
 
 
 class TestCalculateEarnedBadges:
@@ -179,3 +183,19 @@ class TestCalculateEarnedSynthesisBadge:
         reply = synthesis_fallback_reply(focus)
         assert "為什麼" in reply
         assert "下一次遇到" not in reply
+
+    def test_material_grounding_issue_caps_content_and_blocks_its_badge(self):
+        levels = lock_synthesis_content_for_grounding(
+            {
+                "content_integration": 4,
+                "coherence": 4,
+                "reflection_depth": 4,
+                "action_application": 4,
+            }
+        )
+
+        assert levels["content_integration"] == 2
+        assert first_synthesis_gap(levels) == "content_integration"
+        assert "badge_synthesis_content" not in calculate_earned_synthesis_badges(
+            rubric_levels=levels
+        )
