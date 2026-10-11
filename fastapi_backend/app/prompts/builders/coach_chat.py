@@ -111,14 +111,6 @@ def find_abrupt_orid_boundaries(text: str) -> list[str]:
     return abrupt
 
 
-def looks_like_hard_stitched_orid_synthesis(text: str) -> bool:
-    """True when a synthesis draft still reads like O→R→I→D hard-stitched stages.
-
-    Completeness can be fine while coherence is weak: story cue, then feeling,
-    then lesson, then future action appear in order, with at least two of the
-    three transitions missing any connective phrase nearby.
-    """
-    return len(find_abrupt_orid_boundaries(text)) >= 2
 
 
 def _coherence_priority_mid_block(*, kind: str, abrupt_boundaries: Optional[list[str]] = None) -> str:

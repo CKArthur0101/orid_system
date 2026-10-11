@@ -8,7 +8,7 @@ from app.prompts.builders.writing_assist import build_writing_d1_prompts, build_
 from app.prompts.builders.writing_feedback import build_genai_feedback_prompts
 from app.content.rubrics import WEEK1_ORID_RUBRIC, WEEK1_SEL_RUBRIC
 from app.prompts.policy.control_feedback import format_control_feedback_reply
-from app.prompts.policy.feedback_focus import apply_o_key_event_gaps, normalize_feedback_focus, o_draft_meets_pass_bar
+from app.prompts.policy.feedback_focus import normalize_feedback_focus, o_draft_meets_pass_bar
 from app.prompts.policy.turn_destination import (
     CONTROL_O_META_MISSING,
     GENAI_META_MISSING_FALLBACK,
@@ -128,6 +128,7 @@ def test_genai_feedback_builder_changes_contract_by_stage():
         stage="O",
         text="阿松爺爺把柿子藏起來。",
         book_pack=_book_pack(),
+        recent_context="學生：我不會啦，很生氣。\n教練：我們先找一件事。",
     )
     d_system, d_user = build_genai_feedback_prompts(
         stage="D",
@@ -143,12 +144,26 @@ def test_genai_feedback_builder_changes_contract_by_stage():
     assert "theme_aligned" in d_system
     assert "不可用關鍵字清單評分" in d_system
     assert "example 只能是" in o_system
-    assert "國小五、六年級" in o_system
+    assert "帶台灣國小五年級寫作的方式說話" in o_system
+    assert "不要出現「老師」" in o_system
+    assert "不必刻意縮短" in o_system
+    assert "多給一點肯定" in o_system
+    assert "不可藉鼓勵把主題帶往別的方向" in o_system
+    assert "寫作評量員" not in o_system
+    assert "寫作教練" not in o_system
     assert "唯一通過標準" in o_system
     assert "語意相同的改寫算正確" in o_system
     assert "單一孤立事實只算第 2 級" in o_system
     assert "四段都採「兩個核心成分」原則" in o_system
-    assert len(o_system) < 5000
+    assert "interaction_intent" in o_system
+    assert "student_reply" in o_system
+    assert "不得用關鍵字、固定詞表" in o_system
+    assert "依完整句意判斷，不得用詞表決定" in o_system
+    assert "不重複那些話" in o_system
+    assert "換一個比較溫和的詞" in o_system
+    assert "不給可以整段複製的句子" in o_system
+    assert "我不會啦，很生氣" in o_system
+    assert len(o_system) < 6500
     assert "學生「O」段原文" in o_user
     assert "1 起步：只有感想，沒有寫出故事人物或事件。" in o_system
     assert "3 達標：能正確寫出人物與至少一件重要事件。" in o_system
@@ -205,6 +220,9 @@ def test_genai_feedback_builder_changes_contract_by_stage():
         input_bucket="normal",
     )
     assert "只指出一個最重要缺口" in stuck_o
+    assert "不可把教材內容說成是他寫的" in stuck_o
+    assert "不可補上教材裡的答案" in stuck_o
+    assert "寫得不完整不是寫錯" in stuck_o
     assert "還不會寫" in stuck_user
     assert "不知道誰做了什麼" in stuck_user2
 
@@ -530,7 +548,7 @@ def test_synthesis_pasted_stage_paragraphs_detection():
 
 def test_synthesis_hard_stitched_orid_forces_coherence_priority():
     """硬串偵測不綁定特定書本人名／情節，靠通用連貫線索判斷。"""
-    from app.prompts.builders.coach_chat import find_abrupt_orid_boundaries, looks_like_hard_stitched_orid_synthesis
+    from app.prompts.builders.coach_chat import find_abrupt_orid_boundaries
 
     hard_stitched = (
         "故事裡阿松爺爺的柿子很甜，卻都不分享給別人，只把蒂跟葉子給別人，"
@@ -539,7 +557,7 @@ def test_synthesis_hard_stitched_orid_forces_coherence_priority():
         "這件事讓我學到分享不一定是壞事，因為後來分享反而有驚喜。"
         "下次我打籃球有人要報隊，我不會拒絕，會跟他一起打，學新技巧。"
     )
-    assert looks_like_hard_stitched_orid_synthesis(hard_stitched) is True
+    assert len(find_abrupt_orid_boundaries(hard_stitched)) >= 2
 
     # Same hard-stitch pattern but a completely different book/story/action —
     # detector must generalise, not key off this one essay's nouns.
@@ -549,7 +567,7 @@ def test_synthesis_hard_stitched_orid_forces_coherence_priority():
         "這件事讓我學到，一個人看書雖然自由，但少了朋友會很無聊。"
         "以後班上分組的時候，我不會自己選好朋友就好，會多找還沒有組別的同學。"
     )
-    assert looks_like_hard_stitched_orid_synthesis(other_book_hard_stitched) is True
+    assert len(find_abrupt_orid_boundaries(other_book_hard_stitched)) >= 2
 
     integrated = (
         "讀完阿松爺爺的故事後，我最記得他一開始把甜柿子藏起來、不肯分享，"
@@ -557,7 +575,7 @@ def test_synthesis_hard_stitched_orid_forces_coherence_priority():
         "後來看到大家因為分享變得開心，我才明白分享其實可以讓自己和別人都更好過。"
         "所以下次當球場上有人想加入我們，我會先說好啊，再約他一起練投籃。"
     )
-    assert looks_like_hard_stitched_orid_synthesis(integrated) is False
+    assert len(find_abrupt_orid_boundaries(integrated)) < 2
 
     naturally_connected = (
         "阿松爺爺一開始獨占甜柿子，不願意和大家分享，後來甚至砍掉柿子樹，"
@@ -567,7 +585,7 @@ def test_synthesis_hard_stitched_orid_forces_coherence_priority():
         "再借給他一起使用。"
     )
     assert find_abrupt_orid_boundaries(naturally_connected) == []
-    assert looks_like_hard_stitched_orid_synthesis(naturally_connected) is False
+    assert len(find_abrupt_orid_boundaries(naturally_connected)) < 2
 
     naturally_connected_prompt = build_synthesis_coach_system_prompt(
         book_context=build_book_context_block(_book_pack()),
@@ -588,7 +606,7 @@ def test_synthesis_hard_stitched_orid_forces_coherence_priority():
     )
     boundaries = find_abrupt_orid_boundaries(mostly_ok_one_gap)
     assert len(boundaries) <= 1
-    assert looks_like_hard_stitched_orid_synthesis(mostly_ok_one_gap) is False
+    assert len(find_abrupt_orid_boundaries(mostly_ok_one_gap)) < 2
 
     system = build_synthesis_coach_system_prompt(
         book_context=build_book_context_block(_book_pack()),
@@ -665,102 +683,14 @@ def test_o_draft_meets_pass_bar():
     )
 
 
-def test_apply_o_key_event_gaps_skips_when_pass_bar_met():
-    """Already level-3-worthy O drafts must not keep getting more plot homework."""
-    pass_o = (
-        "阿松爺爺家的柿子很甜，可是他一直自己吃，不想分給別人。"
-        "哎唷奶奶搬來後，他只給她柿子蒂。後來他把柿子藏進倉庫，最後還把樹砍掉，只剩樹樁。"
-    )
-    key_events = [
-        "阿松爺爺家的柿子很甜，但他一直想把柿子獨占起來，不想分給別人。",
-        "阿松爺爺在大家面前吃柿子、炫耀柿子有多好，旁人只能羨慕地看著。",
-        "阿松爺爺擔心大家來要柿子蒂，急忙把柿子樹上的柿子都採下來藏到屋後倉庫。",
-        "阿松爺爺為了不讓大家再拿到，急忙砍樹，最後發現只剩樹樁。",
-    ]
-    m, s = apply_o_key_event_gaps(
-        stage="O",
-        strength="high",
-        student_text=pass_o,
-        key_events=key_events,
-        missing=["你已經抓到重點事件了：下一步試著寫出故事裡還沒提到的一段"],
-        suggestions=["先挑書裡一件你稿子上還沒寫到的事"],
-    )
-    assert m[0].startswith("你已經抓到重點事件了")
-    assert "書裡還有這些情節" not in m[0]
 
 
-def test_apply_o_key_event_gaps_keeps_feedback_after_one_complete_event():
-    # One isolated event remains level 2 even when it is material-aligned.
-    long_o = "一開始阿松爺爺把柿子都藏起來，玩得很開心。"
-    key_events = [
-        "阿松爺爺家的柿子很甜，但他一直想把柿子獨占起來，不想分給別人。",
-        "阿松爺爺在大家面前吃柿子、炫耀柿子有多好，旁人只能羨慕地看著。",
-        "阿松爺爺擔心大家來要柿子蒂，急忙把柿子樹上的柿子都採下來藏到屋後倉庫，結果小朋友來要時樹上已沒有柿子。",
-        "阿松爺爺改拿出採柿子時掉下來的一片「柿子葉」給大家，哎唷奶奶和小朋友很開心並帶回去。",
-        "阿松爺爺再改拿出打葉子時掉落的一根「樹枝」給大家；隔天哎唷奶奶和小朋友用樹枝烤麵包、吃得很開心，還說樹枝快不夠用。",
-        "阿松爺爺為了不讓大家再拿到，急忙砍樹枝，最後發現自己竟把整棵柿子樹弄到只剩樹椿，後悔大哭。",
-    ]
-    m, s = apply_o_key_event_gaps(
-        stage="O",
-        strength="high",
-        student_text=long_o,
-        key_events=key_events,
-        missing=["你已經抓到重點事件了：下一步試著寫出故事裡還沒提到的一段"],
-        suggestions=["先挑書裡一件你稿子上還沒寫到的事，用三句話寫出誰、做了什麼、後來怎麼了"],
-    )
-    assert m == ["你已經抓到重點事件了：下一步試著寫出故事裡還沒提到的一段"]
-    assert s == ["先挑書裡一件你稿子上還沒寫到的事，用三句話寫出誰、做了什麼、後來怎麼了"]
 
 
-def test_apply_o_key_event_gaps_guides_vague_change_without_revealing_answer():
-    draft = "故事中，阿松爺爺一開始不太願意分享柿子。後來發生了一些事情，讓他慢慢開始改變。"
-    m, s = apply_o_key_event_gaps(
-        stage="O",
-        strength="high",
-        student_text=draft,
-        key_events=[
-            "阿松爺爺急忙把柿子全藏進倉庫。",
-            "阿松爺爺一急之下砍樹，最後只剩樹樁。",
-        ],
-        missing=["再補故事裡的一件事。"],
-        suggestions=["寫出接著發生什麼。"],
-    )
-    blob = m[0] + s[0]
-    assert "重要事件怎麼發展" in m[0]
-    assert "前面或接著" in s[0]
-    assert not any(word in blob for word in ("藏", "倉庫", "砍樹", "樹樁"))
 
 
-def test_apply_o_key_event_gaps_keeps_feedback_after_complete_hiding_event():
-    draft = (
-        "故事中，阿松爺爺一開始不太願意分享柿子，他把柿子藏起來，不想讓別人拿走。"
-        "後來發生了一些事情，讓他慢慢開始改變。"
-    )
-    m, s = apply_o_key_event_gaps(
-        stage="O",
-        strength="high",
-        student_text=draft,
-        key_events=[
-            "阿松爺爺急忙把柿子全藏進倉庫。",
-            "阿松爺爺一急之下砍樹，最後只剩樹樁。",
-        ],
-        missing=["再補故事裡的一件事。"],
-        suggestions=["寫出接著發生什麼。"],
-    )
-    assert m == ["再補故事裡的一件事。"]
-    assert s == ["寫出接著發生什麼。"]
 
 
-def test_apply_o_key_event_gaps_skips_grounding_priority_missing():
-    m, s = apply_o_key_event_gaps(
-        stage="O",
-        strength="high",
-        student_text="一開始阿松爺爺把柿子都藏起來。",
-        key_events=["阿松爺爺把柿子藏到屋後倉庫"],
-        missing=["你寫的「外星人」看起來不在書裡；書裡說的是「阿松爺爺」。"],
-        suggestions=["請改成書裡的人物與事件"],
-    )
-    assert "外星人" in m[0]
 
 
 def test_control_feedback_o_meta_stuck_reply_uses_blank_nudge_not_raw_missing():
@@ -822,7 +752,7 @@ def test_prompt_versions_cover_active_surfaces():
         "book_grounding_checker",
         "orid_checker",
     }.issubset(PROMPT_VERSIONS.keys())
-    assert PROMPT_VERSIONS["genai_feedback"] == "wf_v11"
+    assert PROMPT_VERSIONS["genai_feedback"] == "wf_v18"
     assert PROMPT_VERSIONS["feedback_narration"] == "fn_v12"
     assert PROMPT_VERSIONS["synthesis_coach"] == "sc_v15"
     assert PROMPT_VERSIONS["book_grounding_checker"] == "bgc_v3"

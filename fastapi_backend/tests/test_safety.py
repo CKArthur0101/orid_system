@@ -63,6 +63,7 @@ def test_local_safety_allows_ordinary_school_writing(text):
 def test_local_safety_coaches_profanity_rephrase(text):
     decision = safety.classify_local_safety(text)
     assert decision.action == safety.SafetyAction.COACH_REPHRASE
+    assert decision.should_stop_feedback is False
     assert decision.level == 1
     assert decision.category == "profanity"
 

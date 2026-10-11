@@ -86,7 +86,7 @@ _BUCKET_TONE_HINTS: dict[str, str] = {
     BUCKET_LATIN_HEAVY: "輸入以英文為主：praise/missing/suggestions 以英文為主、仍可帶一句繁中對照若需要。",
     BUCKET_MIXED_SCRIPT: (
         "中英混雜：praise 先承接原文裡的人／事／中英詞；missing 只抓一個主點。"
-        "suggestions 可帶一句「本段練習建議接下來用繁中文寫完，老師好改、同學也看得懂」（一句即可，勿說教）；"
+        "suggestions 可帶一句「本段練習建議接下來用繁中文寫完，這樣比較好讀」（一句即可，勿說教）；"
         "仍只輸出 JSON。"
     ),
     BUCKET_NORMAL: "輸入長度正常：維持既有 JSON 規則與口吻。",

@@ -3,10 +3,12 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 from typing import Optional, Any, Tuple, List, Dict, Union
 from dataclasses import dataclass, field
+import asyncio
 import os
 import re
 import json
 import logging
+import time
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -20,7 +22,7 @@ from openai import AsyncOpenAI, BadRequestError
 
 from app.database import get_async_session, User
 from app.users import current_active_user
-from app.models import Reading, OridSession, OridChatMessage, OridSafetyEvent, OridWeekSubmission, OridStageAttempt, OridFeedbackEvent, OridBadgeEvent
+from app.models import Reading, OridSession, OridChatMessage, OridWeekSubmission, OridStageAttempt, OridFeedbackEvent, OridBadgeEvent
 from app.schemas import (
     ReadingCreate, ReadingRead,
     OridSessionCreate, OridSessionRead,
@@ -50,7 +52,6 @@ from app.prompts.builders.writing_feedback import build_genai_feedback_prompts
 from app.prompts.builders.writing_assist import build_writing_d1_prompts, build_writing_d2_prompts
 from app.prompts.parsers.writing_assist import parse_writing_assist_response
 from app.prompts.builders.coach_chat import (
-    build_feedback_narration_prompt,
     build_synthesis_coach_system_prompt,
     build_writing_coach_system_prompt,
 )
@@ -59,7 +60,6 @@ from app.utils import strip_markdown_for_student_chat
 from app.services.orid_rubric_scoring import (
     apply_single_level_estimate,
     collect_levels_from_writing_obj,
-    extract_orid_levels_from_rubric_meta,
     parse_level,
     primary_orid_level_from_rubric_meta,
 )
@@ -90,37 +90,13 @@ from app.services.orid_research_summary import (
 from app.prompts.policy.student_input_bucket import (
     classify_student_input,
     skip_book_grounding_enforcement,
-    truncate_student_draft_excerpt,
 )
-from app.prompts.policy.feedback_focus import (
-    align_d_feedback_to_rubric,
-    align_i_feedback_to_rubric,
-    align_o_feedback_to_book_event,
-    align_r_feedback_to_rubric,
-    apply_o_key_event_gaps,
-    build_grounding_safe_praise,
-    d_draft_is_obvious_empty_wish,
-    detect_feedback_strength,
-    missing_looks_book_grounding_priority,
-    normalize_feedback_focus,
-    o_draft_arc_flags,
-    rewrite_grounding_append_suggestions,
-    scrub_anchor_quote_for_grounding,
-    scrub_praise_for_grounding_issue,
-    scrub_revision_prompts_already_in_draft,
-    stage_draft_meets_pass_bar,
-    thin_stage_coaching,
-)
-from app.prompts.policy.rasf_narration_context import build_rasf_narration_context
+from app.prompts.policy.feedback_focus import detect_feedback_strength
 from app.prompts.policy.control_feedback import (
     format_control_feedback_reply,
     format_control_free_text_reply,
 )
 from app.prompts.policy.genai_completed_feedback import format_genai_completed_feedback_reply
-from app.prompts.policy.scaffold_guard import (
-    scaffold_feedback_example,
-    scaffold_feedback_suggestions,
-)
 from app.content.rubrics import WEEK1_ORID_RUBRIC, WEEK1_SEL_RUBRIC, WEEK3_ORID_RUBRIC, WEEK3_SEL_RUBRIC, WEEK5_ORID_RUBRIC, WEEK5_SEL_RUBRIC
 from app.prompts.policy.turn_destination import (
     CONTROL_O_META_MISSING,
@@ -136,21 +112,14 @@ from app.prompts.policy.grounding import (
     extract_unsupported_action_phrase,
     extract_wrong_concrete_noun,
     book_contrast_noun_for,
-    looks_story_related_to_book,
-    looks_obviously_offtopic,
     looks_likely_factual_mismatch,
     looks_likely_ungrounded_in_book,
     normalize_match_text,
-    scrub_false_book_absence_claims,
-    scrub_false_synonym_mismatch_claims,
-    student_uses_supported_event_paraphrase,
-    student_has_book_aligned_cut_tree_paraphrase,
 )
 from app.prompts.parsers.json_payloads import (
     extract_json_object,
     parse_book_grounding_checker_json,
 )
-from app.services.safety import classify_safety, safety_text_fingerprint
 from app.services.rag import get_feedback_rag_context
 from app.services.orid_condition import (
     CONTROL_AI_FORBIDDEN_DETAIL,
@@ -158,11 +127,7 @@ from app.services.orid_condition import (
     normalize_orid_condition,
     session_condition_from_user_orid_condition,
 )
-from app.services.orid_writing_store import (
-    ensure_orid_writing_obj,
-    merge_synthesis_feedback_into_writing,
-    upsert_feedback_into_stage,
-)
+from app.services.orid_writing_store import ensure_orid_writing_obj
 # ----------------------------
 # OpenAI settings (from env)
 # ----------------------------
@@ -188,11 +153,16 @@ OPENAI_ENABLED = bool((OPENAI_API_KEY or "").strip())
 client: Optional[AsyncOpenAI] = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_ENABLED else None
 
 
-def _openai_call_kwargs(**extra: Any) -> Dict[str, Any]:
+def _openai_call_kwargs(
+    *,
+    reasoning_effort: Optional[str] = None,
+    **extra: Any,
+) -> Dict[str, Any]:
     """Base chat-completions kwargs: model + reasoning_effort (+ optional extras)."""
     kwargs: Dict[str, Any] = {"model": OPENAI_MODEL, **extra}
-    if OPENAI_REASONING_EFFORT:
-        kwargs["reasoning_effort"] = OPENAI_REASONING_EFFORT
+    effective_reasoning = reasoning_effort or OPENAI_REASONING_EFFORT
+    if effective_reasoning:
+        kwargs["reasoning_effort"] = effective_reasoning
     return kwargs
 
 
@@ -202,6 +172,7 @@ async def _chat_completion(
     max_completion_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
     response_format: Optional[Dict[str, Any]] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> str:
     if client is None:
         raise HTTPException(
@@ -209,7 +180,10 @@ async def _chat_completion(
             detail="OPENAI_API_KEY 未設定，LLM 功能暫不可用（但登入/Docs 應可正常）。",
         )
 
-    kwargs: Dict[str, Any] = _openai_call_kwargs(messages=messages)
+    kwargs: Dict[str, Any] = _openai_call_kwargs(
+        messages=messages,
+        reasoning_effort=reasoning_effort,
+    )
     if max_completion_tokens is not None:
         kwargs["max_completion_tokens"] = max_completion_tokens
     if temperature is not None:
@@ -291,10 +265,6 @@ ORID_FEEDBACK_RETRY_MAX_COMPLETION_TOKENS = int(
         str(max(ORID_FEEDBACK_MAX_COMPLETION_TOKENS, 3000)),
     )
 )
-# 第二段 LLM（JSON→三段敘述）：預設給比 400 稍多空間，較能帶進書中具體情節（仍受 OPENAI_MAX_COMPLETION_TOKENS 上限）。
-ORID_FEEDBACK_NARRATION_MAX_COMPLETION_TOKENS = int(
-    os.getenv("ORID_FEEDBACK_NARRATION_MAX_COMPLETION_TOKENS", "420")
-)
 ORID_OFFTOPIC_STRICT = _env_bool("ORID_OFFTOPIC_STRICT", False)
 ORID_FEEDBACK_INTERNAL_PLANNER = _env_bool("ORID_FEEDBACK_INTERNAL_PLANNER", False)
 ORID_CHAT_PROMPT_VERSION = os.getenv("ORID_CHAT_PROMPT_VERSION", "orid-chat-v2.2")
@@ -323,17 +293,6 @@ def get_required_pass(stage: str) -> int:
     return ORID_REQUIRED_PASS_DEFAULT
 
 
-def get_min_ai_turns(stage: str) -> int:
-    s = (stage or "O").strip().upper()
-    if s == "O":
-        return ORID_MIN_AI_TURNS_O
-    if s == "R":
-        return ORID_MIN_AI_TURNS_R
-    if s == "I":
-        return ORID_MIN_AI_TURNS_I
-    if s == "D":
-        return ORID_MIN_AI_TURNS_D
-    return ORID_MIN_AI_TURNS_DEFAULT
 
 
 def _user_role(user: User) -> str:
@@ -417,71 +376,8 @@ _INTERPRETIVE_KW = ["提醒", "道理", "學到", "我覺得", "我認為", "代
 _REFLECTIVE_KW = ["感覺", "感受", "難過", "失望", "開心", "生氣", "不公平", "擔心", "安心", "害怕", "同情"]
 
 
-def _count_hits(text: str, keywords: list[str]) -> int:
-    t = (text or "").strip()
-    if not t:
-        return 0
-    return sum(1 for k in keywords if k in t)
 
 
-def _detect_cross_stage_answer(current_stage: str, student_text: str) -> Optional[dict[str, str]]:
-    s = (current_stage or "O").strip().upper()
-    t = (student_text or "").strip()
-    if not t:
-        return None
-
-    action_hits = _count_hits(t, _ACTION_KW)
-    interpretive_hits = _count_hits(t, _INTERPRETIVE_KW)
-    reflective_hits = _count_hits(t, _REFLECTIVE_KW)
-
-    if s == "I" and action_hits >= 1 and interpretive_hits == 0:
-        return {
-            "detected_stage": "D",
-            "reason": "先把做法留到下一段",
-            "fallback_question": _sanitize_one_question(
-                _pick_variant(
-                    [
-                        "先不急著講做法，你覺得這件事最提醒我們什麼",
-                        "你剛剛想到的是做法，先把它放著。那這件事最提醒我們什麼",
-                        "做法我們下一段會用到，現在先想這件事想告訴我們什麼",
-                    ],
-                    f"cross:I:D:{t}",
-                )
-            ),
-            "ack": _pick_variant(
-                [
-                    "你剛剛想到的是可以怎麼做，這個想法先留著。",
-                    "你剛剛提到的是做法，這個等一下很用得上。",
-                    "你已經想到下一步怎麼做了，先把這個點記住。",
-                ],
-                f"cross-ack:I:D:{t}",
-            ),
-        }
-
-    if s == "R" and interpretive_hits >= 1 and reflective_hits == 0:
-        return {
-            "detected_stage": "I",
-            "reason": "先把感受說清楚",
-            "fallback_question": _sanitize_one_question(
-                _pick_variant(
-                    [
-                        "在想到道理前面，你那一刻最明顯的感受是什麼",
-                        "你已經想到想法了，先回到那一刻，你最明顯的感受是什麼",
-                        "我們先不急著講道理，你在故事裡最強烈的感覺是什麼",
-                    ],
-                    f"cross:R:I:{t}",
-                )
-            ),
-            "ack": _pick_variant(
-                [
-                    "你剛剛已經開始在想道理了，先把這個點放著。",
-                    "你剛剛提到的是想法，先回到那一刻的感受看看。",
-                ],
-                f"cross-ack:R:I:{t}",
-            ),
-        }
-
-    return None
 
 
 def ai_prompt_by_stage(stage: str) -> str:
@@ -495,14 +391,6 @@ def ai_prompt_by_stage(stage: str) -> str:
     return _sanitize_one_question("下次遇到類似情況，你會先做哪一個小動作")
 
 
-def _two_sentence_ack_then_question(ack: str, question: str) -> str:
-    a = (ack or "").strip()
-    if not a:
-        a = "我有接到你剛剛說的。"
-    if not a.endswith(("。", "！", "～")):
-        a += "。"
-    q = _sanitize_one_question(question)
-    return f"{a}{q}"
 
 
 # ----------------------------
@@ -513,33 +401,6 @@ NEXT_RE = re.compile(r"【NEXT:([ORID])】", re.IGNORECASE)
 REASON_RE = re.compile(r"【REASON:(.*?)】")
 
 
-def parse_control_tags(text: str) -> Tuple[bool, Optional[str], Optional[str], str, bool]:
-    pass_ok = False
-    next_s = None
-    reason = None
-    has_tags = False
-
-    m = PASS_RE.search(text)
-    if m:
-        has_tags = True
-        pass_ok = (m.group(1).lower() == "true")
-
-    m2 = NEXT_RE.search(text)
-    if m2:
-        has_tags = True
-        next_s = m2.group(1).upper()
-
-    m3 = REASON_RE.search(text)
-    if m3:
-        has_tags = True
-        reason = m3.group(1).strip()
-
-    clean = PASS_RE.sub("", text)
-    clean = NEXT_RE.sub("", clean)
-    clean = REASON_RE.sub("", clean)
-    clean = clean.strip()
-
-    return pass_ok, next_s, reason, clean, has_tags
 
 
 # ----------------------------
@@ -559,61 +420,61 @@ BOOK_PACK_BY_WEEK: dict[int, dict[str, Any]] = {
         "core_theme": ["分享與獨占", "轉念與創意", "衝動的後果", "把好東西變成大家的好"],
         "characters": [
             {"name": "阿松爺爺", "role": "很喜歡自家甜柿子，一開始常獨占，不想分給別人"},
-            {"name": "哎唷奶奶", "role": "新鄰居，總能把柿子蒂、葉子、樹枝變成有趣又有用的東西"},
-            {"name": "小朋友們", "role": "跟著哎唷奶奶一起玩、一起做，也願意最後一起幫忙播種"},
+            {"name": "哎喲奶奶", "role": "新鄰居，總能把柿子蒂、葉子、樹枝變成有趣又有用的東西"},
+            {"name": "小朋友們", "role": "跟著哎喲奶奶一起玩、一起做，也願意最後一起幫忙播種"},
         ],
-        "setting": ["阿松爺爺家與隔壁哎唷奶奶家", "柿子樹旁與院子", "秋天柿子成熟時"],
+        "setting": ["阿松爺爺家與隔壁哎喲奶奶家", "柿子樹旁與院子", "秋天柿子成熟時"],
         "key_events": [
             "阿松爺爺家的柿子很甜，但他一直獨占，故意在大家面前大口吃。",
-            "哎唷奶奶搬來後，阿松爺爺只給她柿子蒂；她卻開心收下。",
-            "哎唷奶奶和孩子們用柿子蒂玩陀螺，阿松爺爺怕被要走，急忙把柿子全藏進倉庫。",
-            "後來他又把葉子打落藏起來、再把樹枝拿給大家；哎唷奶奶和孩子們照樣玩得很開心。",
+            "哎喲奶奶搬來後，阿松爺爺只給她柿子蒂；她卻開心收下。",
+            "哎喲奶奶和孩子們用柿子蒂玩陀螺，阿松爺爺怕被要走，急忙把柿子全藏進倉庫。",
+            "後來他又把葉子打落藏起來、再把樹枝拿給大家；哎喲奶奶和孩子們照樣玩得很開心。",
             "阿松爺爺一急之下砍樹，回神只剩樹樁，難過地哭了。",
-            "哎唷奶奶提醒：若留一顆柿子，裡面的子可以種。",
+            "哎喲奶奶提醒：若留一顆柿子，裡面的子可以種。",
             "阿松爺爺拿出藏起來的柿子，大家一起吃、一起撒種子，期待長出更多甜柿子。",
         ],
         "story_excerpts": [
             "阿松爺爺家的柿子好甜，可是他一直獨占，還故意在大家面前狼吞虎嚥，讓人只能看著流口水。",
-            "哎唷奶奶搬來時稱讚柿子，阿松爺爺卻只給她吃完剩下的柿子蒂。哎唷奶奶仍笑著說謝謝。",
-            "隔天，哎唷奶奶和孩子們用柿子蒂打陀螺，玩得很開心。阿松爺爺怕大家來要，急忙把柿子全採下來藏進倉庫。",
-            "哎唷奶奶來時，樹上已沒柿子。阿松爺爺改給枯葉，哎唷奶奶和孩子們又把葉子做成項鍊和娃娃。",
+            "哎喲奶奶搬來時稱讚柿子，阿松爺爺卻只給她吃完剩下的柿子蒂。哎喲奶奶仍笑著說謝謝。",
+            "隔天，哎喲奶奶和孩子們用柿子蒂打陀螺，玩得很開心。阿松爺爺怕大家來要，急忙把柿子全採下來藏進倉庫。",
+            "哎喲奶奶來時，樹上已沒柿子。阿松爺爺改給枯葉，哎喲奶奶和孩子們又把葉子做成項鍊和娃娃。",
             "阿松爺爺再把葉子都打落藏起來，最後連樹枝也給了出去。孩子們用樹枝串麵糰烤麵包，院子裡更熱鬧。",
             "阿松爺爺一急又去砍樹，直到看到只剩樹樁才驚醒，抱著頭大哭：我怎麼會做出這種事。",
-            "哎唷奶奶說，如果留一顆柿子，裡面的種子還能拿來種。阿松爺爺立刻拿出倉庫裡好多柿子，請大家吃完把種子到處撒下。",
+            "哎喲奶奶說，如果留一顆柿子，裡面的種子還能拿來種。阿松爺爺立刻拿出倉庫裡好多柿子，請大家吃完把種子到處撒下。",
             "最後大家一起吃甜柿、一起撒種，盼望長出更多柿子。阿松爺爺從獨占慢慢走向分享。",
         ],
         "orid_prompt_bank": {
             "O": [
                 "故事一開始，阿松爺爺對柿子是怎麼做的？哪一句或哪個動作看得出來？",
-                "阿松爺爺第一次給哎唷奶奶的是什麼？哎唷奶奶怎麼回應？",
-                "拿到柿子蒂後，哎唷奶奶和小朋友做了什麼？",
+                "阿松爺爺第一次給哎喲奶奶的是什麼？哎喲奶奶怎麼回應？",
+                "拿到柿子蒂後，哎喲奶奶和小朋友做了什麼？",
                 "阿松爺爺看到孩子們玩柿子蒂後，馬上做了哪件事？",
                 "樹上沒有柿子之後，阿松爺爺又拿出什麼給大家？",
                 "葉子那一段裡，孩子們把葉子做成了哪些東西？",
                 "後來大家又用樹枝做了什麼活動？",
                 "阿松爺爺為什麼會去砍樹？砍完後他看到什麼？",
-                "哎唷奶奶說了哪句話，讓事情開始轉回來？",
+                "哎喲奶奶說了哪句話，讓事情開始轉回來？",
                 "最後大家一起做了哪兩件事，讓故事結尾和開頭不一樣？",
                 "如果照順序說一次，你會怎麼用「先…再…最後…」整理？",
                 "你覺得哪一幕是全書最大轉折？那一幕前後各發生了什麼？",
             ],
             "R": [
                 "如果你是看著柿子卻吃不到的孩子，你第一個感覺會是什麼？",
-                "當阿松爺爺只給柿子蒂時，你覺得哎唷奶奶心裡比較像哪種感受？",
+                "當阿松爺爺只給柿子蒂時，你覺得哎喲奶奶心裡比較像哪種感受？",
                 "你看到阿松爺爺一直把東西藏起來時，心情是緊張、生氣，還是難過？為什麼？",
                 "阿松爺爺發現只剩樹樁那一刻，你覺得他最強烈的感覺是什麼？",
                 "故事裡哪一幕讓你最心疼？你心疼的是誰？",
                 "哪一幕讓你覺得比較溫暖？是什麼讓你有這種感覺？",
                 "如果你在現場，你會先安慰阿松爺爺還是先安慰小朋友？為什麼？",
-                "你覺得哎唷奶奶在每次說謝謝時，心裡可能在想什麼？",
+                "你覺得哎喲奶奶在每次說謝謝時，心裡可能在想什麼？",
                 "如果這件事發生在班上，班上同學的情緒可能怎麼變化？",
                 "你比較像故事裡哪個角色的心情路線？從哪一幕開始像？",
             ],
             "I": [
                 "你覺得這個故事最想提醒我們的一件事是什麼？",
-                "為什麼同樣是柿子蒂、葉子、樹枝，在哎唷奶奶手上會變成快樂？",
+                "為什麼同樣是柿子蒂、葉子、樹枝，在哎喲奶奶手上會變成快樂？",
                 "你覺得阿松爺爺真正失去的是柿子，還是別的東西？為什麼？",
-                "哎唷奶奶一直說謝謝，這在故事裡有什麼力量？",
+                "哎喲奶奶一直說謝謝，這在故事裡有什麼力量？",
                 "你怎麼理解「留一顆柿子，留下一個可能」這個想法？",
                 "阿松爺爺從獨占到分享，最關鍵的轉折點是哪一幕？",
                 "你覺得故事想談的是資源分配、公平，還是人與人的關係？為什麼？",
@@ -1198,60 +1059,8 @@ def pick_prompt_from_bank(book_pack: Optional[dict[str, Any]], stage: str, idx: 
     return ai_prompt_by_stage(stage)
 
 
-def heuristic_pass(stage: str, student_text: str, book_pack: Optional[dict[str, Any]] = None) -> Tuple[bool, str]:
-    t = (student_text or "").strip()
-    if not t:
-        return False, "沒有輸入內容"
-
-    if looks_obviously_offtopic(t, book_pack):
-        return False, "先回到故事裡"
-
-    if stage == "O":
-        if not looks_story_related_to_book(t, book_pack):
-            return False, "先回到故事裡發生的事"
-        compact_o = re.sub(r"\s+", "", t)
-        if len(compact_o) >= 5:
-            return True, "OK"
-        return False, "內容太短，請補充一點事件"
-
-    if stage == "R":
-        emo_kw = [
-            "開心", "難過", "生氣", "害怕", "擔心", "緊張",
-            "失望", "感動", "驚訝", "覺得", "感到", "心情",
-            "同情", "不公平",
-        ]
-        if any(k in t for k in emo_kw):
-            return True, "OK"
-        return False, "請加上一個感受或情緒詞"
-
-    if stage == "I":
-        kw = ["因為", "所以", "我覺得", "提醒", "學到", "道理", "重要", "意義", "價值", "代表", "象徵"]
-        if any(k in t for k in kw) and len(t) >= 10:
-            return True, "OK"
-        return False, "請再說出你的想法和理由"
-
-    kw = ["我會", "下次", "先", "再", "行動", "例如", "打算", "計畫", "做到", "深呼吸", "先問"]
-    if any(k in t for k in kw) and len(t) >= 10:
-        return True, "OK"
-    return False, "請說一個更具體的小行動"
 
 
-def _extract_keyword(student_text: str) -> str:
-    t = (student_text or "").strip()
-    if not t:
-        return ""
-    t = re.sub(r"\s+", " ", t).strip()
-    t = re.sub(r"[「」『』\"\'，。！？：；、（）()\[\]{}]", " ", t)
-    parts = [p.strip() for p in t.split() if p.strip()]
-    # Prefer short CJK anchors; avoid echoing random Latin tokens.
-    for p in parts:
-        if re.search(r"[\u4e00-\u9fff]", p) and 2 <= len(p) <= 10:
-            return p[:10]
-    t2 = re.sub(r"\s+", "", t)
-    m = re.search(r"[\u4e00-\u9fff]{2,10}", t2)
-    if m:
-        return m.group(0)[:10]
-    return ""
 
 
 def _pick_variant(options: list[str], seed: str) -> str:
@@ -1262,276 +1071,34 @@ def _pick_variant(options: list[str], seed: str) -> str:
     return options[idx]
 
 
-def _split_sentences(text: str) -> list[str]:
-    t = (text or "").strip()
-    if not t:
-        return []
-    parts = re.split(r"(?<=[。！？!~～])\s*", t)
-    return [p.strip() for p in parts if p.strip()]
 
 
-def _looks_glitched_text(text: str) -> bool:
-    t = (text or "").strip()
-    if not t:
-        return True
-    # Obvious malformed output from generation
-    if "�" in t:
-        return True
-    if re.search(r"[，。！？]{2,}", t):
-        return True
-    # Repeated same Chinese character can create awkward phrases (e.g. 咬咬/問問問)
-    for m in re.finditer(r"([\u4e00-\u9fff])\1{1,}", t):
-        ch = m.group(1)
-        if ch not in {"哈", "呵", "嗯", "啊"}:
-            return True
-    return False
 
 
-def _looks_glitched_question(text: str) -> bool:
-    q = _sanitize_one_question(text)
-    if _looks_glitched_text(q):
-        return True
-    # Contradictory count phrasing usually indicates a generation glitch.
-    if ("第一次" in q and "兩次" in q) or ("一次" in q and "兩次" in q):
-        return True
-    return False
 
 
-def _extract_question_sentence(text: str) -> str:
-    for s in _split_sentences(text):
-        if "？" in s or "?" in s:
-            return _sanitize_one_question(s)
-    return ""
 
 
-def _extract_question_snippets_from_ai_text(text: str) -> list[str]:
-    """All question sentences in one AI bubble (for anti-repeat)."""
-    out: list[str] = []
-    for s in _split_sentences(text):
-        if "？" in s or "?" in s:
-            q = _sanitize_one_question(s)
-            if len(re.sub(r"\s+", "", q)) > 4:
-                out.append(q)
-    if not out and "？" in (text or ""):
-        out.append(_sanitize_one_question(text))
-    return out
 
 
-def recent_ai_questions_for_prompt(msgs: list[OridChatMessage], stage: str, limit: int = 6) -> str:
-    s = (stage or "O").strip().upper()
-    ai_msgs = [m for m in msgs if (m.stage or "").strip().upper() == s and m.sender == "ai"]
-    seen: list[str] = []
-    for m in ai_msgs[-12:]:
-        for q in _extract_question_snippets_from_ai_text(m.text):
-            if q not in seen:
-                seen.append(q)
-    tail = seen[-limit:]
-    if not tail:
-        return "（尚無）"
-    return "\n".join(f"- {x}" for x in tail)
 
 
-def latest_ai_question_for_stage(msgs: list[OridChatMessage], stage: str) -> str:
-    s = (stage or "O").strip().upper()
-    for m in reversed(msgs):
-        if m.sender != "ai":
-            continue
-        if (m.stage or "").strip().upper() != s:
-            continue
-        q = _extract_question_sentence(m.text or "")
-        if q and (not _looks_glitched_question(q)):
-            return _sanitize_one_question(q)
-    return ""
 
 
-def _normalize_question_for_compare(s: str) -> str:
-    t = (s or "").strip().replace("?", "？")
-    t = re.sub(r"\s+", "", t)
-    t = re.sub(r"[「」『』\"'，。！？；：、（）]", "", t)
-    return t
 
 
-def _question_similar_to_recent(question: str, recent_block: str) -> bool:
-    qn = _normalize_question_for_compare(question)
-    if len(qn) < 6:
-        return False
-    for line in (recent_block or "").split("\n"):
-        line = line.strip().lstrip("-").strip()
-        if not line or line == "（尚無）":
-            continue
-        ln = _normalize_question_for_compare(line)
-        if len(ln) < 6:
-            continue
-        if qn == ln:
-            return True
-        shorter, longer = (qn, ln) if len(qn) <= len(ln) else (ln, qn)
-        if len(shorter) >= 8 and shorter in longer:
-            return True
-        if len(qn) >= 12 and len(ln) >= 12 and qn[:12] == ln[:12]:
-            return True
-    return False
 
 
-def pick_non_repeating_fallback_question(
-    *,
-    stage: str,
-    book_pack: Optional[dict[str, Any]],
-    student_text: str,
-    ai_turn_count_same_stage: int,
-    recent_questions_block: str,
-    preferred: str,
-) -> str:
-    """Prefer checker/bank question; if generic or too similar to recent AI questions, rotate."""
-    q0 = _sanitize_one_question(preferred)
-    if (
-        (not _looks_generic_question(q0))
-        and (not _question_similar_to_recent(q0, recent_questions_block))
-        and (not _looks_glitched_question(q0))
-    ):
-        return q0
-    for offset in range(0, 8):
-        raw = pick_prompt_from_bank(book_pack, stage, ai_turn_count_same_stage + 1 + offset)
-        cand = _sanitize_one_question(raw)
-        if (
-            (not _looks_generic_question(cand))
-            and (not _question_similar_to_recent(cand, recent_questions_block))
-            and (not _looks_glitched_question(cand))
-        ):
-            return cand
-    st = (stage or "O").strip().upper()
-    if st == "O":
-        for i in range(len(_O_ANGLE_FALLBACKS)):
-            cand = _pick_variant(_O_ANGLE_FALLBACKS, f"{student_text}:{ai_turn_count_same_stage}:{i}")
-            cq = _sanitize_one_question(cand)
-            if not _question_similar_to_recent(cq, recent_questions_block):
-                return cq
-    return _sanitize_one_question(ai_prompt_by_stage(stage))
 
 
-def _focus_ack(student_text: str, kind: str = "followup") -> str:
-    if kind == "low_effort":
-        return _pick_variant(
-            [
-                "沒關係，你先抓一個小地方說就可以。",
-                "不急，先從你最有印象的一幕開始。",
-                "沒事，我們換一個更好回答的角度。",
-                "沒問題，先從角色或動作挑一個說。",
-                "先想一下書裡某一幕，用一句話說也可以。",
-                "你可以挑一個記得清楚的細節試著回答。",
-            ],
-            f"low_effort:{student_text}",
-        )
-    if kind == "unsafe":
-        return _pick_variant(
-            [
-                "我想跟你好好聊書，但先不要用傷人的話。",
-                "我們可以把話說好一點，再把重點放回故事。",
-                "先把語氣放輕一點，我們再繼續聊故事。",
-            ],
-            f"{kind}:{student_text}",
-        )
-
-    kw = _extract_keyword(student_text)
-    if kw and not _is_low_effort_text(student_text):
-        pool_map = {
-            "pullback": [
-                f"你剛剛提到{kw}，先把這個地方放回故事裡看看。",
-                f"你有說到{kw}，我們順著這個點接回故事。",
-                f"你剛剛抓到{kw}了，我們把它跟故事連起來。",
-            ],
-            "transition": [
-                f"你剛剛提到{kw}，這個變化我有接到。",
-                f"你有說到{kw}，接下來可以再往下想一步。",
-                f"你剛剛抓到{kw}，這讓後面更清楚了。",
-            ],
-            "followup": [
-                f"你剛剛提到{kw}，我想順著這裡再往下看。",
-                f"你有說到{kw}，後面那一步也很值得看。",
-                f"你剛剛抓到{kw}，我們就從這裡再多想一點。",
-            ],
-        }
-        return _pick_variant(pool_map.get(kind, pool_map["followup"]), f"{kind}:{kw}")
-
-    if kind == "pullback":
-        return _pick_variant(
-            [
-                "沒關係，我們從故事裡找找線索。",
-                "好，那我們一起回到故事看看。",
-                "先用書裡的印象回答就可以，不用完整也沒關係。",
-                "我們先把這一題說清楚一點。",
-                "你可以照自己的說法，把書裡那一幕講出來。",
-            ],
-            f"{kind}:{student_text}",
-        )
-    if kind == "transition":
-        return _pick_variant(
-            [
-                "你剛剛有抓到一個重點，後面可以再往下想一步。",
-                "你剛剛說的內容有接到故事後面的變化。",
-            ],
-            f"{kind}:{student_text}",
-        )
-    return _pick_variant(
-        [
-            "你剛剛有接到故事裡的一個重點。",
-            "你剛剛說的內容有碰到故事的關鍵地方。",
-        ],
-        f"{kind}:{student_text}",
-    )
 
 
-def _neutral_pullback_ack(seed: str = "") -> str:
-    return _pick_variant(
-        [
-            "先把重點拉回故事這一段。",
-            "我們先回到故事裡剛剛發生的事。",
-            "先把剛剛的話接回書中的角色和事件。",
-            "先照書裡發生的事來想一想。",
-            "我們先把這段劇情釐清一下。",
-            "不急，先把書裡你看到的那一幕說出來。",
-            "先回到教材裡的情節喔。",
-            "先把這題用故事裡的事來回答看看。",
-        ],
-        f"neutral-pullback:{seed}",
-    )
 
 
-def _offtopic_bridge_ack(student_text: str) -> str:
-    kw = _extract_keyword(student_text)
-    if kw and (not _is_low_effort_text(student_text)):
-        return _pick_variant(
-            [
-                f"{kw}這個話題也有趣，我們先把故事這段聊完。",
-                f"我有接到你提到{kw}，先把書裡這一幕走完。",
-                f"你剛剛提到{kw}，我們先回到故事主線，等下再延伸。",
-            ],
-            f"offtopic-bridge:{kw}:{student_text}",
-        )
-    return _pick_variant(
-        [
-            "這個話題也有趣，我們先把故事主線聊完。",
-            "我有接到你的意思，先把書裡這段走完。",
-            "先把故事這一幕說清楚，等等再延伸別的話題。",
-        ],
-        f"offtopic-bridge:{student_text}",
-    )
 
 
-def _cross_stage_ack(current_stage: str, student_text: str) -> Optional[str]:
-    obj = _detect_cross_stage_answer(current_stage, student_text)
-    if not obj:
-        return None
-    return str(obj.get("ack") or "").strip() or None
 
 
-def _stage_recent_lines(msgs: list[OridChatMessage], stage: str, limit: int = 8) -> list[str]:
-    out: list[str] = []
-    for m in msgs:
-        if (m.stage or "").strip().upper() != stage:
-            continue
-        prefix = "學生" if m.sender == "student" else "老師"
-        out.append(f"{prefix}：{m.text}")
-    return out[-limit:]
 
 
 def _recent_session_lines(msgs: list[OridChatMessage], limit: int = 12) -> list[str]:
@@ -1600,25 +1167,6 @@ def _is_low_effort_text(text: str) -> bool:
     return False
 
 
-def _count_recent_student_streak(
-    msgs: list[OridChatMessage],
-    *,
-    predicate,
-    max_scan: int = 8,
-) -> int:
-    streak = 0
-    seen = 0
-    for m in reversed(msgs):
-        if m.sender != "student":
-            continue
-        seen += 1
-        if predicate((m.text or "").strip()):
-            streak += 1
-        else:
-            break
-        if seen >= max_scan:
-            break
-    return streak
 
 
 async def _allow_chat_message(db: AsyncSession, user_id: UUID) -> bool:
@@ -1783,6 +1331,7 @@ async def _llm_book_grounding_check(
             ],
             max_completion_tokens=min(500, OPENAI_MAX_COMPLETION_TOKENS),
             temperature=0,
+            reasoning_effort="low",
         )
         obj = parse_book_grounding_checker_json(raw)
         grounded_raw = obj.get("grounded")
@@ -1853,111 +1402,6 @@ async def _llm_book_grounding_check(
     return None
 
 
-async def _llm_book_grounding_supported(
-    *,
-    student_text: str,
-    stage: str,
-    book_pack: Optional[dict[str, Any]],
-) -> Optional[bool]:
-    check = await _llm_book_grounding_check(
-        student_text=student_text,
-        stage=stage,
-        book_pack=book_pack,
-    )
-    return check.grounded if check is not None else None
-
-
-def _genai_grounding_user_hint(
-    check: BookGroundingCheck,
-    book_pack: Optional[dict[str, Any]],
-) -> str:
-    span = (check.unsupported_span or "").strip() or "（需要核對的情節）"
-    evidence = (check.material_evidence or "").strip()
-    ref_line = f"教材依據：「{evidence}」。" if evidence else ""
-    reason = (check.reason or "").strip()
-    reason_line = f"核對說明：{reason}。" if reason else ""
-    if check.status == "ambiguous":
-        diagnosis = "學生這段省略了核對故事所需的關鍵資訊；不可自行補成教材中的事件。"
-        missing_rule = "missing 必須逐字引用該片段，請學生說清楚是誰做了什麼或動作的對象；"
-    else:
-        diagnosis = "學生草稿中有與教材不一致或教材未支持的具體情節。"
-        missing_rule = "missing 必須逐字引用該片段，溫和指出這件事和書裡不一樣；"
-    return (
-        f"【教材核對結果（極重要）】{diagnosis}\n"
-        f"學生原文片段：「{span}」。{reason_line}{ref_line}\n"
-        f"請 ok=false。{missing_rule}"
-        "禁止改寫學生片段、禁止只寫『沒有說清楚』、禁止只寫『對齊教材』。"
-        "suggestions 用**一個**問句引導學生改寫；example 只給句型支架，improved 填 null。\n\n"
-    )
-
-
-async def _llm_natural_grounding_correction(
-    *,
-    student_text: str,
-    stage: str,
-    book_pack: Optional[dict[str, Any]],
-    check: BookGroundingCheck,
-) -> Optional[Tuple[str, str]]:
-    """Generate student-facing missing + suggestion when checker found ungrounded content."""
-    if client is None:
-        return None
-    t = (student_text or "").strip()
-    if not t or not isinstance(book_pack, dict):
-        return None
-    span = (check.unsupported_span or "").strip()
-    book_context = build_book_context_block(
-        book_pack,
-        max_events=10,
-        max_excerpts=8,
-        max_chars=3000,
-    )
-    stage_u = (stage or "O").strip().upper()
-    sys = f"""
-你是國小五、六年級的寫作回饋助手。
-學生寫的內容有部分無法由教材支持；請產生**自然、口語**的糾正，不要像系統模板。
-
-輸出純 JSON：
-{{
-  "missing": string,
-  "suggestions": string
-}}
-
-規則：
-- missing：只抓**一個**重點；溫和說哪個詞／哪件事不像書裡發生的；可帶一句書裡真的情節對照。
-- missing 必須逐字包含「疑似書外片段」中的文字，讓學生知道要改哪裡；禁止只說「沒有說清楚」。
-- suggestions：一個短問句或下一步，引導學生改用書裡真的事件再寫。
-- 禁止出現「對齊教材」「對照摘要」「掃摘要」。
-- 禁止把學生的錯誤情節當成真實發生去追問（例如不要問「為什麼爺爺吃奶奶」）。
-- R/I 段特別規則：若學生「因為…」子句是書中某一幕的語意近義改寫（省略了「故意」「流口水」等細節，但大意吻合），missing 應說「可以寫得更貼近書中哪一幕，讓讀者更清楚」；**禁止**說「這在書裡沒有出現」或「不在書裡」。
-- R 段：若學生已有感受詞＋大意正確的「因為…」，建議只引導更具體的畫面，不要直接否定。
-- 繁體中文，每欄 1～2 短句，適合國小生。
-
-目前階段：{stage_u}
-BOOK_CONTEXT：
-{book_context}
-""".strip()
-    user = (
-        f"學生句子：\n{t}\n\n"
-        f"疑似書外片段：{span or '（未標出）'}\n"
-        f"核對說明：{(check.reason or '').strip() or '（無）'}"
-    )
-    try:
-        raw = await _chat_completion(
-            [
-                {"role": "system", "content": sys},
-                {"role": "user", "content": user},
-            ],
-            max_completion_tokens=min(280, OPENAI_MAX_COMPLETION_TOKENS),
-            temperature=0.2,
-        )
-        obj = parse_book_grounding_checker_json(raw)
-        missing = str(obj.get("missing") or "").strip()
-        suggestions = str(obj.get("suggestions") or "").strip()
-        if missing and suggestions:
-            return missing, suggestions
-    except Exception:
-        logger.warning("natural grounding correction LLM failed")
-    return None
 
 
 def _grounding_fallback_lines(
@@ -2003,24 +1447,6 @@ def _grounding_fallback_lines(
     return missing, suggestion_map.get(stage_upper, "先改用書裡真的人物和事件，再把意思寫清楚。")
 
 
-def _deterministic_concrete_grounding_feedback(
-    *,
-    student_text: str,
-    book_pack: Optional[dict[str, Any]],
-    stage: str,
-) -> Optional[Tuple[str, str]]:
-    """Lock clear fabricated actions/objects to one reproducible diagnosis."""
-    if (stage or "O").strip().upper() == "D":
-        return None
-    unsupported_action = extract_unsupported_action_phrase(student_text, book_pack)
-    wrong_noun = extract_wrong_concrete_noun(student_text, book_pack)
-    if not unsupported_action and not wrong_noun:
-        return None
-    return _grounding_fallback_lines(
-        student_text=student_text,
-        book_pack=book_pack,
-        stage=stage,
-    )
 
 
 def _semantic_material_grounding_feedback(
@@ -2044,40 +1470,21 @@ def _semantic_material_grounding_feedback(
     text = (student_text or "").strip()
     if not span or span not in text:
         return None
-    return _grounding_fallback_lines(
-        student_text=text,
-        book_pack=book_pack,
-        stage=stage,
-        check=check,
+    if check.status == "ambiguous":
+        missing = f"你寫的「{span}」還看不出書裡是誰做了什麼。"
+        return missing, f"請把「{span}」說清楚：這裡是誰做了什麼，或把什麼東西怎麼了？"
+    else:
+        missing = f"你寫的「{span}」和書裡發生的事情不一樣。"
+    question_by_stage = {
+        "O": "書裡真正發生的是什麼事？請用自己的話改寫這一句。",
+        "R": "書裡哪一幕讓你有這種感覺？",
+        "I": "書裡哪一件事能支持你想到的道理？",
+    }
+    suggestion = question_by_stage.get(
+        (stage or "O").strip().upper(),
+        "請回到教材，找一件真正發生的事再說一次。",
     )
-
-
-def _o_reference_clarity_check(
-    *,
-    student_text: str,
-    stage: str,
-) -> Optional[BookGroundingCheck]:
-    """Catch O claims that replace the material object with an unresolved evaluation."""
-    if (stage or "O").strip().upper() != "O":
-        return None
-    text = (student_text or "").strip()
-    if not text:
-        return None
-    patterns = (
-        r"(?:一些|那些|這些)[^，。！？；]{0,8}?(?:無聊|沒用|奇怪|普通|隨便)[^，。！？；]{0,3}?東西",
-        r"(?:很|太|有點|比較)?(?:無聊|沒用|奇怪|普通|隨便)的東西",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            span = match.group(0).strip()
-            return BookGroundingCheck(
-                grounded=False,
-                status="ambiguous",
-                unsupported_span=span,
-                reason="用評價代替具體教材物品",
-            )
-    return None
+    return missing, suggestion
 
 
 def _synthesis_grounding_reply(missing: str, suggestion: str) -> str:
@@ -2123,25 +1530,6 @@ def _is_grounding_specific_message(text: str) -> bool:
     return any(c in t for c in cues)
 
 
-def _book_grounding_reference_line(book_pack: Optional[dict[str, Any]], max_len: int = 56) -> str:
-    if not isinstance(book_pack, dict):
-        return ""
-    candidates: list[str] = []
-    for item in (book_pack.get("key_events") or [])[:3]:
-        s = str(item or "").strip()
-        if s:
-            candidates.append(s)
-    for item in (book_pack.get("story_excerpts") or [])[:2]:
-        if isinstance(item, dict):
-            s = str(item.get("text") or "").strip()
-        else:
-            s = str(item or "").strip()
-        if s:
-            candidates.append(s)
-    if not candidates:
-        return ""
-    ref = candidates[0]
-    return ref if len(ref) <= max_len else ref[: max_len - 1] + "…"
 
 
 def _book_grounding_character_note(student_text: str, book_pack: Optional[dict[str, Any]]) -> str:
@@ -2167,145 +1555,6 @@ def _book_grounding_character_note(student_text: str, book_pack: Optional[dict[s
         if alias in t and full_name not in t:
             notes.append(f"書裡的人物是「{full_name}」")
     return "，".join(notes[:1])
-
-
-_KINSHIP_OR_ROLE_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("爺爺", ("爺爺",)),
-    ("奶奶", ("奶奶",)),
-    ("先生", ("先生", "爸爸", "父親")),
-    ("太太", ("太太", "媽媽", "母親")),
-    ("母獅子", ("母獅子",)),
-    ("獅子", ("獅子",)),
-    ("小朋友", ("小朋友", "孩子")),
-    ("孩子", ("孩子", "小朋友")),
-    ("動物", ("動物",)),
-)
-
-
-def _book_character_alias_pairs(book_pack: Optional[dict[str, Any]]) -> list[tuple[str, str]]:
-    """Return acceptable student aliases mapped to full book character names."""
-    if not isinstance(book_pack, dict):
-        return []
-    pairs: list[tuple[str, str]] = []
-    for item in book_pack.get("characters") or []:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name") or "").strip()
-        role = str(item.get("role") or "").strip()
-        if not name:
-            continue
-        candidates: set[str] = set()
-        for key, aliases in _KINSHIP_OR_ROLE_ALIASES:
-            if key in name or key in role:
-                candidates.update(aliases)
-        if "兒子" in role or "孩子" in role:
-            candidates.update(("兒子", "孩子", "小朋友"))
-        for alias in candidates:
-            if alias and alias != name:
-                pairs.append((alias, name))
-    out: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for pair in pairs:
-        if pair not in seen:
-            seen.add(pair)
-            out.append(pair)
-    return out
-
-
-def _feedback_is_only_character_alias_correction(
-    *,
-    stage: str,
-    student_text: str,
-    book_pack: Optional[dict[str, Any]],
-    missing: list[str],
-    suggestions: list[str],
-) -> bool:
-    """True when feedback only asks to replace an acceptable alias with a full name."""
-    if (stage or "").strip().upper() not in ("O", "R", "I"):
-        return False
-    t = (student_text or "").strip()
-    if not t or not missing:
-        return False
-
-    blob = " ".join([*(missing or []), *(suggestions or [])]).strip()
-    if not blob:
-        return False
-    if any(
-        cue in blob
-        for cue in (
-            "不在書裡",
-            "書裡沒有",
-            "故事裡沒有",
-            "不是書裡",
-            "好像不是書裡",
-            "沒有這件事",
-            "不像書裡",
-            "這個詞好像不在",
-            "書裡出現的是",
-            "書裡實際",
-        )
-    ):
-        return False
-
-    alias_pairs = [
-        (alias, full)
-        for alias, full in _book_character_alias_pairs(book_pack)
-        if alias in t and full not in t
-    ]
-    if not alias_pairs:
-        return False
-
-    name_cues = ("名字", "人物", "角色", "叫做", "全名", "改成")
-    if not any(cue in blob for cue in name_cues):
-        return False
-    return any(alias in blob or full in blob for alias, full in alias_pairs)
-
-
-def _scrub_character_alias_only_feedback(
-    *,
-    stage: str,
-    student_text: str,
-    book_pack: Optional[dict[str, Any]],
-    ok: bool,
-    missing: list[str],
-    suggestions: list[str],
-) -> tuple[bool, list[str], list[str]]:
-    """
-    Accept clear character aliases (e.g. 奶奶→哎唷奶奶, 爸爸→朱先生)
-    as wording polish, not a reason to fail a stage.
-    """
-    if not _feedback_is_only_character_alias_correction(
-        stage=stage,
-        student_text=student_text,
-        book_pack=book_pack,
-        missing=missing,
-        suggestions=suggestions,
-    ):
-        return ok, missing, suggestions
-    if stage_draft_meets_pass_bar((stage or "O").strip().upper(), student_text):
-        return True, [], []
-    return ok, [], []
-
-
-def _book_grounding_example(stage: str, book_pack: Optional[dict[str, Any]]) -> str:
-    s = (stage or "O").strip().upper()
-    main_char = ""
-    if isinstance(book_pack, dict):
-        for item in (book_pack.get("characters") or [])[:3]:
-            if isinstance(item, dict):
-                name = str(item.get("name") or "").strip()
-                if name:
-                    main_char = name
-                    break
-    if s == "O":
-        if main_char:
-            return f"例如：故事的主角是「{main_char}」，一開始……，後來……。"
-        return "例如：先寫書裡真的人物，一開始……，後來……。"
-    if s == "R":
-        return "例如：我看到書裡這一幕時，覺得……，因為……。"
-    if s == "I":
-        return "例如：這件事讓我明白……，因為書裡……。"
-    return "例如：下次遇到類似的情況，我會先……。"
 
 
 async def _enforce_feedback_book_grounding(
@@ -2339,87 +1588,13 @@ async def _enforce_feedback_book_grounding(
     ):
         return ok, missing, suggestions
 
+    # Experimental feedback keeps the model's own sentences. The checker result
+    # is recorded by the caller and must not replace praise, missing, or ok.
+    if use_llm_checker:
+        return ok, missing, suggestions
+
     check = grounding_check
-    if use_llm_checker and check is None:
-        check = await _llm_book_grounding_check(
-            student_text=t,
-            stage=stage,
-            book_pack=book_pack,
-        )
-
-    if use_llm_checker and check is not None:
-        semantic_feedback = _semantic_material_grounding_feedback(
-            student_text=t,
-            book_pack=book_pack,
-            stage=stage,
-            check=check,
-        )
-        if semantic_feedback is not None:
-            return False, [semantic_feedback[0]], [semantic_feedback[1]]
-        if check.grounded is True:
-            heuristic_bad = looks_likely_factual_mismatch(t, book_pack) or looks_likely_ungrounded_in_book(
-                t, book_pack, stage=stage
-            )
-            if not heuristic_bad:
-                return ok, missing, suggestions
-            wrong_noun = extract_wrong_concrete_noun(t, book_pack)
-            span = (check.unsupported_span or "").strip() or extract_unsupported_action_phrase(
-                t, book_pack
-            )
-            if wrong_noun and wrong_noun not in span:
-                span = span or wrong_noun
-            check = BookGroundingCheck(
-                grounded=False,
-                unsupported_span=span,
-                reason=(check.reason or "教材摘錄未支持此說法").strip(),
-            )
-        if check.grounded is False:
-            if student_uses_supported_event_paraphrase(
-                t,
-                book_pack,
-                focus_text=check.unsupported_span,
-            ):
-                clean_missing, clean_suggestions = scrub_false_synonym_mismatch_claims(
-                    missing=missing,
-                    suggestions=suggestions,
-                    book_pack=book_pack,
-                    student_text=t,
-                )
-                return ok, clean_missing, clean_suggestions
-            # For O/R/I stages, don't downgrade on LLM-checker alone — the checker
-            # can over-penalise semantic paraphrases. Require heuristic corroboration.
-            if stage_upper in ("O", "R", "I"):
-                if stage_upper == "O" and student_has_book_aligned_cut_tree_paraphrase(
-                    t, book_pack
-                ):
-                    return ok, missing, suggestions
-                heuristic_bad = looks_likely_factual_mismatch(
-                    t, book_pack
-                ) or looks_likely_ungrounded_in_book(t, book_pack, stage=stage)
-                if not heuristic_bad:
-                    return ok, missing, suggestions
-            miss = list(missing)
-            sug = list(suggestions)
-            if _has_feedback_book_grounding_issue(miss):
-                return False, miss[:1], sug[:1]
-            natural = await _llm_natural_grounding_correction(
-                student_text=t,
-                stage=stage,
-                book_pack=book_pack,
-                check=check,
-            )
-            if natural:
-                miss, sug = [natural[0]], [natural[1]]
-            else:
-                m_line, s_line = _grounding_fallback_lines(
-                    student_text=t,
-                    book_pack=book_pack,
-                    stage=stage,
-                    check=check,
-                )
-                miss, sug = [m_line], [s_line]
-            return False, miss[:1], sug[:1]
-
+    # The fixed control/offline fallback remains deterministic by study design.
     bad = looks_likely_factual_mismatch(t, book_pack) or looks_likely_ungrounded_in_book(
         t, book_pack, stage=stage
     )
@@ -2443,16 +1618,6 @@ def _has_feedback_book_grounding_issue(missing: list[str]) -> bool:
     return any(_is_grounding_specific_message(m or "") for m in (missing or []))
 
 
-def _book_grounding_praise(
-    stage: str,
-    student_text: str = "",
-    book_pack: Optional[dict[str, Any]] = None,
-) -> str:
-    return build_grounding_safe_praise(
-        stage=stage,
-        student_text=student_text,
-        book_pack=book_pack,
-    )
 
 
 
@@ -2627,6 +1792,8 @@ class DActionAssessment(BaseModel):
 
 class GenAIFeedbackOutput(BaseModel):
     ok: bool
+    interaction_intent: str = "draft_attempt"
+    student_reply: Optional[str] = None
     praise: Optional[str] = None
     missing: list[str] = Field(default_factory=list)
     suggestions: list[str] = Field(default_factory=list)
@@ -2664,7 +1831,7 @@ def _rubric_meta_from_obj(obj: dict[str, Any]) -> dict[str, Any]:
             out["rubric_level_estimate"] = rl
         elif str(rl).strip():
             out["rubric_level_estimate"] = str(rl).strip()
-    for key in ("student_anchor_quote", "draft_next_step"):
+    for key in ("student_anchor_quote", "draft_next_step", "student_reply", "interaction_intent"):
         val = obj.get(key)
         if val is not None and str(val).strip():
             out[key] = str(val).strip()
@@ -2734,127 +1901,12 @@ def _apply_orid_rubric_ok_rule(
     return bool(ok)
 
 
-def _maybe_promote_o_pass(
-    *,
-    stage: str,
-    student_text: str,
-    ok: bool,
-    missing: list[str],
-    suggestions: list[str],
-    example: Optional[str],
-    rubric_meta: dict[str, Any],
-) -> tuple[bool, list[str], list[str], Optional[str], dict[str, Any]]:
-    """If O/R/I/D draft already meets that stage's rubric pass bar, force pass.
-
-    Stops polish /「再補同一句」loops when the draft is already level-3-ready.
-    Does **not** weaken the bar: thin one-liners still fail `stage_draft_meets_pass_bar`
-    and stay not-ok. Book-grounding issues still block promotion.
-    """
-    stage_u = (stage or "").strip().upper()
-    # D uses the model's book-specific D1 semantic assessment. A fixed
-    # vocabulary pass bar cannot cover the range of students' real actions.
-    if stage_u not in ("O", "R", "I"):
-        return ok, missing, suggestions, example, rubric_meta
-    if _has_feedback_book_grounding_issue(missing):
-        return ok, missing, suggestions, example, rubric_meta
-    if not stage_draft_meets_pass_bar(stage_u, student_text):
-        return ok, missing, suggestions, example, rubric_meta
-
-    focus_id = {"O": "O1", "R": "R1", "I": "I1", "D": "D1"}[stage_u]
-    out = dict(rubric_meta or {})
-    out["rubric_focus"] = focus_id
-    rl = out.get("rubric_level_estimate")
-    current = primary_orid_level_from_rubric_meta(out, stage=stage_u)
-    if current is None or current < 3:
-        if isinstance(rl, dict):
-            rl = dict(rl)
-            rl[focus_id] = "3 達標"
-            out["rubric_level_estimate"] = rl
-        else:
-            out["rubric_level_estimate"] = {focus_id: "3 達標"}
-        out["rubric_level_promoted"] = True
-    return True, [], [], None, out
 
 
-def _o_thin_pass_coaching(student_text: str) -> tuple[str, str]:
-    """Backward-compatible wrapper; prefer thin_stage_coaching('O', ...). """
-    return thin_stage_coaching("O", student_text)
 
 
-def _maybe_demote_o_thin_pass(
-    *,
-    stage: str,
-    student_text: str,
-    ok: bool,
-    missing: list[str],
-    suggestions: list[str],
-    example: Optional[str],
-    rubric_meta: dict[str, Any],
-) -> tuple[bool, list[str], list[str], Optional[str], dict[str, Any]]:
-    """Block false passes when O/R/I/D draft is still too thin (one-liner level)."""
-    stage_u = (stage or "").strip().upper()
-    # D is handled by its rubric estimate plus the high-precision empty-wish
-    # guard below; do not demote novel valid actions through a verb whitelist.
-    if stage_u not in ("O", "R", "I") or not ok:
-        return ok, missing, suggestions, example, rubric_meta
-    if stage_draft_meets_pass_bar(stage_u, student_text):
-        return ok, missing, suggestions, example, rubric_meta
-
-    focus_id = {"O": "O1", "R": "R1", "I": "I1", "D": "D1"}[stage_u]
-    out = dict(rubric_meta or {})
-    out["rubric_focus"] = focus_id
-    rl = out.get("rubric_level_estimate")
-    current = primary_orid_level_from_rubric_meta(out, stage=stage_u)
-    if current is None or current >= 3:
-        if isinstance(rl, dict):
-            rl = dict(rl)
-            rl[focus_id] = "2 接近"
-            out["rubric_level_estimate"] = rl
-        else:
-            out["rubric_level_estimate"] = {focus_id: "2 接近"}
-        out["rubric_level_demoted"] = True
-
-    miss, sug = thin_stage_coaching(stage_u, student_text)
-    new_missing = list(missing[:1]) if missing else [miss]
-    new_sug = list(suggestions[:1]) if suggestions else [sug]
-    if not new_missing:
-        new_missing = [miss]
-    if not new_sug:
-        new_sug = [sug]
-    return False, new_missing, new_sug, example, out
 
 
-def _enforce_d_empty_wish_guard(
-    *,
-    stage: str,
-    student_text: str,
-    ok: bool,
-    missing: list[str],
-    suggestions: list[str],
-    example: Optional[str],
-    rubric_meta: dict[str, Any],
-) -> tuple[bool, list[str], list[str], Optional[str], dict[str, Any]]:
-    """Reject only unmistakable D empty wishes; semantic D1 remains primary."""
-    if (stage or "").strip().upper() != "D" or not d_draft_is_obvious_empty_wish(student_text):
-        return ok, missing, suggestions, example, rubric_meta
-
-    out = dict(rubric_meta or {})
-    out["rubric_focus"] = "D1"
-    levels = out.get("rubric_level_estimate")
-    if isinstance(levels, dict):
-        levels = dict(levels)
-        levels["D1"] = "1 起步"
-    else:
-        levels = {"D1": "1 起步"}
-    out["rubric_level_estimate"] = levels
-    out["d_empty_wish_guard"] = True
-    miss, sug = align_d_feedback_to_rubric(
-        stage="D",
-        student_text=student_text,
-        missing=missing,
-        suggestions=suggestions,
-    )
-    return False, miss[:1], sug[:1], example, out
 
 
 def _d_level_three_requires_theme(book_pack: dict[str, Any] | None) -> bool:
@@ -2883,6 +1935,7 @@ def _enforce_d_theme_alignment(
     example: Optional[str],
     rubric_meta: dict[str, Any],
     assessment_required: bool = False,
+    keep_model_sentences: bool = False,
 ) -> tuple[bool, list[str], list[str], Optional[str], dict[str, Any]]:
     """Apply an explicit semantic theme check only when D1 level 3 requires it."""
     if (stage or "").strip().upper() != "D" or not _d_level_three_requires_theme(book_pack):
@@ -2920,6 +1973,9 @@ def _enforce_d_theme_alignment(
     themes = [str(x).strip() for x in ((book_pack or {}).get("core_theme") or []) if str(x).strip()]
     theme_label = str((book_pack or {}).get("d_action_student_theme") or "").strip()
     theme_label = theme_label or "、".join(themes[:2]) or "這本書提醒你的事情"
+    if keep_model_sentences:
+        return False, missing, suggestions, example, out
+
     question = str((book_pack or {}).get("d_action_question") or "").strip()
     question = question or f"讀完《{title}》，你想主動做哪一件和{theme_label}有關的事？"
     new_missing = [f"你寫的「{quote}」是一個做得到的行動；但還沒有連到《{title}》提醒的「{theme_label}」。"]
@@ -2927,12 +1983,6 @@ def _enforce_d_theme_alignment(
     return False, new_missing, new_suggestions, None, out
 
 
-def _d_policy_feedback_is_locked(stage: str, rubric_meta: dict[str, Any]) -> bool:
-    """Keep deterministic D policy feedback from being generalized downstream."""
-    if (stage or "").strip().upper() != "D":
-        return False
-    meta = rubric_meta or {}
-    return bool(meta.get("d_theme_alignment_guard") or meta.get("d_empty_wish_guard"))
 
 
 def _feedback_from_obj(
@@ -2944,12 +1994,6 @@ def _feedback_from_obj(
     ok = bool(obj.get("ok", False))
     missing = _normalize_feedback_list(obj.get("missing"), max_items=1)
     suggestions = _normalize_feedback_list(obj.get("suggestions"), max_items=1)
-    missing, suggestions = normalize_feedback_focus(
-        stage=stage,
-        missing=missing,
-        suggestions=suggestions,
-        student_text=text,
-    )
 
     pr_raw = obj.get("praise")
     praise = str(pr_raw).strip() if pr_raw else None
@@ -2961,23 +2005,12 @@ def _feedback_from_obj(
     improved = str(improved_raw).strip() if improved_raw not in (None, "") else None
     rubric_meta = _rubric_meta_from_obj(obj)
 
-    ctrl: Optional[Tuple[bool, list[str], list[str], Optional[str], Optional[str]]] = None
     if (not ok) and (not missing) and (not suggestions):
-        ok2, miss2, sug2, ex2, pr2 = _control_feedback(stage, text)
-        ok = ok or ok2
-        missing = missing or miss2
-        suggestions = suggestions or sug2
-        if not example:
-            example = ex2
-        if not praise:
-            praise = pr2
-        ctrl = (ok2, miss2, sug2, ex2, pr2)
+        stage_name = _stage_name_zh_for_feedback(stage)
+        missing = [f"我還看不出{stage_name}這一段的兩個核心意思是否都已經說清楚。"]
+        suggestions = ["請用自己的話再說清楚一個最重要的地方。"]
     if not praise:
-        if ctrl:
-            praise = ctrl[4]
-        else:
-            *_, pr2 = _control_feedback(stage, text)
-            praise = pr2
+        praise = _draft_praise_line(text, stage)
 
     if improved and len(improved) > 120:
         improved = None
@@ -2991,28 +2024,27 @@ def _feedback_from_obj(
         improved = None
         rubric_meta.pop("draft_next_step", None)
     else:
-        suggestions = scaffold_feedback_suggestions(stage, suggestions[:1])
-        example = scaffold_feedback_example(stage, example)
+        suggestions = suggestions[:1]
 
     return ok, missing[:1], suggestions[:1], example, improved, praise, rubric_meta
 
 
-def _looks_valid_feedback_narration(text: str) -> bool:
-    t = (text or "").strip()
-    if not t:
-        return False
-    # Accept genai complete card (deterministic headings).
-    if "你已經做到" in t and "本階段完成" in t:
-        return True
-    # Accept revision card (narration three-section format).
-    # Research titles: 再想一想／可以這樣修改；legacy: 你可以再加強／試著補一句.
-    has_rethink = "你可以再加強" in t or "再想一想" in t
-    if not ("你已經做到" in t and has_rethink):
-        return False
+
+
+def _format_revision_card_reply(
+    *,
+    praise: Optional[str],
+    missing: list[str],
+    suggestions: list[str],
+) -> str:
+    """Render semantic model output in the established three-card UI."""
+    line1 = str(praise or "").strip() or "我有看到你正在試著把想法寫出來。"
+    line2 = str(missing[0] if missing else "").strip() or "我們再把這段說清楚一點。"
+    line3 = str(suggestions[0] if suggestions else "").strip() or "先想一個最重要的地方，再用自己的話補上一句。"
     return (
-        "可以這樣修改" in t
-        or "試著補一句" in t
-        or "試試看" in t
+        f"你已經做到：\n{line1}\n\n"
+        f"再想一想：\n{line2}\n\n"
+        f"可以這樣修改：\n{line3}"
     )
 
 
@@ -3100,6 +2132,7 @@ async def _genai_feedback(
     input_bucket: str = "normal",
     grounding_check: Optional[BookGroundingCheck] = None,
     rag_context: str = "",
+    recent_context: str = "",
 ) -> Tuple[bool, list[str], list[str], Optional[str], Optional[str], Optional[str], dict[str, Any]]:
     rag_ctx = (rag_context or "").strip() or await get_feedback_rag_context(
         book_pack,
@@ -3130,49 +2163,13 @@ async def _genai_feedback(
         return ok, miss, sug, ex, imp, praise, rubric
 
     sys, user_msg = build_genai_feedback_prompts(
-        stage=stage, text=text, book_pack=book_pack, input_bucket=input_bucket, rag_context=rag_ctx
+        stage=stage,
+        text=text,
+        book_pack=book_pack,
+        input_bucket=input_bucket,
+        rag_context=rag_ctx,
+        recent_context=recent_context,
     )
-    grounding_targets_supported_paraphrase = bool(
-        grounding_check is not None
-        and grounding_check.grounded is False
-        and grounding_check.status not in {"ambiguous", "contradicted"}
-        and student_uses_supported_event_paraphrase(
-            text,
-            book_pack,
-            focus_text=grounding_check.unsupported_span,
-        )
-    )
-    if (
-        grounding_check is not None
-        and grounding_check.grounded is False
-        and not grounding_targets_supported_paraphrase
-    ):
-        user_msg = _genai_grounding_user_hint(grounding_check, book_pack) + user_msg
-    elif (not skip_book_grounding_enforcement(input_bucket, student_text=text, book_pack=book_pack)) and (stage or "").strip().upper() != "D":
-        heuristic_bad = looks_likely_factual_mismatch(text, book_pack) or looks_likely_ungrounded_in_book(
-            text, book_pack, stage=stage
-        )
-        if heuristic_bad:
-            span = extract_unsupported_action_phrase(text, book_pack)
-            wrong_noun = extract_wrong_concrete_noun(text, book_pack)
-            if wrong_noun and wrong_noun not in (span or ""):
-                span = span or wrong_noun
-            pseudo = BookGroundingCheck(
-                grounded=False,
-                unsupported_span=span,
-                reason="教材摘錄未支持此說法",
-            )
-            user_msg = _genai_grounding_user_hint(pseudo, book_pack) + user_msg
-    elif (not skip_book_grounding_enforcement(input_bucket, student_text=text, book_pack=book_pack)) and client is None and looks_likely_ungrounded_in_book(
-        text, book_pack, stage=stage
-    ):
-        user_msg = (
-            "【系統提示：教材核對】學生草稿中的具體人、事、物看起來無法由故事摘要／摘錄支持。"
-            "請將 ok 設為 false；missing 須溫和說明哪件事不在書裡；"
-            "suggestions 要引導學生改用摘要已列事件；example 只給問句或句型起頭，improved 填 null，不要代寫整段。\n\n"
-            + user_msg
-        )
-
     user_msg = await _orid_feedback_internal_planner_o(
         stage=stage,
         text=text,
@@ -3743,6 +2740,20 @@ async def writing_coach_chat(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
+    request_started = time.perf_counter()
+    timings_ms: dict[str, int] = {}
+
+    def mark_timing(name: str, started: float) -> None:
+        timings_ms[name] = round((time.perf_counter() - started) * 1000)
+
+    async def timed_call(name: str, operation: Any) -> Any:
+        started = time.perf_counter()
+        try:
+            return await operation
+        finally:
+            mark_timing(name, started)
+
+    setup_started = time.perf_counter()
     r = await db.execute(select(OridSession).filter(OridSession.id == data.session_id))
     session = r.scalars().first()
     if not session or session.user_id != user.id:
@@ -3756,6 +2767,7 @@ async def writing_coach_chat(
     rr = await db.execute(select(Reading).filter(Reading.id == session.reading_id))
     reading = rr.scalars().first()
     book_pack = load_book_pack_from_reading(reading)
+    mark_timing("setup", setup_started)
 
     stage_in = (data.stage or "O").strip().upper()
     draft_key = (data.draft or "d1").strip().lower()
@@ -3788,42 +2800,7 @@ async def writing_coach_chat(
             detail="這段內容看起來像是在要求系統忽略規則，請直接描述你的想法或作文內容。",
         )
 
-    if body:
-        safety = await classify_safety(body, writing_coach=True)
-        if safety.should_stop_feedback:
-            db.add(
-                OridSafetyEvent(
-                    user_id=user.id,
-                    session_id=session.id,
-                    week=data.week,
-                    stage=stage_ctx,
-                    source=source,
-                    level=safety.level,
-                    category=safety.category,
-                    action=safety.action.value,
-                    reason=safety.reason,
-                    provider=safety.provider,
-                    text_fingerprint=safety_text_fingerprint(body),
-                )
-            )
-            await db.commit()
-            log = logger.error if safety.level >= 4 else logger.warning
-            log(
-                "ORID safety event user=%s session=%s week=%s stage=%s level=%s category=%s action=%s provider=%s",
-                user.id,
-                session.id,
-                data.week,
-                stage_ctx,
-                safety.level,
-                safety.category,
-                safety.action.value,
-                safety.provider,
-            )
-            raise HTTPException(status_code=400, detail=safety.student_message)
-
     input_bucket = classify_student_input(body) if body else classify_student_input("")
-    draft_excerpt = truncate_student_draft_excerpt(body)
-
     if not await _allow_chat_message(db, user.id):
         msg = "請慢一點，我們一次說一個重點。"
         db.add(OridChatMessage(session_id=session.id, stage=stage_ctx, sender="ai", text=msg))
@@ -3857,6 +2834,12 @@ async def writing_coach_chat(
         session.id,
         limit=max(ORID_HISTORY_LIMIT + 12, 24),
     )
+    recent_feedback_context = "\n".join(
+        f"{'學生' if getattr(message, 'sender', '') == 'student' else '教練'}："
+        f"{str(getattr(message, 'text', '') or '').strip()[:500]}"
+        for message in msgs[:-1][-4:]
+        if str(getattr(message, "text", "") or "").strip()
+    )
 
     coach_turn_seed = f"{user.id}:{session.id}:{len(msgs)}"
     opening_hint = pick_variant(coach_turn_seed, input_bucket)
@@ -3888,18 +2871,13 @@ async def writing_coach_chat(
             and stage_ctx.strip().upper() in ("O", "R", "I")
             and not skip_book_grounding_enforcement(input_bucket, student_text=body, book_pack=book_pack)
         ):
+            grounding_started = time.perf_counter()
             grounding_check = await _llm_book_grounding_check(
                 student_text=body,
                 stage=stage_ctx,
                 book_pack=book_pack,
             )
-        if genai_path:
-            clarity_check = _o_reference_clarity_check(
-                student_text=body,
-                stage=stage_ctx,
-            )
-            if clarity_check is not None:
-                grounding_check = clarity_check
+            mark_timing("book_grounding", grounding_started)
         if not genai_path:
             fb_ok, fb_missing, fb_sug, fb_ex, fb_praise = _control_feedback(stage_ctx, body)
             fb_imp = None
@@ -3910,13 +2888,16 @@ async def writing_coach_chat(
             ):
                 fb_ex = None
         else:
+            evaluation_started = time.perf_counter()
             fb_ok, fb_missing, fb_sug, fb_ex, fb_imp, fb_praise, fb_rubric = await _genai_feedback(
                 stage=stage_ctx,
                 text=body,
                 book_pack=book_pack,
                 input_bucket=input_bucket,
                 grounding_check=grounding_check,
+                recent_context=recent_feedback_context,
             )
+            mark_timing("feedback_evaluation", evaluation_started)
 
         fb_ok, fb_missing, fb_sug = await _enforce_feedback_book_grounding(
             body,
@@ -3929,78 +2910,10 @@ async def writing_coach_chat(
             input_bucket=input_bucket,
             grounding_check=grounding_check,
         )
-        locked_concrete_grounding = _semantic_material_grounding_feedback(
-            student_text=body,
-            book_pack=book_pack,
-            stage=stage_ctx,
-            check=grounding_check,
-        ) or _deterministic_concrete_grounding_feedback(
-            student_text=body,
-            book_pack=book_pack,
-            stage=stage_ctx,
-        )
-        fb_missing, fb_sug = scrub_false_book_absence_claims(
-            missing=fb_missing,
-            suggestions=fb_sug,
-            book_pack=book_pack,
-            student_text=body,
-        )
-        fb_missing, fb_sug = scrub_false_synonym_mismatch_claims(
-            missing=fb_missing,
-            suggestions=fb_sug,
-            book_pack=book_pack,
-            student_text=body,
-        )
-        fb_ok, fb_missing, fb_sug = _scrub_character_alias_only_feedback(
-            stage=stage_ctx,
-            student_text=body,
-            book_pack=book_pack,
-            ok=bool(fb_ok),
-            missing=fb_missing,
-            suggestions=fb_sug,
-        )
-        fb_missing, fb_sug, fb_ex = rewrite_grounding_append_suggestions(
-            stage=stage_ctx,
-            missing=fb_missing,
-            suggestions=fb_sug,
-            example=fb_ex,
-        )
-        fb_missing, fb_sug = normalize_feedback_focus(
-            stage=stage_ctx,
-            missing=fb_missing,
-            suggestions=fb_sug,
-            student_text=body,
-        )
-        fb_missing, fb_sug = apply_o_key_event_gaps(
-            stage=stage_ctx,
-            strength=feedback_strength or "mid",
-            student_text=body,
-            key_events=(book_pack or {}).get("key_events"),
-            missing=fb_missing,
-            suggestions=fb_sug,
-        )
-        grounding_issue = _has_feedback_book_grounding_issue(fb_missing)
-        if grounding_issue and fb_ex and "故事的主角" in str(fb_ex):
-            fb_ex = None
-        if grounding_issue or missing_looks_book_grounding_priority(fb_missing):
-            fb_praise = scrub_praise_for_grounding_issue(
-                stage=stage_ctx,
-                praise=fb_praise,
-                missing=fb_missing,
-                student_text=body,
-                book_pack=book_pack,
-            )
-            if isinstance(fb_rubric, dict):
-                fb_rubric = dict(fb_rubric)
-                fb_rubric["student_anchor_quote"] = scrub_anchor_quote_for_grounding(
-                    quote=fb_rubric.get("student_anchor_quote"),
-                    missing=fb_missing,
-                    student_text=body,
-                    book_pack=book_pack,
-                )
-
-        fb_sug = scaffold_feedback_suggestions(stage_ctx, fb_sug)
-        fb_ex = scaffold_feedback_example(stage_ctx, fb_ex)
+        if grounding_check is not None:
+            coach_meta["material_grounded"] = grounding_check.grounded
+            coach_meta["material_grounding_status"] = grounding_check.status
+            coach_meta["material_grounding_span"] = grounding_check.unsupported_span
 
         fb_rubric = _ensure_primary_rubric_level_fallback(
             stage=stage_ctx,
@@ -4019,66 +2932,12 @@ async def writing_coach_chat(
             example=fb_ex,
             rubric_meta=fb_rubric,
             assessment_required=bool(genai_path and client is not None),
+            keep_model_sentences=bool(genai_path),
         )
-        fb_ok, fb_missing, fb_sug, fb_ex, fb_rubric = _enforce_d_empty_wish_guard(
-            stage=stage_ctx,
-            student_text=body,
-            ok=bool(fb_ok),
-            missing=fb_missing,
-            suggestions=fb_sug,
-            example=fb_ex,
-            rubric_meta=fb_rubric,
-        )
-        if not fb_ok:
-            if not _d_policy_feedback_is_locked(stage_ctx, fb_rubric):
-                fb_missing, fb_sug, fb_ex = scrub_revision_prompts_already_in_draft(
-                    stage_ctx, body, fb_missing, fb_sug, fb_ex
-                )
-            fb_missing, fb_sug = align_o_feedback_to_book_event(
-                stage=stage_ctx,
-                book_pack=book_pack,
-                student_text=body,
-                missing=fb_missing,
-                suggestions=fb_sug,
-            )
-            fb_missing, fb_sug = align_r_feedback_to_rubric(
-                stage=stage_ctx,
-                book_pack=book_pack,
-                student_text=body,
-                missing=fb_missing,
-                suggestions=fb_sug,
-            )
-            fb_missing, fb_sug = align_i_feedback_to_rubric(
-                stage=stage_ctx,
-                book_pack=book_pack,
-                student_text=body,
-                missing=fb_missing,
-                suggestions=fb_sug,
-            )
-            fb_missing, fb_sug = align_d_feedback_to_rubric(
-                stage=stage_ctx,
-                student_text=body,
-                missing=fb_missing,
-                suggestions=fb_sug,
-            )
 
-        # A clear fabricated action/object is an assessment decision, not a
-        # narration choice. Reapply it after all generic feedback rewrites so
-        # identical drafts cannot alternate between "off-book" and "unclear".
-        if locked_concrete_grounding is not None:
-            fb_ok = False
-            fb_missing = [locked_concrete_grounding[0]]
-            fb_sug = [locked_concrete_grounding[1]]
-            fb_ex = None
-            fb_imp = None
-            fb_praise = scrub_praise_for_grounding_issue(
-                stage=stage_ctx,
-                praise=fb_praise,
-                missing=fb_missing,
-                student_text=body,
-                book_pack=book_pack,
-            )
-            grounding_issue = True
+        coach_meta["interaction_intent"] = str(
+            fb_rubric.get("interaction_intent") or "draft_attempt"
+        )
 
         # ── Experimental-group completion path (genai, fb_ok=True) ──────────
         # Hard constraint: only runs when genai_path is True.
@@ -4121,12 +2980,12 @@ async def writing_coach_chat(
             # 3) Store research data in coach_meta
             coach_meta["student_feedback_kind"] = "complete"
             coach_meta["research_feedback"] = research_snapshot
-            # 4) Deterministic completion reply — no narration LLM called
             completed_stages = await _passed_feedback_stages(db, session.id)
             ai_reply = format_genai_completed_feedback_reply(
                 stage=stage_ctx,
                 praise=fb_praise,
                 completed_stages=completed_stages,
+                completion_note=str(fb_rubric.get("student_reply") or "").strip() or None,
             )
 
         # ── Control group or no-client fallback ─────────────────────────────
@@ -4162,137 +3021,15 @@ async def writing_coach_chat(
 
         # ── Experimental-group revision path (genai, fb_ok=False) ───────────
         else:
-            # Trim to single missing / single next step before narration
+            # The evaluator decides the content; this layer only restores the
+            # established three-card presentation without re-judging semantics.
             fb_missing = fb_missing[:1]
             fb_sug = fb_sug[:1]
-            # O narration only needs the student's own anchor plus the already
-            # sanitized missing/suggestion fields. Keep retrieved book events
-            # internal so the second LLM cannot reveal an unwritten answer.
-            narration_draft_next_step = None if stage_ctx == "O" else fb_rubric.get("draft_next_step")
-            narration_rag_context = None if stage_ctx == "O" else fb_rubric.get("rag_context")
-            summary = json.dumps(
-                {
-                    "ok": fb_ok,
-                    "praise": fb_praise,
-                    "missing": fb_missing,
-                    "suggestions": fb_sug,
-                    "example": fb_ex,
-                    "improved": fb_imp,
-                    "rubric_focus": fb_rubric.get("rubric_focus"),
-                    "rubric_level_estimate": fb_rubric.get("rubric_level_estimate"),
-                    "student_anchor_quote": fb_rubric.get("student_anchor_quote"),
-                    "draft_next_step": narration_draft_next_step,
-                    "d_action_assessment": fb_rubric.get("d_action_assessment"),
-                    "rag_context": narration_rag_context,
-                    "rasf": build_rasf_narration_context(
-                        stage=stage_ctx,
-                        book_pack=book_pack,
-                        rubric_focus=fb_rubric.get("rubric_focus"),
-                        rubric_level_estimate=fb_rubric.get("rubric_level_estimate"),
-                        student_anchor_quote=fb_rubric.get("student_anchor_quote"),
-                        draft_next_step=narration_draft_next_step,
-                    ),
-                },
-                ensure_ascii=False,
+            ai_reply = _format_revision_card_reply(
+                praise=fb_praise,
+                missing=fb_missing,
+                suggestions=fb_sug,
             )
-            sys_n, user_n = build_feedback_narration_prompt(
-                stage=stage_ctx,
-                feedback_json_summary=summary,
-                student_display_name=None,
-                student_login=None,
-                student_draft_excerpt=draft_excerpt,
-                input_bucket=input_bucket,
-                opening_hint=opening_hint,
-                prev_ai_opener=prev_ai_opener,
-            )
-            try:
-                ai_reply = await _chat_completion(
-                    [
-                        {"role": "system", "content": sys_n},
-                        {"role": "user", "content": user_n},
-                    ],
-                    max_completion_tokens=min(
-                        ORID_FEEDBACK_NARRATION_MAX_COMPLETION_TOKENS,
-                        int(OPENAI_MAX_COMPLETION_TOKENS or 2000),
-                    ),
-                    temperature=ORID_FOLLOWUP_TEMPERATURE,
-                )
-            except Exception:
-                ai_reply = format_control_feedback_reply(
-                    ok=bool(fb_ok),
-                    missing=fb_missing,
-                    suggestions=fb_sug,
-                    stage=stage_ctx,
-                    book_anchor=anchor_line,
-                    example=fb_ex,
-                    praise=fb_praise,
-                    student_draft=body,
-                )
-            if not _looks_valid_feedback_narration(ai_reply):
-                ai_reply = format_control_feedback_reply(
-                    ok=bool(fb_ok),
-                    missing=fb_missing,
-                    suggestions=fb_sug,
-                    stage=stage_ctx,
-                    book_anchor=anchor_line,
-                    example=fb_ex,
-                    praise=fb_praise,
-                    student_draft=body,
-                )
-            if not (ai_reply or "").strip():
-                ai_reply = format_control_feedback_reply(
-                    ok=bool(fb_ok),
-                    missing=fb_missing,
-                    suggestions=fb_sug,
-                    stage=stage_ctx,
-                    book_anchor=anchor_line,
-                    example=fb_ex,
-                    praise=fb_praise,
-                    student_draft=body,
-                )
-            locked_book_event_prompt = (
-                stage_ctx in {"O", "R", "I", "D"}
-                and bool(fb_sug)
-                and str(fb_sug[0]).startswith(f"請回到 {stage_ctx} ")
-                and (
-                    str(fb_sug[0]).endswith("？")
-                    or (
-                        stage_ctx == "R"
-                        and "先選一個書裡真的畫面" in str(fb_sug[0])
-                        and "為什麼" in str(fb_sug[0])
-                    )
-                    or (
-                        stage_ctx == "I"
-                        and "書裡真的畫面" in str(fb_sug[0])
-                        and "為什麼" in str(fb_sug[0])
-                    )
-                )
-            )
-            if locked_book_event_prompt:
-                # The narration model may paraphrase a precise book-event
-                # question back into「補最後一句」. At the output boundary,
-                # preserve the shared diagnosis/action generated above.
-                ai_reply = format_control_feedback_reply(
-                    ok=bool(fb_ok),
-                    missing=fb_missing,
-                    suggestions=fb_sug,
-                    stage=stage_ctx,
-                    book_anchor=anchor_line,
-                    example=None,
-                    praise=fb_praise,
-                    student_draft=body,
-                )
-            if locked_concrete_grounding is not None:
-                ai_reply = format_control_feedback_reply(
-                    ok=False,
-                    missing=fb_missing,
-                    suggestions=fb_sug,
-                    stage=stage_ctx,
-                    book_anchor=anchor_line,
-                    example=None,
-                    praise=fb_praise,
-                    student_draft=body,
-                )
             await _try_dual_write_feedback(
                 db,
                 session_id=session.id,
@@ -4311,17 +3048,6 @@ async def writing_coach_chat(
             )
             # fb_ok is False in this branch; _maybe_advance_stage not called
     elif source == "synthesis_feedback":
-        synthesis_grounding_check = await _llm_book_grounding_check(
-            student_text=body,
-            stage="ALL",
-            book_pack=book_pack,
-        )
-        synthesis_grounding_lock = _semantic_material_grounding_feedback(
-            student_text=body,
-            book_pack=book_pack,
-            stage="ALL",
-            check=synthesis_grounding_check,
-        )
         prior_orid_week = prior_orid_week_for_synthesis(int(data.week or 1))
         prior_orid_raw = await _fetch_latest_writing_content_for_week(
             db, user.id, session.id, prior_orid_week
@@ -4353,13 +3079,45 @@ async def writing_coach_chat(
             hist_syn.append({"role": role, "content": str(m.text or "")})
         oa_syn: list[dict[str, str]] = [{"role": "system", "content": sys_p}]
         oa_syn.extend(hist_syn)
+        grounding_result, synthesis_result = await asyncio.gather(
+            timed_call(
+                "book_grounding",
+                _llm_book_grounding_check(
+                    student_text=body,
+                    stage="ALL",
+                    book_pack=book_pack,
+                ),
+            ),
+            timed_call(
+                "synthesis_evaluation",
+                _chat_completion(
+                    oa_syn,
+                    max_completion_tokens=max(700, OPENAI_MAX_COMPLETION_TOKENS),
+                    temperature=(
+                        OPENAI_TEMPERATURE
+                        if OPENAI_TEMPERATURE is not None
+                        else ORID_MAIN_FALLBACK_TEMPERATURE
+                    ),
+                    response_format={"type": "json_object"},
+                ),
+            ),
+            return_exceptions=True,
+        )
+        if isinstance(grounding_result, BaseException):
+            logger.warning("synthesis book grounding failed: %s", grounding_result)
+            synthesis_grounding_check = None
+        else:
+            synthesis_grounding_check = grounding_result
+        synthesis_grounding_lock = _semantic_material_grounding_feedback(
+            student_text=body,
+            book_pack=book_pack,
+            stage="ALL",
+            check=synthesis_grounding_check,
+        )
         try:
-            raw_synthesis = await _chat_completion(
-                oa_syn,
-                max_completion_tokens=max(700, OPENAI_MAX_COMPLETION_TOKENS),
-                temperature=OPENAI_TEMPERATURE if OPENAI_TEMPERATURE is not None else ORID_MAIN_FALLBACK_TEMPERATURE,
-                response_format={"type": "json_object"},
-            )
+            if isinstance(synthesis_result, BaseException):
+                raise synthesis_result
+            raw_synthesis = synthesis_result
             parsed_synthesis = extract_json_object(raw_synthesis)
             synthesis_levels = normalize_synthesis_levels(
                 parsed_synthesis.get("rubric_levels")
@@ -4450,37 +3208,11 @@ async def writing_coach_chat(
     if source == "feedback_button" and display_nm:
         ai_reply = _remove_student_name_from_feedback(ai_reply, display_nm)
 
-    output_safety = await classify_safety(ai_reply, writing_coach=True)
-    if output_safety.should_stop_feedback:
-        logger.error(
-            "ORID unsafe model output replaced session=%s week=%s stage=%s level=%s category=%s provider=%s",
-            session.id,
-            data.week,
-            stage_ctx,
-            output_safety.level,
-            output_safety.category,
-            output_safety.provider,
-        )
-        ai_reply = (
-            "我們先用尊重、安全的方式繼續寫。"
-            "請回到自己的故事、感受或下一個能做到的行動，再寫一句試試看。"
-        )
-        coach_meta["output_safety_filtered"] = True
-
     db.add(OridChatMessage(session_id=session.id, stage=stage_ctx, sender="ai", text=ai_reply))
     await db.commit()
 
-    logger.info(
-        "writing_coach_chat completed",
-        extra={
-            "session_id": str(session.id),
-            "stage": stage_ctx,
-            "source": source,
-            "condition": condition,
-        },
-    )
-
     # ---- Rubric progress + badge computation (must not fail the chat reply) ----
+    progress_started = time.perf_counter()
     badge_meta: dict[str, Any] = {}
     if source == "feedback_button":
         # Research summary: "取得回饋" was used regardless of ok/not-ok outcome
@@ -4648,6 +3380,8 @@ async def writing_coach_chat(
             )
             badge_meta = {}
 
+    mark_timing("progress_and_badges", progress_started)
+    timings_ms["total"] = round((time.perf_counter() - request_started) * 1000)
     coach_meta.update(
         {
             "condition": condition,
@@ -4656,10 +3390,20 @@ async def writing_coach_chat(
             "feedback_strength": feedback_strength,
             "input_bucket": input_bucket,
             "opening_hint": opening_hint,
+            "timings_ms": timings_ms,
             **({"rubric_focus": rf} if (rf := (fb_rubric.get("rubric_focus") if source == "feedback_button" else None)) else {}),
             **({"rubric_level_estimate": rl} if (rl := (fb_rubric.get("rubric_level_estimate") if source == "feedback_button" else None)) else {}),
             **badge_meta,
         }
+    )
+    logger.info(
+        "writing_coach_chat latency session=%s stage=%s source=%s condition=%s total_ms=%s timings=%s",
+        session.id,
+        stage_ctx,
+        source,
+        condition,
+        timings_ms["total"],
+        json.dumps(timings_ms, ensure_ascii=False, sort_keys=True),
     )
     return WritingCoachChatResponse(
         session_id=session.id,
@@ -4752,13 +3496,6 @@ async def writing_feedback(
             stage=data.stage,
             book_pack=book_pack,
         )
-    if genai_path:
-        clarity_check = _o_reference_clarity_check(
-            student_text=text,
-            stage=data.stage,
-        )
-        if clarity_check is not None:
-            grounding_check = clarity_check
     if not genai_path:
         ok, missing, suggestions, _, praise = _control_feedback(data.stage, text)
         example = None
@@ -4783,81 +3520,16 @@ async def writing_feedback(
         input_bucket=wf_input_bucket,
         grounding_check=grounding_check,
     )
-    locked_concrete_grounding = _semantic_material_grounding_feedback(
-        student_text=text,
-        book_pack=book_pack,
-        stage=data.stage,
-        check=grounding_check,
-    ) or _deterministic_concrete_grounding_feedback(
-        student_text=text,
-        book_pack=book_pack,
-        stage=data.stage,
-    )
-    missing, suggestions = scrub_false_book_absence_claims(
-        missing=missing,
-        suggestions=suggestions,
-        book_pack=book_pack,
-        student_text=text,
-    )
-    missing, suggestions = scrub_false_synonym_mismatch_claims(
-        missing=missing,
-        suggestions=suggestions,
-        book_pack=book_pack,
-        student_text=text,
-    )
-    ok, missing, suggestions = _scrub_character_alias_only_feedback(
-        stage=data.stage,
-        student_text=text,
-        book_pack=book_pack,
-        ok=bool(ok),
-        missing=missing,
-        suggestions=suggestions,
-    )
-    missing, suggestions, example = rewrite_grounding_append_suggestions(
-        stage=data.stage,
-        missing=missing,
-        suggestions=suggestions,
-        example=example,
-    )
-    missing, suggestions = normalize_feedback_focus(
-        stage=data.stage,
-        missing=missing,
-        suggestions=suggestions,
-        student_text=text,
-    )
-    missing, suggestions = apply_o_key_event_gaps(
-        stage=data.stage,
-        strength=feedback_strength,
-        student_text=text,
-        key_events=(book_pack or {}).get("key_events"),
-        missing=missing,
-        suggestions=suggestions,
-    )
+    if grounding_check is not None:
+        rubric_snap["material_grounded"] = grounding_check.grounded
+        rubric_snap["material_grounding_status"] = grounding_check.status
+        rubric_snap["material_grounding_span"] = grounding_check.unsupported_span
     rubric_snap = _ensure_primary_rubric_level_fallback(
         stage=data.stage,
         student_text=text,
         ok=bool(ok),
         rubric_meta=rubric_snap,
     )
-    if _has_feedback_book_grounding_issue(missing):
-        if example and "故事的主角" in str(example):
-            example = None
-        praise = scrub_praise_for_grounding_issue(
-            stage=data.stage,
-            praise=praise,
-            missing=missing,
-            student_text=text,
-            book_pack=book_pack,
-        )
-        if isinstance(rubric_snap, dict):
-            rubric_snap = dict(rubric_snap)
-            rubric_snap["student_anchor_quote"] = scrub_anchor_quote_for_grounding(
-                quote=rubric_snap.get("student_anchor_quote"),
-                missing=missing,
-                student_text=text,
-                book_pack=book_pack,
-            )
-
     ok = _apply_orid_rubric_ok_rule(bool(ok), rubric_snap, missing, stage=data.stage)
     ok, missing, suggestions, example, rubric_snap = _enforce_d_theme_alignment(
         stage=data.stage,
@@ -4869,65 +3541,8 @@ async def writing_feedback(
         example=example,
         rubric_meta=rubric_snap,
         assessment_required=bool(genai_path and client is not None),
+        keep_model_sentences=bool(genai_path),
     )
-    ok, missing, suggestions, example, rubric_snap = _enforce_d_empty_wish_guard(
-        stage=data.stage,
-        student_text=text,
-        ok=bool(ok),
-        missing=missing,
-        suggestions=suggestions,
-        example=example,
-        rubric_meta=rubric_snap,
-    )
-    if not ok:
-        if not _d_policy_feedback_is_locked(data.stage, rubric_snap):
-            missing, suggestions, example = scrub_revision_prompts_already_in_draft(
-                data.stage, text, missing, suggestions, example
-            )
-        missing, suggestions = align_o_feedback_to_book_event(
-            stage=data.stage,
-            book_pack=book_pack,
-            student_text=text,
-            missing=missing,
-            suggestions=suggestions,
-        )
-        missing, suggestions = align_r_feedback_to_rubric(
-            stage=data.stage,
-            book_pack=book_pack,
-            student_text=text,
-            missing=missing,
-            suggestions=suggestions,
-        )
-        missing, suggestions = align_i_feedback_to_rubric(
-            stage=data.stage,
-            book_pack=book_pack,
-            student_text=text,
-            missing=missing,
-            suggestions=suggestions,
-        )
-        missing, suggestions = align_d_feedback_to_rubric(
-            stage=data.stage,
-            student_text=text,
-            missing=missing,
-            suggestions=suggestions,
-        )
-
-    # Keep both feedback endpoints consistent: only a high-confidence concrete
-    # material error may override the rubric decision after wording cleanup.
-    if locked_concrete_grounding is not None:
-        ok = False
-        missing = [locked_concrete_grounding[0]]
-        suggestions = [locked_concrete_grounding[1]]
-        example = None
-        improved = None
-        praise = scrub_praise_for_grounding_issue(
-            stage=data.stage,
-            praise=praise,
-            missing=missing,
-            student_text=text,
-            book_pack=book_pack,
-        )
-
     wf_meta: dict[str, Any] = {
         "condition": condition,
         "feedback_strength": feedback_strength,

@@ -79,7 +79,7 @@ def _characters_from_book_pack(book_pack: dict[str, Any]) -> list[str]:
                 out.append(s)
     # fallback to avoid empty generation
     if not out:
-        out = ["阿松爺爺", "哎唷奶奶", "小朋友"]
+        out = ["阿松爺爺", "哎喲奶奶", "小朋友"]
     return out
 
 

@@ -34,31 +34,49 @@ _STAGE_LABELS: dict[str, str] = {
 _DEFAULT_PRAISE = "你有認真把這一段寫出來，方向是對的。"
 
 
+_REVISION_CUES = ("再想一想", "可以這樣修改", "再補", "請回到", "還沒")
+_RUBRIC_JARGON = ("rubric", "level", "RASF", "層級", "評分", "規準")
+
+
+def _usable_completion_note(note: str | None) -> str:
+    """Use the model's own pass explanation when it does not ask for another revision."""
+    text = (note or "").strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    if any(term.lower() in lowered for term in _RUBRIC_JARGON):
+        return ""
+    if any(cue in text for cue in _REVISION_CUES):
+        return ""
+    return text
+
+
 def format_genai_completed_feedback_reply(
     *,
     stage: str,
     praise: str | None,
     completed_stages: set[str] | None = None,
+    completion_note: str | None = None,
 ) -> str:
     """
-    Return a short deterministic three-section completion message.
+    Return a three-section completion message.
 
     Headings used (for frontend complete-card parser):
       你已經做到：
       本階段完成：
       下一步：
 
-    No modification language.  No further improvement requests.
+    Praise and the completion note come from the model. The next-stage
+    destination stays fixed. No further improvement requests.
     """
     s = (stage or "O").strip().upper()
     pr = (praise or "").strip()
     if not pr:
         pr = _DEFAULT_PRAISE
-    # Trim praise to ~45 characters so the card stays compact
-    if len(pr) > 50:
-        pr = pr[:47] + "…"
 
-    completion = _STAGE_COMPLETE_MSG.get(s, f"{s} 這一段可以了！你已經把想法寫清楚了。")
+    completion = _usable_completion_note(completion_note) or _STAGE_COMPLETE_MSG.get(
+        s, f"{s} 這一段可以了！你已經把想法寫清楚了。"
+    )
     if s == "D":
         passed = {str(x).strip().upper() for x in (completed_stages or set())}
         missing_stages = [x for x in ("O", "R", "I", "D") if x not in passed]

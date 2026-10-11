@@ -36,7 +36,10 @@ class SafetyDecision:
 
     @property
     def should_stop_feedback(self) -> bool:
-        return self.action is not SafetyAction.ALLOW
+        return self.action in {
+            SafetyAction.BLOCK_AND_REWRITE,
+            SafetyAction.SUPPORT_AND_ESCALATE,
+        }
 
 
 _ALLOW = SafetyDecision(

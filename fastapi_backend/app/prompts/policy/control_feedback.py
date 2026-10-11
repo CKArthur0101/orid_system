@@ -45,15 +45,6 @@ def _is_generic_praise(p: str) -> bool:
     return False
 
 
-def _default_example_line(stage: str, anchor: str = "") -> str:
-    s = (stage or "O").strip().upper()
-    if s == "O":
-        return "例如：故事裡，＿＿做了＿＿。"
-    if s == "R":
-        return "例如：我覺得＿＿，因為＿＿。"
-    if s == "I":
-        return "例如：這讓我想到＿＿。"
-    return "例如：以後遇到＿＿時，我會＿＿。"
 
 
 def _revision_target_for_stage(stage: str) -> str:

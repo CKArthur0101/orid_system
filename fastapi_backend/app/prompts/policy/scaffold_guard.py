@@ -54,14 +54,3 @@ def scaffold_feedback_example(stage: str, example: str | None) -> str | None:
     return text
 
 
-def scaffold_feedback_suggestions(stage: str, suggestions: list[str]) -> list[str]:
-    out: list[str] = []
-    for item in suggestions[:1]:
-        text = str(item or "").strip()
-        if not text:
-            continue
-        if _looks_copyable_answer(text) and "？" not in text:
-            out.append(f"先想一想這一段最需要補哪一句，再用句型試寫：{scaffold_for_stage(stage)}")
-        else:
-            out.append(text)
-    return out

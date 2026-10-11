@@ -92,6 +92,7 @@ def personalized_control_praise_line(draft: str, stage_zh: str) -> str:
             "藏",
             "分",
             "哎唷",
+            "哎喲",
         )
     )
     if not concrete:

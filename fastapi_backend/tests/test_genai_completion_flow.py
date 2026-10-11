@@ -5,7 +5,6 @@ Covers:
 - format_genai_completed_feedback_reply output format
 - parseable by frontend-equivalent logic
 - control group isolation: format_control_feedback_reply still produces revision format
-- _looks_valid_feedback_narration accepts both complete and revision cards
 - _apply_orid_rubric_ok_rule level 3/4 → fb_ok=True
 - writing_feedback templates: no infinite-expansion on level 3/4
 """
@@ -83,13 +82,22 @@ class TestFormatGenaiCompletedFeedbackReply:
         sections = self._parse_headings(reply)
         assert sections.get("praise"), f"Empty praise section for stage {stage}"
 
-    def test_praise_trimmed_to_max_50_chars(self) -> None:
-        long_praise = "a" * 60
+    def test_praise_keeps_the_model_sentence(self) -> None:
+        long_praise = "你有寫到阿松爺爺不肯把甜柿子分給大家，也寫出他後來把柿子藏起來。"
         reply = format_genai_completed_feedback_reply(stage="R", praise=long_praise)
         sections = self._parse_headings(reply)
-        # After trimming, the praise text in the section should be ≤ 50 chars (plus possible "…")
-        praise_text = sections.get("praise", "")
-        assert len(praise_text) <= 52, f"Praise too long: {len(praise_text)}"
+        assert sections.get("praise") == long_praise
+
+    def test_completion_note_replaces_fixed_stage_sentence(self) -> None:
+        note = "你已經把阿松爺爺不肯分柿子、後來又藏起來這件事寫清楚了。"
+        reply = format_genai_completed_feedback_reply(
+            stage="O",
+            praise="你有寫到阿松爺爺。",
+            completion_note=note,
+        )
+        sections = self._parse_headings(reply)
+        assert sections.get("completion") == note
+        assert "R 感受段" in sections.get("next_step", "")
 
     def test_fallback_praise_when_none(self) -> None:
         reply = format_genai_completed_feedback_reply(stage="O", praise=None)
@@ -199,37 +207,6 @@ class TestControlFeedbackIsolation:
         assert "感受格" not in reply
         assert "體會格" not in reply
         assert "行動格" not in reply
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# _looks_valid_feedback_narration
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestLooksValidFeedbackNarration:
-    """Both complete and revision cards must be accepted; empty string must be rejected."""
-
-    def setup_method(self) -> None:
-        from app.routes.orid import _looks_valid_feedback_narration
-        self._fn = _looks_valid_feedback_narration
-
-    def test_complete_card_is_valid(self) -> None:
-        complete = format_genai_completed_feedback_reply(stage="R", praise="你寫清楚了。")
-        assert self._fn(complete)
-
-    def test_revision_card_is_valid(self) -> None:
-        revision = (
-            "你已經做到：\n你有試著寫出感受。\n\n"
-            "你可以再加強：\n補上原因會更好。\n\n"
-            "試著補一句：\n我覺得＿＿＿，因為＿＿＿。"
-        )
-        assert self._fn(revision)
-
-    def test_empty_is_invalid(self) -> None:
-        assert not self._fn("")
-
-    def test_missing_section_is_invalid(self) -> None:
-        incomplete = "你已經做到：\n你有試著寫。"
-        assert not self._fn(incomplete)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

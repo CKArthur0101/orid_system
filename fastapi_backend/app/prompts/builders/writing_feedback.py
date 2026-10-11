@@ -3,11 +3,8 @@ from __future__ import annotations
 from typing import Any, Optional, Tuple
 import re
 
-from app.prompts.policy.student_input_bucket import (
-    BUCKET_EMPTY,
-    BUCKET_TOO_SHORT,
-    bucket_tone_hint_zh,
-)
+from app.prompts.policy.student_input_bucket import bucket_tone_hint_zh
+from app.prompts.text_loader import fill_prompt, read_prompt_file, read_prompt_pieces
 from app.services.rag import format_rag_context_for_prompt
 
 
@@ -188,109 +185,11 @@ def _d_action_scope_for_prompt(book_pack: Optional[dict[str, Any]]) -> str:
     return scope or "依本週 D1 rubric 與本書主題判斷，不額外增加條件。"
 
 
-_O_STUCK_HINT_PHRASES: tuple[str, ...] = (
-    "還不會",
-    "不會寫",
-    "不知道怎麼寫",
-    "不懂怎麼寫",
-    "不知道要寫",
-    "寫不出",
-    "不會下筆",
-    "我不知道",
-    "不知道誰",
-    "不懂誰",
-    "分不清誰",
-    "誰做了什麼",  # 常見 meta：「我不知道誰做了什麼」
-    "想不起來",
-)
+def _prompt_piece(pieces: dict[str, str], key: str) -> str:
+    return pieces.get(key) or pieces["O"]
 
 
-_STAGE_RUBRIC_LEVEL_KEYS: dict[str, str] = {
-    "O": '"O1": "X 層級"',
-    "R": '"R1": "X 層級", "SEL_SA": "X 層級", "SEL_SOA": "X 層級", "SEL_SM": "X 層級"',
-    "I": '"I1": "X 層級", "SEL_SOA": "X 層級", "SEL_RS": "X 層級"',
-    "D": '"D1": "X 層級", "SEL_RD": "X 層級", "SEL_SM": "X 層級", "SEL_RS": "X 層級"',
-}
 
-
-_STAGE_REVISION_TARGETS: dict[str, str] = {
-    "O": "請回到 O 觀察段，補上故事裡真的發生的一件事",
-    "R": "請回到 R 感受段，補上感受的原因",
-    "I": "請回到 I 體會段，補上學到的想法或自己的經驗",
-    "D": "請回到 D 行動段，補上一個自己做得到的行動",
-}
-
-
-_STAGE_EXAMPLE_SCAFFOLDS: dict[str, str] = {
-    "O": "故事裡，＿＿做了＿＿。／我印象最深的是＿＿。",
-    "R": "我覺得＿＿，因為＿＿。",
-    "I": "這讓我想到＿＿。",
-    "D": "以後遇到＿＿時，我會＿＿。",
-}
-
-
-def _stage_revision_target(stage: str) -> str:
-    return _STAGE_REVISION_TARGETS.get((stage or "O").strip().upper(), _STAGE_REVISION_TARGETS["O"])
-
-
-def _stage_example_scaffold(stage: str) -> str:
-    return _STAGE_EXAMPLE_SCAFFOLDS.get((stage or "O").strip().upper(), _STAGE_EXAMPLE_SCAFFOLDS["O"])
-
-
-def _rasf_json_format_block(stage: str) -> str:
-    """RASF-Anchor 規則：多向度估層級 + 原文錨點引導。"""
-    keys = _STAGE_RUBRIC_LEVEL_KEYS.get(stage.upper(), '"O1": "X 層級"')
-    revision_target = _stage_revision_target(stage)
-    example_scaffold = _stage_example_scaffold(stage)
-    i_life = ""
-    if (stage or "").strip().upper() == "I":
-        i_life = (
-            "\n- I 段特別：若缺的是「生活連結」（把自己經驗連上故事），"
-            "用 suggestions 一個問句引導即可；**不要**為此新增 SEL id；"
-            "仍以 I1 是否有體會＋故事支持為 ok 主判斷。"
-        )
-    d_semantic = ""
-    if (stage or "").strip().upper() == "D":
-        d_semantic = (
-            "\n- D 段必須填 d_action_assessment：has_self_action、action_is_concrete、"
-            "theme_aligned 都依整句語意判斷，不可用關鍵字清單。evidence_quote 必須原封不動摘自學生原文。"
-            "missing_dimension 只能填 no_action、not_concrete、off_theme 或 null。"
-            "theme_aligned 是判斷行動是否符合上方本書主題；但是否影響 ok，仍以本週 D1 第 3 級是否要求主題連結為準。"
-            "判斷 theme_aligned 時要看行動本身是否直接落在『D 段行動主題範圍』；"
-            "不能只因任何行動都可被廣義解釋成努力、負責或進步就判 true。"
-            "若等級 1/2，missing 與 suggestions 必須承接學生原本的想法，例如學生寫『多體諒家人』，"
-            "問句也要出現『體諒家人』，不可換成沒有原文錨點的通用模板。"
-        )
-    return f"""【RASF-Anchor 輸出規則（評量對準 + 原文錨點，重要｜對準 RQ1–RQ3）】
-- rubric_focus：必填本段 ORID 主向度 id（O1 / R1 / I1 / D1），不可 null。
-- rubric_level_estimate：必須是**物件**，依本段填入所有對應向度的層級估計：
-  本段格式：{{{ keys }}}
-  層級用語：「1 起步」「2 接近」「3 達標」「4 精進」（有把握才填，不確定可填 null）
-  SEL 向度只估層級，**不要**另寫 missing；missing 只對 ORID 主向度（一刀）。
-- student_anchor_quote（必填，除非草稿空白）：從學生原文**原封不動**摘 4～20 個連續字（人名、事件、感受詞、行動詞），供後續引導錨定；禁止改寫或捏造。
-- draft_next_step：**僅在 ok=false（等級 1 或 2）時填寫**；最多 1 句，必須使用本段修改落點：「{revision_target}」。不要放入書中完整事件，也不要替學生完成句子。**等級 3 或 4 時填 null。**
-- missing / suggestions 引導規則（RASF 核心）：
-  先估 ORID 主向度目前是第幾階。
-  **等級 3（達標）或 4（精進）→ ok=true；missing=[]；suggestions=[]；example=null；draft_next_step=null。不得再要求補細節、精進或下一階。**
-  等級 1 或 2 → ok=false；再只描述「從目前階 → 3 達標」還差的一個缺口。
-  missing（等級 1/2 才填）**必須**引用 student_anchor_quote（或同句中的學生用詞），用「你已經有○○，再補△△會更完整」語意。
-  suggestions（等級 1/2 才填）：**一個短問句或短指令**，必須明確指向「{revision_target}」；不要列多步驟，不要寫書中完整事件，不要寫完整答案。
-  example（等級 1/2 且必要才填）：只能使用本段填空支架：「{example_scaffold}」。保留＿＿，不得放入具體人名、完整情節、完整原因或完整做法。
-  學生會看到的 praise / missing / suggestions / example / draft_next_step 必須改成學生語；不得出現 rubric、level、criteria、score、RASF、層級、等級、達標、精進、評分、規準等評量語。
-  學生可見三段每段最多 2 個短句；每次最多一個主要修改方向。
-  SEL 的缺口不得成為 missing 的主題；SEL 最多用來把 ORID 那一刀的問句問得更具體。{i_life}{d_semantic}""".strip()
-
-
-def _o_needs_book_plot_anchor(*, text: str, input_bucket: str) -> bool:
-    """O 段若幾乎沒內容或學生表達卡住，JSON 層要強制帶書裡具體情節，避免只剩『一步一步』空架。"""
-    if input_bucket in (BUCKET_EMPTY, BUCKET_TOO_SHORT):
-        return True
-    t = (text or "").strip()
-    if not t:
-        return True
-    if any(p in t for p in _O_STUCK_HINT_PHRASES) and len(t) < 72:
-        return True
-    return False
 
 
 def build_genai_feedback_prompts(
@@ -300,6 +199,7 @@ def build_genai_feedback_prompts(
     book_pack: Optional[dict[str, Any]],
     input_bucket: str = "normal",
     rag_context: str = "",
+    recent_context: str = "",
 ) -> Tuple[str, str]:
     """Build one concise rubric-first prompt for experimental-group feedback."""
     stage = stage if stage in {"O", "R", "I", "D"} else "O"
@@ -313,90 +213,39 @@ def build_genai_feedback_prompts(
     d_action_scope = _d_action_scope_for_prompt(book_pack)
     rubric_block = _format_writing_rubric_for_prompt(book_pack, stage)
     sel_guidance_block = _format_sel_guidance_for_prompt(book_pack, stage)
-    revision_target = _stage_revision_target(stage)
-    example_scaffold = _stage_example_scaffold(stage)
+    pieces = read_prompt_pieces("genai_feedback_pieces.txt")
+    revision_target = _prompt_piece(pieces, f"revision_{stage}")
+    example_scaffold = _prompt_piece(pieces, f"example_{stage}")
     bucket_hint = bucket_tone_hint_zh(input_bucket)
     formatted_rag = format_rag_context_for_prompt(rag_context) if stage != "D" else ""
-    stage_rules = {
-        "O": (
-            "只評客觀觀察：重要人物，以及至少兩個彼此相關的正確事實；"
-            "若只寫一個事件，必須同時包含事件的前後變化，讓人看得出故事發展，才可達第 3 級。"
-            "單一孤立事實只算第 2 級。語意相同的改寫算正確，不要求逐字重述。"
-        ),
-        "R": (
-            "只評感受反應：必須同時有明確感受，以及造成該感受的書中事件或畫面。"
-            "只有感受或只有故事重述，最高第 2 級。"
-        ),
-        "I": (
-            "只評詮釋體會：必須同時有學到的道理或理解，以及支持該想法的書中內容。"
-            "只有口號式道理或只有故事重述，最高第 2 級。"
-            "生活連結是第 4 級表現，不是第 3 級必填。"
-        ),
-        "D": (
-            "只評行動決定：必須同時寫出適用的情況或對象，以及自己做得到、具體且呼應故事主題的行動。"
-            "不要求固定句型；情境、對象、做法不是固定三項必填，但至少要有情況或對象，加上具體行動。"
-            "只有『我要努力／分享／幫忙』等願望，最高第 2 級。"
-            "必須依整句語意判斷，不可用關鍵字清單評分。"
-        ),
-    }
+    context_block = (recent_context or "").strip() or "（這是本階段第一輪回饋）"
     primary_id = f"{stage}1"
     material = (
         f"角色：{characters_block}\n故事事件：\n{key_events_str}\n故事摘錄：\n{excerpts_block}"
         if stage != "D"
         else f"故事主題：{themes_block}\nD 段行動主題範圍：{d_action_scope}"
     )
-    grounding_rule = (
-        "核對教材時看語意，不做逐字比對。只有明顯新增或寫錯人物、物品、事件才判未達標；"
-        "省略非必要細節、角色簡稱及同義改寫都可接受。"
-        if stage != "D"
-        else "D 段寫學生現實生活，不檢查是否出現書中人物、物品或情節。"
+    filled = {
+        "階段": stage,
+        "本段規則": _prompt_piece(pieces, stage),
+        "教材核對": pieces["grounding_d"] if stage == "D" else pieces["grounding_story"],
+        "書名": book_title,
+        "教材內容": material,
+        "檢索補充": formatted_rag,
+        "教師說明": guide or "（未提供）",
+        "評量標準": rubric_block or "依本段規則判定 1～4 級。",
+        "SEL引導": sel_guidance_block,
+        "修改落點": revision_target,
+        "例句型": example_scaffold,
+        "主向度": primary_id,
+        "D欄位規則": pieces["d_schema"] if stage == "D" else pieces["d_schema_null"],
+        "輸入狀態": bucket_hint,
+        "最近互動": context_block,
+    }
+    system_prompt = fill_prompt(read_prompt_file("genai_feedback_system.txt"), filled)
+    user_prompt = fill_prompt(
+        read_prompt_file("genai_feedback_user.txt"),
+        {"階段": stage, "學生原文": text, "主向度": primary_id},
     )
-    d_schema_rule = (
-        "d_action_assessment 必填，依整句語意填 has_self_action、action_is_concrete、"
-        "theme_aligned、evidence_quote、missing_dimension。"
-        if stage == "D"
-        else "d_action_assessment 填 null。"
-    )
-
-    system_prompt = f"""你是國小五、六年級 ORID 寫作評量員。只輸出符合 schema 的 JSON。
-
-【唯一通過標準】
-只依本段 ORID rubric 決定 ok：第 3／4 級為 true，第 1／2 級為 false。SEL 只供研究與提問，不得改變 ok。達到第 3 級後立即停止修改要求，missing=[]、suggestions=[]、example=null、draft_next_step=null。
-四段都採「兩個核心成分」原則，不以字數判斷：O 是相關事實／前後變化，R 是感受＋故事原因，I 是理解＋故事支持，D 是情況或對象＋具體行動。只碰到主題詞、只有結論或只有一個孤立資訊，不可判為第 3 級。
-
-【本段 {stage}】
-{stage_rules[stage]}
-{grounding_rule}
-
-【教材】
-書名：{book_title}
-{material}
-{formatted_rag}
-教師說明：{guide or "（未提供）"}
-
-【正式 rubric】
-{rubric_block or "依本段規則判定 1～4 級。"}
-{sel_guidance_block}
-
-【回饋規則】
-- praise 只肯定學生原文中正確的內容，使用適合小學生的短句。
-- 未達標時只指出一個最重要缺口；suggestions 只給一個問題或短指令，修改落點是「{revision_target}」。
-- 不代寫答案。example 只能是「{example_scaffold}」這類留白句型或 null。
-- student_anchor_quote 原封不動摘錄學生原文 4～20 字；未達標時填 draft_next_step，達標時填 null。
-- rubric_focus 固定為 {primary_id}；rubric_level_estimate 至少包含 {primary_id}，值使用「1 起步／2 接近／3 達標／4 精進」。
-- {d_schema_rule}
-- 學生可見文字不得出現 rubric、level、RASF、層級、評分等術語。
-
-【輸入狀態】
-{bucket_hint}
-""".strip()
-
-    user_prompt = f"""請評量以下學生「{stage}」段原文：
-
----
-{text}
----
-
-先依教材與正式 rubric 判級，再讓 ok 與 {primary_id} 層級完全一致。只輸出 JSON。""".strip()
 
     return system_prompt, user_prompt

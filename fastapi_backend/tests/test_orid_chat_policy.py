@@ -1,18 +1,63 @@
 from app.prompts.policy import grounding
 from app.prompts.policy.feedback_focus import (
     align_d_feedback_to_rubric,
-    align_i_feedback_to_rubric,
-    align_o_feedback_to_book_event,
-    align_r_feedback_to_rubric,
-    apply_o_key_event_gaps,
     detect_feedback_strength,
     normalize_feedback_focus,
+    stage_draft_meets_pass_bar,
 )
 from app.prompts.policy.control_feedback import format_control_feedback_reply
 from app.prompts.policy.scaffold_guard import scaffold_feedback_example
 from app.routes import orid
 import pytest
 from types import SimpleNamespace
+
+
+def test_openai_call_kwargs_allows_lightweight_helper_reasoning(monkeypatch):
+    monkeypatch.setattr(orid, "OPENAI_REASONING_EFFORT", "medium")
+
+    assert orid._openai_call_kwargs(messages=[])["reasoning_effort"] == "medium"
+    assert (
+        orid._openai_call_kwargs(messages=[], reasoning_effort="low")["reasoning_effort"]
+        == "low"
+    )
+
+
+def test_feedback_output_preserves_semantic_intent_and_student_reply():
+    result = orid._feedback_from_obj(
+        stage="I",
+        text="我不會啦，我學到有問題要說出來。",
+        obj={
+            "ok": False,
+            "interaction_intent": "mixed",
+            "student_reply": "看起來你卡住了，但你已經寫出一個道理。故事裡哪件事讓你想到有問題要說出來？",
+            "praise": "你已經寫出一個道理。",
+            "missing": ["還缺少支持這個道理的故事內容。"],
+            "suggestions": ["故事裡哪件事讓你想到有問題要說出來？"],
+            "rubric_focus": "I1",
+            "rubric_level_estimate": {"I1": "2 接近"},
+        },
+    )
+
+    ok, missing, suggestions, _example, _improved, _praise, meta = result
+    assert ok is False
+    assert missing == ["還缺少支持這個道理的故事內容。"]
+    assert suggestions == ["故事裡哪件事讓你想到有問題要說出來？"]
+    assert meta["interaction_intent"] == "mixed"
+    assert meta["student_reply"].startswith("看起來你卡住了")
+
+
+def test_experimental_reply_restores_three_card_ui_without_rewriting_content():
+    reply = orid._format_revision_card_reply(
+        praise="你有寫到阿松爺爺不想分享",
+        missing=["還沒有說清楚後來發生什麼事"],
+        suggestions=["後來誰做了什麼，讓事情改變了？"],
+    )
+
+    assert reply == (
+        "你已經做到：\n你有寫到阿松爺爺不想分享\n\n"
+        "再想一想：\n還沒有說清楚後來發生什麼事\n\n"
+        "可以這樣修改：\n後來誰做了什麼，讓事情改變了？"
+    )
 
 
 def test_meta_or_injection_detection():
@@ -68,39 +113,12 @@ def test_cut_tree_paraphrase_砍光光_not_ungrounded():
     assert grounding.looks_likely_factual_mismatch(draft, book_pack) is False
     assert grounding.extract_unsupported_action_phrase(draft, book_pack) == ""
 
-    m, s = grounding.scrub_false_book_absence_claims(
-        missing=["「把自己的樹都砍光光」這句不在書裡；書裡是砍樹。"],
-        suggestions=["改成書裡說法"],
-        book_pack=book_pack,
-    )
-    assert m == []
 
-
-def test_cut_tree_paraphrase_樹都被砍_scrub_contrast_ending():
-    """「樹都被砍光」≈ 書裡砍樹；不得以『書裡其實是吃柿子』否定。"""
-    from app.routes.orid import BOOK_PACK_BY_WEEK
-
-    book_pack = BOOK_PACK_BY_WEEK[1]
-    draft = (
-        "故事中，阿松爺爺一開始都不分享柿子，還把柿子藏進倉庫，"
-        "只給哎唷奶奶柿子蒂和葉子；最後回頭看發現自己的樹都被砍光了。"
-    )
-    assert grounding.student_has_book_aligned_cut_tree_paraphrase(draft, book_pack) is True
-
-    m, s = grounding.scrub_false_book_absence_claims(
-        missing=[
-            "最後寫的「樹都被砍光了」不太對，書裡其實是後來把藏起來的柿子拿出來請大家吃，再一起撒種子。"
-        ],
-        suggestions=["可以補上吃柿子和撒種子"],
-        book_pack=book_pack,
-        student_text=draft,
-    )
-    assert m == []
 
 
 def test_synonym_自己吃_vs_獨占_not_factual_error():
     """R draft「自己吃」≈ book「獨占」；不得以『跟書裡不太一樣』擋通過。"""
-    from app.routes.orid import BOOK_PACK_BY_WEEK, _maybe_promote_o_pass
+    from app.routes.orid import BOOK_PACK_BY_WEEK
     from app.prompts.policy.feedback_focus import r_draft_meets_pass_bar
 
     book_pack = BOOK_PACK_BY_WEEK[1]
@@ -110,51 +128,24 @@ def test_synonym_自己吃_vs_獨占_not_factual_error():
     )
     assert r_draft_meets_pass_bar(draft) is True
 
-    m, s = grounding.scrub_false_synonym_mismatch_claims(
-        missing=[
-            "「一直自己吃還故意在」這句跟書裡稍微不太一樣，"
-            "書裡說的是「一直獨占，故意在大家面前大口吃」。"
-        ],
-        suggestions=["靠近「我覺得爺爺很小氣」這句，把不對的地方改回書裡怎麼說。"],
-        book_pack=book_pack,
-        student_text=draft,
-    )
-    assert m == []
-
-    ok, missing, sug, ex, meta = _maybe_promote_o_pass(
-        stage="R",
-        student_text=draft,
-        ok=False,
-        missing=m,
-        suggestions=s,
-        example=None,
-        rubric_meta={"rubric_focus": "R1", "rubric_level_estimate": {"R1": "2 接近"}},
-    )
-    assert ok is True
-    assert missing == []
-    assert meta.get("rubric_level_promoted") is True
-
 
 @pytest.mark.parametrize(
-    ("week", "draft", "checker_span", "false_missing"),
+    ("week", "draft", "checker_span"),
     [
         (
             1,
             "爺爺本來都自己吃柿子，別人想吃他也不給，後來把柿子藏起來。",
             "別人想吃他也不給",
-            "現在只要把『別人想吃他也不給』改成書裡真正發生的事。",
         ),
         (
             3,
             "媽媽每天做完家事還要去上班，後來媽媽走了，家裡變得亂七八糟。",
             "媽媽走了",
-            "『媽媽走了』不是書裡真正發生的事，請改回書裡的說法。",
         ),
         (
             5,
             "獅子不識字，所以找動物代寫，可是信裡都不是他真正想說的話。",
             "獅子不識字",
-            "『獅子不識字』要改成書裡真正發生的事。",
         ),
     ],
 )
@@ -162,7 +153,6 @@ def test_supported_event_paraphrases_are_not_treated_as_book_errors(
     week: int,
     draft: str,
     checker_span: str,
-    false_missing: str,
 ):
     book_pack = orid.BOOK_PACK_BY_WEEK[week]
     assert grounding.student_uses_supported_event_paraphrase(
@@ -170,15 +160,6 @@ def test_supported_event_paraphrases_are_not_treated_as_book_errors(
         book_pack,
         focus_text=checker_span,
     ) is True
-
-    missing, suggestions = grounding.scrub_false_synonym_mismatch_claims(
-        missing=[false_missing],
-        suggestions=["請改成書裡真的事件。"],
-        book_pack=book_pack,
-        student_text=draft,
-    )
-    assert missing == []
-    assert suggestions == []
 
 
 @pytest.mark.asyncio
@@ -189,9 +170,9 @@ async def test_llm_grounding_checker_cannot_reject_supported_student_paraphrase(
         draft,
         book_pack,
         "O",
-        False,
-        ["現在只要把『別人想吃他也不給』改成書裡真正發生的事。"],
-        ["這時候，爺爺到底做了什麼呢？"],
+        True,
+        [],
+        [],
         use_llm_checker=True,
         grounding_check=orid.BookGroundingCheck(
             grounded=False,
@@ -199,75 +180,13 @@ async def test_llm_grounding_checker_cannot_reject_supported_student_paraphrase(
             reason="教材未使用相同字詞",
         ),
     )
-    assert ok is False
+    assert ok is True
     assert missing == []
     assert suggestions == []
 
 
-def test_week1_random_wording_is_redirected_to_actual_missing_ending():
-    draft = (
-        "爺爺本來都自己吃柿子，別人想吃他也不給，後來還把柿子藏起來，"
-        "最後連樹都被他砍掉了。"
-    )
-    book_pack = orid.BOOK_PACK_BY_WEEK[1]
-    missing, suggestions = grounding.scrub_false_synonym_mismatch_claims(
-        missing=["現在只要把『別人想吃他也不給』改成書裡真正發生的事。"],
-        suggestions=["這時候，爺爺到底做了什麼呢？"],
-        book_pack=book_pack,
-        student_text=draft,
-    )
-    missing, suggestions = normalize_feedback_focus(
-        stage="O",
-        missing=missing,
-        suggestions=suggestions,
-        student_text=draft,
-    )
-    missing, suggestions = apply_o_key_event_gaps(
-        stage="O",
-        strength=detect_feedback_strength("O", draft),
-        student_text=draft,
-        key_events=book_pack["key_events"],
-        missing=missing,
-        suggestions=suggestions,
-    )
-
-    assert "書裡真正" not in missing[0]
 
 
-def test_week1_book_does_not_say_this_wording_is_redirected_to_missing_ending():
-    draft = (
-        "爺爺本來都自己吃柿子，別人想吃他也不給，後來還把柿子藏起來，"
-        "最後連樹都被他砍掉了。"
-    )
-    book_pack = orid.BOOK_PACK_BY_WEEK[1]
-    missing, suggestions = grounding.scrub_false_synonym_mismatch_claims(
-        missing=[
-            "「別人想吃他也不給」這句書裡沒有這樣寫，"
-            "書裡是他一直獨占，還故意在大家面前大口吃。"
-        ],
-        suggestions=["請回到 O 觀察段，補上故事裡真的發生的一件事。"],
-        book_pack=book_pack,
-        student_text=draft,
-    )
-    missing, suggestions = normalize_feedback_focus(
-        stage="O",
-        missing=missing,
-        suggestions=suggestions,
-        student_text=draft,
-    )
-    missing, suggestions = apply_o_key_event_gaps(
-        stage="O",
-        strength=detect_feedback_strength("O", draft),
-        student_text=draft,
-        key_events=book_pack["key_events"],
-        missing=missing,
-        suggestions=suggestions,
-    )
-
-    combined = " ".join(missing + suggestions)
-    assert "書裡沒有" not in combined
-    assert "一直獨占" not in combined
-    assert "前後" in combined or "重要事件" in combined
 
 
 def test_o_ending_feedback_replaces_stale_generic_grounding_prompt():
@@ -287,99 +206,12 @@ def test_o_ending_feedback_replaces_stale_generic_grounding_prompt():
     assert "前面或接著" in suggestions[0]
 
 
-@pytest.mark.parametrize(
-    ("week", "expected_focus"),
-    [
-        (1, "樹被砍掉以後"),
-        (3, "朱太太回家後"),
-        (5, "母獅子聽見獅子的話後"),
-    ],
-)
-def test_o_ending_diagnosis_and_action_share_book_event(week: int, expected_focus: str):
-    missing, suggestions = align_o_feedback_to_book_event(
-        stage="O",
-        book_pack=orid.BOOK_PACK_BY_WEEK[week],
-        missing=["你已經寫到故事前面的事，結尾的變化還沒有說清楚。"],
-        suggestions=["請補上故事裡最後那一件事。"],
-    )
-
-    assert "結尾" in missing[0]
-    assert expected_focus in suggestions[0]
-    assert suggestions[0].startswith("請回到 O 觀察段，想一想：")
 
 
-def test_o_complete_development_is_not_forced_to_add_week1_ending():
-    missing, suggestions = align_o_feedback_to_book_event(
-        stage="O",
-        book_pack=orid.BOOK_PACK_BY_WEEK[1],
-        student_text=(
-            "爺爺本來都自己吃柿子，別人想吃他也不給，後來還把柿子藏起來，"
-            "最後連樹都被他砍掉了。"
-        ),
-        missing=[
-            "你已經寫到『別人想吃他也不給、後來還把柿子藏起來』，"
-            "現在只要補上最後發生了什麼：樹被砍掉以後，故事最後又怎麼了？"
-        ],
-        suggestions=["請回到 O 觀察段，補上最後那一句。"],
-    )
-
-    assert "別人想吃他也不給" in missing[0]
-    assert suggestions == ["請回到 O 觀察段，補上最後那一句。"]
 
 
-@pytest.mark.parametrize(
-    ("week", "draft", "expected_focus"),
-    [
-        (
-            1,
-            "爺爺自己吃柿子不給別人，後來藏進倉庫，最後把樹砍掉。",
-            "樹被砍掉以後",
-        ),
-        (
-            3,
-            "家人每天催媽媽準備早飯，媽媽離開後家裡變得像豬圈，後來媽媽回來了。",
-            "朱太太回家後",
-        ),
-        (
-            5,
-            "獅子不會寫字，請猴子和其他動物代寫，可是都不是他想說的話，他很生氣。",
-            "母獅子聽見獅子的話後",
-        ),
-    ],
-)
-def test_o_broad_development_is_not_forced_to_cover_every_book_arc(
-    week: int, draft: str, expected_focus: str
-):
-    _ = expected_focus
-    missing, suggestions = align_o_feedback_to_book_event(
-        stage="O",
-        book_pack=orid.BOOK_PACK_BY_WEEK[week],
-        student_text=draft,
-        missing=["這裡還可以再補清楚一點。"],
-        suggestions=["再想一想。"],
-    )
-
-    assert missing == ["這裡還可以再補清楚一點。"]
-    assert suggestions == ["再想一想。"]
 
 
-def test_same_event_substitution_is_scrubbed_without_known_mismatch_cue():
-    draft = (
-        "爺爺本來都自己吃柿子，別人想吃他也不給，後來還把柿子藏起來，"
-        "最後連樹都被他砍掉了。"
-    )
-    missing, suggestions = grounding.scrub_false_synonym_mismatch_claims(
-        missing=[
-            "『想吃他也不給』這句不在書裡，現在只要把這一句改成故事裡真的發生的事就好；"
-            "你還記得爺爺是怎麼對大家做的嗎？書裡是獨占。"
-        ],
-        suggestions=["請回到 O 觀察段，補上故事裡真的發生的一件事。"],
-        book_pack=orid.BOOK_PACK_BY_WEEK[1],
-        student_text=draft,
-    )
-
-    assert missing == []
-    assert suggestions == []
 
 
 def test_locked_book_event_prompt_reaches_third_card_verbatim():
@@ -398,36 +230,8 @@ def test_locked_book_event_prompt_reaches_third_card_verbatim():
     assert "例如：故事裡" not in reply
 
 
-def test_r_specific_scene_asks_for_explanation_not_same_scene_again():
-    draft = "我覺得很難過，因為阿松爺爺把柿子藏起來，不願意和大家分享。"
-    missing, suggestions = align_r_feedback_to_rubric(
-        stage="R",
-        book_pack=orid.BOOK_PACK_BY_WEEK[1],
-        student_text=draft,
-        missing=["現在還差一點：把你為什麼會這麼難過，再說得更清楚。"],
-        suggestions=["請回到 R 感受段，哪一幕讓你有這種感覺？"],
-    )
-
-    assert "為什麼這一幕" in missing[0]
-    assert "把柿子藏起來" in suggestions[0]
-    assert "為什麼會覺得難過" in suggestions[0]
-    assert "哪一幕" not in suggestions[0]
 
 
-def test_r_fabricated_scene_keeps_feeling_and_requests_real_book_scene():
-    draft = "我覺得很難過，因為阿松爺爺把小朋友趕出學校。"
-    missing, suggestions = align_r_feedback_to_rubric(
-        stage="R",
-        book_pack=orid.BOOK_PACK_BY_WEEK[1],
-        student_text=draft,
-        missing=["『把小朋友趕出學校』不是書裡發生的事。"],
-        suggestions=["請改成故事裡真的事情。"],
-    )
-
-    assert "不是書裡" in missing[0]
-    assert suggestions == [
-        "請回到 R 感受段，先選一個書裡真的畫面，再說那一幕為什麼讓你難過。"
-    ]
 
 
 def test_locked_r_rubric_prompt_reaches_third_card_verbatim():
@@ -460,80 +264,12 @@ def test_locked_r_grounding_prompt_reaches_third_card_verbatim():
     assert "我覺得＿＿，因為＿＿" not in reply
 
 
-def test_i_story_support_asks_why_it_supports_lesson_not_life_experience():
-    draft = "我學到要分享，因為阿松爺爺最後願意把柿子拿出來和大家一起吃。"
-    missing, suggestions = align_i_feedback_to_rubric(
-        stage="I",
-        book_pack=orid.BOOK_PACK_BY_WEEK[1],
-        student_text=draft,
-        missing=["現在只要再補一句，說說這個道理對你有什麼用。"],
-        suggestions=["請補上自己的經驗。"],
-    )
-
-    assert "要分享" in missing[0]
-    assert "阿松爺爺最後願意拿出柿子" in suggestions[0]
-    assert "為什麼能讓你明白要分享" in suggestions[0]
-    assert "自己的經驗" not in " ".join(missing + suggestions)
 
 
-@pytest.mark.parametrize(
-    "model_missing,model_suggestion",
-    [
-        ("還少一個書裡的理由。", "請補上自己的經驗。"),
-        ("還少了書裡哪一件事。", "哪一幕讓你想到分享？"),
-    ],
-)
-def test_i_lesson_only_has_stable_story_evidence_focus(model_missing, model_suggestion):
-    missing, suggestions = align_i_feedback_to_rubric(
-        stage="I",
-        book_pack=orid.BOOK_PACK_BY_WEEK[1],
-        student_text="我學到要分享。",
-        missing=[model_missing],
-        suggestions=[model_suggestion],
-    )
-    assert missing == ["你已經寫出「要分享」；現在想想，是故事裡哪一件事讓你有這個想法？"]
-    assert suggestions == ["請回到 I 體會段，想一想：故事裡哪一件事讓你想到要分享？"]
-    reply = format_control_feedback_reply(
-        ok=False,
-        missing=missing,
-        suggestions=suggestions,
-        stage="I",
-        praise="你已經寫出要分享的想法。",
-        student_draft="我學到要分享。",
-    )
-    assert f"可以這樣修改：\n{suggestions[0]}" in reply
-    assert "自己的經驗" not in reply
 
 
-def test_i_vague_reason_asks_for_story_evidence_not_life_experience():
-    missing, suggestions = align_i_feedback_to_rubric(
-        stage="I",
-        book_pack=orid.BOOK_PACK_BY_WEEK[1],
-        student_text="我學到要分享，因為分享比較好。",
-        missing=["這個理由不夠清楚。"],
-        suggestions=["請補上自己的經驗。"],
-    )
-    assert "找一件書裡發生的事" in missing[0]
-    assert "哪一件事能支持" in suggestions[0]
-    assert "自己的經驗" not in " ".join(missing + suggestions)
 
 
-def test_i_fabricated_support_keeps_lesson_and_requests_real_scene():
-    draft = "我學到要幫助別人，因為阿松爺爺送小朋友回家。"
-    missing, suggestions = align_i_feedback_to_rubric(
-        stage="I",
-        book_pack=orid.BOOK_PACK_BY_WEEK[1],
-        student_text=draft,
-        missing=["「阿松爺爺送小朋友回家」不是書裡發生的事。"],
-        suggestions=["請補上自己的經驗。"],
-    )
-
-    assert missing == [
-        "「阿松爺爺送小朋友回家」不是書裡發生的事；你寫的「要幫助別人」可以保留。"
-    ]
-    assert suggestions == [
-        "請回到 I 體會段，先選一個書裡真的畫面，再說它為什麼讓你想到要幫助別人。"
-    ]
 
 
 def test_locked_i_grounding_prompt_reaches_third_card_verbatim():
@@ -556,19 +292,6 @@ def test_d_semantic_rubric_is_not_overridden_by_keyword_pass_bar():
 
     draft = "如果下次同學想借我的彩色筆，我會先問他需要哪一支，再借給他用。"
     assert d_draft_meets_pass_bar(draft)
-    ok, missing, suggestions, _example, meta = orid._maybe_promote_o_pass(
-        stage="D",
-        student_text=draft,
-        ok=False,
-        missing=["如果做不到，你會怎麼辦？"],
-        suggestions=["再補一個提醒自己的方法。"],
-        example=None,
-        rubric_meta={"rubric_focus": "D1", "rubric_level_estimate": {"D1": "2 接近"}},
-    )
-    assert ok is False
-    assert missing == ["如果做不到，你會怎麼辦？"]
-    assert suggestions == ["再補一個提醒自己的方法。"]
-    assert meta["rubric_level_estimate"]["D1"] == "2 接近"
 
 
 @pytest.mark.parametrize(
@@ -620,19 +343,6 @@ def test_d_household_actions_are_not_promoted_by_keyword_list(draft):
     from app.prompts.policy.feedback_focus import d_draft_meets_pass_bar
 
     assert d_draft_meets_pass_bar(draft)
-    ok, missing, suggestions, _example, meta = orid._maybe_promote_o_pass(
-        stage="D",
-        student_text=draft,
-        ok=False,
-        missing=["請補上第一個小動作。"],
-        suggestions=["下次你會怎麼做？"],
-        example=None,
-        rubric_meta={"rubric_focus": "D1", "rubric_level_estimate": {"D1": "2 接近"}},
-    )
-    assert ok is False
-    assert missing == ["請補上第一個小動作。"]
-    assert suggestions == ["下次你會怎麼做？"]
-    assert meta["rubric_level_estimate"]["D1"] == "2 接近"
 
 
 @pytest.mark.parametrize("draft", [
@@ -652,43 +362,36 @@ def test_d_action_verb_in_situation_does_not_make_vague_plan_pass():
     assert not d_draft_meets_pass_bar("下次同學想借我的彩色筆，我會努力改進。")
 
 
-@pytest.mark.parametrize("draft", [
-    "我要更好。",
-    "以後我會努力。",
-    "下次我要改進。",
-    "我要多體諒家人。",
-])
-def test_d_empty_wish_guard_rejects_only_unmistakable_empty_wishes(draft):
-    ok, missing, suggestions, _example, meta = orid._enforce_d_empty_wish_guard(
+
+
+
+
+def test_genai_d_off_theme_keeps_the_model_sentences():
+    draft = "每天放學後，我會練習投籃二十分鐘。"
+    model_missing = ["你寫的是放學後去投籃，這次的故事比較在說家裡的事。"]
+    model_suggestions = ["如果是在家裡，你會先幫誰做一件什麼小事？"]
+    ok, missing, suggestions, example, meta = orid._enforce_d_theme_alignment(
         stage="D",
         student_text=draft,
+        book_pack=orid.BOOK_PACK_BY_WEEK[3],
         ok=True,
-        missing=[],
-        suggestions=[],
-        example=None,
-        rubric_meta={"rubric_focus": "D1", "rubric_level_estimate": {"D1": "3 達標"}},
+        missing=model_missing,
+        suggestions=model_suggestions,
+        example="以後遇到＿＿時，我會＿＿。",
+        rubric_meta={
+            "rubric_focus": "D1",
+            "rubric_level_estimate": {"D1": "3 達標"},
+            "d_action_assessment": {"theme_aligned": False},
+        },
+        keep_model_sentences=True,
     )
+
     assert ok is False
-    assert missing and suggestions
-    assert meta["rubric_level_estimate"]["D1"] == "1 起步"
-    assert meta["d_empty_wish_guard"] is True
-
-
-def test_d_empty_wish_feedback_reuses_students_own_idea():
-    draft = "以後我要多體諒家人。"
-    _ok, missing, suggestions, _example, _meta = orid._enforce_d_empty_wish_guard(
-        stage="D",
-        student_text=draft,
-        ok=True,
-        missing=[],
-        suggestions=[],
-        example=None,
-        rubric_meta={"rubric_focus": "D1", "rubric_level_estimate": {"D1": "3 達標"}},
-    )
-
-    assert "多體諒家人" in missing[0]
-    assert "多體諒家人" in suggestions[0]
-    assert "先做什麼" in suggestions[0]
+    assert missing == model_missing
+    assert suggestions == model_suggestions
+    assert example == "以後遇到＿＿時，我會＿＿。"
+    assert meta["rubric_level_estimate"]["D1"] == "2 接近"
+    assert meta["d_theme_alignment_guard"] is True
 
 
 def test_d_week3_concrete_but_off_theme_action_is_not_passed():
@@ -838,31 +541,11 @@ def test_d_theme_policy_feedback_is_locked_before_generic_revision_scrub():
     )
 
     assert ok is False
-    assert orid._d_policy_feedback_is_locked("D", meta) is True
     assert "練習彈鋼琴" in missing[0]
     assert "為家人主動做哪一件事" in suggestions[0]
     assert example is None
 
 
-@pytest.mark.parametrize("draft", [
-    "午休時有人沒帶尺，我會把自己的尺放在桌子中間和他一起用。",
-    "洗衣機停了以後，我會把自己的衣服拿去陽台晾好。",
-    "報告前，我會先錄下自己的說法，聽一次後再修改不清楚的地方。",
-    "家人煮完晚餐時，我會跟他說謝謝。",
-])
-def test_d_semantic_level_three_accepts_novel_actions_without_keyword_whitelist(draft):
-    ok, missing, suggestions, _example, meta = orid._enforce_d_empty_wish_guard(
-        stage="D",
-        student_text=draft,
-        ok=True,
-        missing=[],
-        suggestions=[],
-        example=None,
-        rubric_meta={"rubric_focus": "D1", "rubric_level_estimate": {"D1": "3 達標"}},
-    )
-    assert ok is True
-    assert missing == suggestions == []
-    assert meta["rubric_level_estimate"]["D1"] == "3 達標"
 
 
 def test_d_level_two_preserves_models_single_semantic_revision_target():
@@ -1015,8 +698,8 @@ def test_wrong_food_noun_detected_for_sweet_potato():
 
 
 @pytest.mark.asyncio
-async def test_enforce_grounding_heuristic_overrides_llm_false_negative():
-    """LLM 若誤判 grounded=true，heuristic 仍須注入明確糾錯。"""
+async def test_enforce_grounding_does_not_override_semantic_checker_with_keyword_list():
+    """語意核對為 supported 時，不得再由名詞清單推翻。"""
     from app.routes.orid import BOOK_PACK_BY_WEEK
 
     book_pack = BOOK_PACK_BY_WEEK[1]
@@ -1033,11 +716,9 @@ async def test_enforce_grounding_heuristic_overrides_llm_false_negative():
         grounding_check=llm_ok,
     )
 
-    assert ok is False
-    blob = missing[0]
-    assert "地瓜" in blob
-    assert any(k in blob for k in ("柿子", "不是", "好像不是書裡"))
-    assert suggestions[0]
+    assert ok is True
+    assert missing == ["事件順序還能再清楚一點"]
+    assert suggestions == ["把先發生什麼、後來怎樣補出來。"]
 
 
 @pytest.mark.asyncio
@@ -1106,61 +787,9 @@ def test_grounding_checker_does_not_false_positive_on_correct_book_paraphrase():
     fabricated = "阿松爺爺一開始獨占所有柿子，然後爺爺去殺奶奶。"
     assert grounding.looks_likely_ungrounded_in_book(fabricated, book_pack, "O") is True
 
-    # Sharing stems/branches is in-book; do not keep false "not mentioned" claims.
-    m, s = grounding.scrub_false_book_absence_claims(
-        missing=["書裡沒有提到爺爺分享樹枝和柿子蒂。其實，爺爺是故意大口吃。"],
-        suggestions=["改成大口吃的情節"],
-        book_pack=book_pack,
-    )
-    assert "書裡沒有" not in m[0]
-    assert "柿子蒂" in m[0] or "樹枝" in m[0]
-    assert "藏" in s[0] or "倉庫" in s[0] or "柿子" in s[0]
 
 
-def test_rewrite_grounding_append_suggestions_replaces_not_appends():
-    from app.prompts.policy.feedback_focus import rewrite_grounding_append_suggestions
 
-    m, s, ex = rewrite_grounding_append_suggestions(
-        stage="O",
-        missing=["故事裡其實沒有阿松爺爺送花這件事。書裡說的是阿松爺爺的柿子很甜。"],
-        suggestions=[
-            "你可以在『阿松爺爺送了奶奶一朵花』後面加上他對柿子的處理，像是故意大口吃。"
-        ],
-        example="在『送花』後面加上＿＿＿。",
-    )
-    assert "後面加" not in s[0]
-    assert "改掉" in s[0] or "改寫" in s[0]
-    assert ex is None
-
-
-def test_scrub_praise_does_not_celebrate_fabricated_flower():
-    from app.prompts.policy.feedback_focus import scrub_praise_for_grounding_issue
-
-    book_pack = {
-        "characters": [
-            {"name": "阿松爺爺"},
-            {"name": "哎唷奶奶"},
-        ]
-    }
-    draft = "故事中，阿松爺爺送了奶奶一朵花"
-    bad_praise = (
-        "你有寫到「阿松爺爺」和「奶奶」，而且還把「送了奶奶一朵花」寫進來，"
-        "讓人知道這段是在說誰。"
-    )
-    missing = [
-        "這裡要把「一朵花」改成書裡真的發生的事，因為故事裡阿松爺爺是跟柿子有關，不是送花。"
-    ]
-    praise = scrub_praise_for_grounding_issue(
-        stage="O",
-        praise=bad_praise,
-        missing=missing,
-        student_text=draft,
-        book_pack=book_pack,
-    )
-    assert "一朵花" not in praise
-    assert "送了奶奶" not in praise
-    assert "阿松爺爺" in praise or "人物" in praise
-    assert "對回書裡" in praise or "真的發生" in praise
 
 
 def test_grounding_safe_praise_uses_student_sequence_word_without_praising_wrong_event():
@@ -1319,15 +948,6 @@ def test_normalize_feedback_focus_rewrites_vague_feedback():
     assert ("因為" in suggestions[0] and ("明白" in suggestions[0] or "學到" in suggestions[0] or "提醒" in suggestions[0]))
 
 
-def test_feedback_narration_validation_requires_three_sections():
-    ok_text = (
-        "你已經做到：\n有提到故事角色。\n\n"
-        "你可以再加強：\n補一個原因。\n\n"
-        "試試看這樣寫：\n我覺得……，因為……"
-    )
-    bad_text = "你寫得不錯，請再補充內容。"
-    assert orid._looks_valid_feedback_narration(ok_text) is True
-    assert orid._looks_valid_feedback_narration(bad_text) is False
 
 
 def test_scaffold_guard_rejects_full_answer():
@@ -1342,199 +962,12 @@ def test_scaffold_guard_allows_blank_scaffold():
     assert scaffold_feedback_example("R", example) == example
 
 
-def test_maybe_demote_o_rejects_one_isolated_material_aligned_event():
-    draft = "故事中，阿松爺爺不願意分享柿子。"
-    ok, missing, sug, ex, meta = orid._maybe_demote_o_thin_pass(
-        stage="O",
-        student_text=draft,
-        ok=True,
-        missing=[],
-        suggestions=[],
-        example=None,
-        rubric_meta={"rubric_focus": "O1", "rubric_level_estimate": {"O1": "3 達標"}},
-    )
-    assert ok is False
-    assert meta.get("rubric_level_demoted") is True
-    assert missing
-    assert sug
 
 
-def test_unified_short_answers_use_content_not_word_count_without_keyword_demoting_d():
-    from app.prompts.policy.feedback_focus import (
-        d_draft_meets_pass_bar,
-        i_draft_meets_pass_bar,
-        r_draft_meets_pass_bar,
-    )
-
-    r_thin = "我覺得很生氣，因為他都故意不分享柿子"
-    i_thin = "這個故事讓我學到我應該大方一點，不要像阿松爺爺這樣小氣。"
-    d_thin = "以後如果我遇到別人需要幫忙，我會去幫忙。"
-
-    assert r_draft_meets_pass_bar(r_thin) is True
-    assert i_draft_meets_pass_bar(i_thin) is False
-    assert d_draft_meets_pass_bar(d_thin) is False
-
-    r_ok, r_missing, r_sug, *_ = orid._maybe_demote_o_thin_pass(
-        stage="R",
-        student_text=r_thin,
-        ok=True,
-        missing=[],
-        suggestions=[],
-        example=None,
-        rubric_meta={"rubric_focus": "R1", "rubric_level_estimate": {"R1": "3 達標"}},
-    )
-    assert r_ok is True
-    assert r_missing == r_sug == []
-
-    i_ok, i_missing, i_sug, _ex, i_meta = orid._maybe_demote_o_thin_pass(
-        stage="I",
-        student_text=i_thin,
-        ok=True,
-        missing=[],
-        suggestions=[],
-        example=None,
-        rubric_meta={"rubric_focus": "I1", "rubric_level_estimate": {"I1": "3 達標"}},
-    )
-    assert i_ok is False
-    assert i_meta.get("rubric_level_demoted") is True
-    assert i_missing and i_sug
-
-    d_semantic_ok, d_missing, d_sug, *_ = orid._maybe_demote_o_thin_pass(
-        stage="D",
-        student_text=d_thin,
-        ok=True,
-        missing=[],
-        suggestions=[],
-        example=None,
-        rubric_meta={"rubric_focus": "D1", "rubric_level_estimate": {"D1": "3 達標"}},
-    )
-    assert d_semantic_ok is True
-    assert d_missing == d_sug == []
-
-    r_ok = (
-        "我覺得阿松爺爺很讓人生氣，因為他故意在大家面前大口吃甜柿子，"
-        "還把柿子藏進倉庫，不願意分享。"
-    )
-    i_ok = (
-        "我學到分享比獨占更好，因為阿松爺爺後來砍了樹只剩樹樁才後悔，"
-        "最後大家一起撒種子才比較開心。"
-    )
-    d_ok = (
-        "下次如果同學想借我的文具，我會先問清楚他要做什麼，"
-        "再決定怎麼一起用，不會自己獨占。"
-    )
-    assert r_draft_meets_pass_bar(r_ok) is True
-    assert i_draft_meets_pass_bar(i_ok) is True
-    assert d_draft_meets_pass_bar(d_ok) is True
-    for stage, draft, key in (("R", r_ok, "R1"), ("I", i_ok, "I1")):
-        ok, *_rest = orid._maybe_demote_o_thin_pass(
-            stage=stage,
-            student_text=draft,
-            ok=True,
-            missing=[],
-            suggestions=[],
-            example=None,
-            rubric_meta={"rubric_focus": key, "rubric_level_estimate": {key: "3 達標"}},
-        )
-        assert ok is True, stage
 
 
-def test_maybe_promote_ri_pass_bar_stops_ghost_wall_without_keyword_promoting_d():
-    """R/I/D drafts that already meet the rubric pass bar should auto-pass
-    even if the LLM under-rated them (same safety net as O)."""
-    from app.prompts.policy.feedback_focus import r_draft_meets_pass_bar
-
-    # Real classroom-style R draft that previously looped on 「再補大口吃」
-    r_draft = (
-        "我覺得爺爺很小氣，因為阿松爺爺明明有甜柿子，卻一直自己吃，"
-        "還故意在大家面前大口吃，這樣讓我覺得心情很糟"
-    )
-    assert r_draft_meets_pass_bar(r_draft) is True
-
-    r_ok, r_missing, r_sug, r_ex, r_meta = orid._maybe_promote_o_pass(
-        stage="R",
-        student_text=r_draft,
-        ok=False,
-        missing=["可以再多寫一點書裡那一幕，像是他「故意在大家面前大口吃甜柿子」這個畫面。"],
-        suggestions=["你可以接著寫：「因為他 _ _ _ ，所以我覺得 _ _ _ 。」"],
-        example="我覺得＿＿，因為＿＿。",
-        rubric_meta={"rubric_focus": "R1", "rubric_level_estimate": {"R1": "2 接近"}},
-    )
-    assert r_ok is True
-    assert r_missing == []
-    assert r_sug == []
-    assert r_ex is None
-    assert r_meta.get("rubric_level_promoted") is True
-    assert r_meta.get("rubric_level_estimate", {}).get("R1") == "3 達標"
-
-    # A concise R can pass when it already contains a feeling and a story event
-    # as its reason; sentence length is not a rubric criterion.
-    r_thin = "我覺得很生氣，因為他都故意不分享柿子"
-    thin_ok, *_ = orid._maybe_promote_o_pass(
-        stage="R",
-        student_text=r_thin,
-        ok=False,
-        missing=["再補畫面"],
-        suggestions=["哪一幕？"],
-        example=None,
-        rubric_meta={"rubric_focus": "R1", "rubric_level_estimate": {"R1": "2 接近"}},
-    )
-    assert thin_ok is True
-
-    i_ok_draft = (
-        "我學到分享比獨占更好，因為阿松爺爺後來砍了樹只剩樹樁才後悔，"
-        "最後大家一起撒種子才比較開心。"
-    )
-    d_ok_draft = (
-        "下次如果同學想借我的文具，我會先問清楚他要做什麼，"
-        "再決定怎麼一起用，不會自己獨占。"
-    )
-    for stage, draft, key in (("I", i_ok_draft, "I1"),):
-        ok, missing, sug, ex, meta = orid._maybe_promote_o_pass(
-            stage=stage,
-            student_text=draft,
-            ok=False,
-            missing=["請再補一點"],
-            suggestions=["可以再具體一點"],
-            example=None,
-            rubric_meta={"rubric_focus": key, "rubric_level_estimate": {key: "2 接近"}},
-        )
-        assert ok is True, stage
-        assert missing == [] and sug == []
-        assert meta.get("rubric_level_promoted") is True
-
-    d_ok, d_missing, d_sug, _d_ex, d_meta = orid._maybe_promote_o_pass(
-        stage="D",
-        student_text=d_ok_draft,
-        ok=False,
-        missing=["請再補一點"],
-        suggestions=["可以再具體一點"],
-        example=None,
-        rubric_meta={"rubric_focus": "D1", "rubric_level_estimate": {"D1": "2 接近"}},
-    )
-    assert d_ok is False
-    assert d_missing == ["請再補一點"]
-    assert d_sug == ["可以再具體一點"]
-    assert d_meta.get("rubric_level_promoted") is None
 
 
-def test_scrub_revision_prompts_already_in_draft_rewrites_loop():
-    from app.prompts.policy.feedback_focus import scrub_revision_prompts_already_in_draft
-
-    draft = (
-        "我覺得爺爺很小氣，因為阿松爺爺明明有甜柿子，卻一直自己吃，"
-        "還故意在大家面前大口吃，這樣讓我覺得心情很糟"
-    )
-    missing = ["這一段可以再多寫「故意在大家面前大口吃」這個畫面。"]
-    suggestions = ["把「故意在大家面前大口吃」再寫清楚一點。"]
-    new_m, new_s, new_ex = scrub_revision_prompts_already_in_draft(
-        "R", draft, missing, suggestions, "我覺得＿＿，因為＿＿。"
-    )
-    assert "故意在大家面前大口吃" not in new_m[0] or "不必" in new_m[0] or "已經" in new_m[0]
-    assert "故意在大家面前大口吃" not in new_s[0]
-    # Must not keep asking to fill the same blank template as the only tip
-    assert new_m[0] != missing[0]
-    assert new_s[0] != suggestions[0]
 
 
 def test_orid_rubric_level_controls_ok_without_sel_override():
@@ -1579,60 +1012,6 @@ def test_primary_rubric_level_fallback_sets_level_for_non_empty_text():
     assert out["rubric_level_fallback"] is True
 
 
-def test_character_alias_only_correction_is_not_grounding_failure_for_three_books():
-    cases = [
-        (
-            1,
-            "故事中，阿松爺爺一開始不分享柿子，後來奶奶和孩子們用柿子蒂玩陀螺，最後阿松爺爺看到樹被砍掉，很難過。",
-            "這裡的「奶奶」可以寫得更精確，書裡叫做「哎唷奶奶」。",
-        ),
-        (
-            3,
-            "故事中，爸爸和兩個孩子一直叫媽媽做家事，後來媽媽離開家，最後爸爸和孩子開始幫忙做家事。",
-            "這裡的「爸爸」和「媽媽」可以寫得更精確，書裡叫做「朱先生」和「朱太太」。",
-        ),
-        (
-            5,
-            "故事中，獅子一開始不會寫字，後來請動物幫忙寫信，最後母獅子陪他開始學認字。",
-            "這裡的「動物」可以寫得更精確，書裡有猴子等動物。",
-        ),
-    ]
-
-    for week, draft, missing in cases:
-        ok, cleaned_missing, cleaned_suggestions = orid._scrub_character_alias_only_feedback(
-            stage="O",
-            student_text=draft,
-            book_pack=orid.BOOK_PACK_BY_WEEK[week],
-            ok=True,
-            missing=[missing],
-            suggestions=["請把角色名字改成書裡的全名。"],
-        )
-
-        assert ok is True
-        assert cleaned_missing == []
-        assert cleaned_suggestions == []
-
-
-def test_character_alias_only_correction_can_promote_pass_ready_o_draft():
-    draft = (
-        "故事中，阿松爺爺一開始都不分享柿子，後來他給奶奶一些柿子蒂和落葉，"
-        "又把柿子藏進倉庫，最後看到樹被砍光，才知道自己做錯了。"
-    )
-
-    ok, missing, suggestions = orid._scrub_character_alias_only_feedback(
-        stage="O",
-        student_text=draft,
-        book_pack=orid.BOOK_PACK_BY_WEEK[1],
-        ok=False,
-        missing=["這裡的「奶奶」要改成書裡的名字「哎唷奶奶」。"],
-        suggestions=["請回到 O 觀察格，把「奶奶」改成「哎唷奶奶」。"],
-    )
-
-    assert ok is True
-    assert missing == []
-    assert suggestions == []
-
-
 @pytest.mark.asyncio
 async def test_enforce_feedback_book_grounding_prioritizes_wrong_book_content():
     book_pack = {
@@ -1664,36 +1043,8 @@ async def test_enforce_feedback_book_grounding_prioritizes_wrong_book_content():
     assert suggestions[0]
 
 
-def test_concrete_wrong_book_action_has_deterministic_feedback():
-    book_pack = orid.BOOK_PACK_BY_WEEK[1]
-    draft = "故事裡，獅子很生氣，打了其他動物，後來他知道這樣不對。"
-
-    first = orid._deterministic_concrete_grounding_feedback(
-        student_text=draft,
-        book_pack=book_pack,
-        stage="O",
-    )
-    second = orid._deterministic_concrete_grounding_feedback(
-        student_text=draft,
-        book_pack=book_pack,
-        stage="O",
-    )
-
-    assert first is not None
-    assert second == first
-    assert "打" in first[0]
-    assert any(cue in first[0] for cue in ("不是書裡", "和書裡發生的事情不一樣"))
-    assert "書裡" in first[1]
 
 
-def test_concrete_grounding_lock_ignores_supported_book_action():
-    result = orid._deterministic_concrete_grounding_feedback(
-        student_text="阿松爺爺一急之下砍了柿子樹，後來看到樹樁很難過。",
-        book_pack=orid.BOOK_PACK_BY_WEEK[1],
-        stage="O",
-    )
-
-    assert result is None
 
 
 def test_semantic_material_lock_names_real_experiment_wrong_action():
@@ -1763,27 +1114,6 @@ def test_semantic_material_lock_rejects_real_experiment_vague_references():
     assert feedback is not None
     assert "只分享一些無聊的東西" in feedback[0]
     assert "哎唷奶奶" not in feedback[0]
-
-
-def test_o_reference_clarity_gate_catches_real_experiment_text_without_model_help():
-    draft = (
-        "我看到阿松爺爺一直不分享，只分享一些無聊的東西，但是他看到哎唷奶奶"
-        "把那些無聊的東西變得有趣之後，他就開始一直把東西收起來。"
-    )
-    check = orid._o_reference_clarity_check(student_text=draft, stage="O")
-
-    assert check is not None
-    assert check.status == "ambiguous"
-    assert check.grounded is False
-    assert check.unsupported_span == "一些無聊的東西"
-
-
-def test_o_reference_clarity_gate_allows_concrete_objects_and_non_o_reflection():
-    concrete_o = "阿松爺爺只給奶奶柿子蒂和葉子等東西，後來又把柿子藏起來。"
-    reflective_r = "我覺得那些無聊的東西變有趣很神奇，因為奶奶很有創意。"
-
-    assert orid._o_reference_clarity_check(student_text=concrete_o, stage="O") is None
-    assert orid._o_reference_clarity_check(student_text=reflective_r, stage="R") is None
 
 
 @pytest.mark.asyncio
@@ -1865,15 +1195,17 @@ def test_semantic_material_lock_rejects_checker_invented_evidence():
 
 
 @pytest.mark.asyncio
-async def test_semantic_checker_conflict_overrides_pass_without_keyword_corroboration():
+async def test_semantic_checker_conflict_does_not_replace_model_feedback():
     draft = "奶奶拿柿子蒂來投籃，阿松爺爺看到後把東西收起來。"
+    model_missing = ["你寫到柿子蒂，但玩法還要再對一下書裡那一幕。"]
+    model_suggestions = ["哎唷奶奶和孩子們是拿柿子蒂做什麼？"]
     ok, missing, suggestions = await orid._enforce_feedback_book_grounding(
         draft,
         orid.BOOK_PACK_BY_WEEK[1],
         "O",
         True,
-        [],
-        [],
+        model_missing,
+        model_suggestions,
         use_llm_checker=True,
         grounding_check=orid.BookGroundingCheck(
             grounded=False,
@@ -1884,9 +1216,9 @@ async def test_semantic_checker_conflict_overrides_pass_without_keyword_corrobor
         ),
     )
 
-    assert ok is False
-    assert "拿柿子蒂來投籃" in missing[0]
-    assert suggestions
+    assert ok is True
+    assert missing == model_missing
+    assert suggestions == model_suggestions
 
 
 @pytest.mark.parametrize(
@@ -1903,11 +1235,6 @@ def test_material_aligned_paraphrases_are_not_locked_as_wrong_nouns(draft):
     book_pack = orid.BOOK_PACK_BY_WEEK[1]
 
     assert grounding.extract_wrong_concrete_noun(draft, book_pack) == ""
-    assert orid._deterministic_concrete_grounding_feedback(
-        student_text=draft,
-        book_pack=book_pack,
-        stage="O",
-    ) is None
 
 
 @pytest.mark.parametrize(
@@ -1919,7 +1246,7 @@ def test_material_aligned_paraphrases_are_not_locked_as_wrong_nouns(draft):
     ],
 )
 def test_o_level_three_rejects_one_isolated_material_aligned_event(draft):
-    assert orid.stage_draft_meets_pass_bar("O", draft) is False
+    assert stage_draft_meets_pass_bar("O", draft) is False
 
 
 @pytest.mark.parametrize(
@@ -1930,26 +1257,13 @@ def test_o_level_three_rejects_one_isolated_material_aligned_event(draft):
     ],
 )
 def test_o_level_three_accepts_related_facts_or_visible_development(draft):
-    assert orid.stage_draft_meets_pass_bar("O", draft) is True
+    assert stage_draft_meets_pass_bar("O", draft) is True
 
 
-@pytest.mark.parametrize("noun", ["地瓜", "番薯", "蕃薯"])
-def test_wrong_story_food_is_still_detected_without_greedy_chinese_slicing(noun):
-    book_pack = orid.BOOK_PACK_BY_WEEK[1]
-    draft = f"後來阿婆跟他要了個{noun}，他就送給阿婆了。"
-
-    assert grounding.extract_wrong_concrete_noun(draft, book_pack) == noun
-    feedback = orid._deterministic_concrete_grounding_feedback(
-        student_text=draft,
-        book_pack=book_pack,
-        stage="O",
-    )
-    assert feedback is not None
-    assert noun in feedback[0]
 
 
 @pytest.mark.asyncio
-async def test_enforce_feedback_book_grounding_llm_first_natural_correction(monkeypatch):
+async def test_enforce_feedback_book_grounding_uses_semantic_contradiction(monkeypatch):
     book_pack = orid.BOOK_PACK_BY_WEEK[1]
 
     async def fake_check(**kwargs):
@@ -1959,14 +1273,7 @@ async def test_enforce_feedback_book_grounding_llm_first_natural_correction(monk
             reason="教材未記載此事件",
         )
 
-    async def fake_natural(**kwargs):
-        return (
-            "你寫的「爺爺吃奶奶」好像不是這本書裡的事，書裡比較像是阿松爺爺後來砍了柿子樹。",
-            "你覺得書裡哪一件事，讓你想到要做好人？",
-        )
-
     monkeypatch.setattr(orid, "_llm_book_grounding_check", fake_check)
-    monkeypatch.setattr(orid, "_llm_natural_grounding_correction", fake_natural)
 
     ok, missing, suggestions = await orid._enforce_feedback_book_grounding(
         "要做好人，因為爺爺吃奶奶",
@@ -1980,13 +1287,14 @@ async def test_enforce_feedback_book_grounding_llm_first_natural_correction(monk
             grounded=False,
             unsupported_span="爺爺吃奶奶",
             reason="教材未記載此事件",
+            status="contradicted",
+            material_evidence=book_pack["key_events"][0],
         ),
     )
 
-    assert ok is False
-    assert "爺爺吃奶奶" in missing[0]
-    assert "對齊教材" not in missing[0]
-    assert "？" in suggestions[0]
+    assert ok is True
+    assert missing == ["還沒連回故事"]
+    assert suggestions == ["想想故事"]
 
 
 @pytest.mark.asyncio

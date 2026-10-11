@@ -118,7 +118,7 @@ def normalize_match_text(text: str) -> str:
     t = re.sub(r"[\s「」『』\"'，。！？：；、（）()\[\]{}、]+", "", (text or "").strip())
     return (
         t.replace("\u4f54", "\u5360")
-        .replace("哎喲", "哎唷")
+        .replace("哎唷", "哎喲")
         .replace("樹椿", "樹樁")
     )
 
@@ -648,24 +648,6 @@ def looks_likely_ungrounded_in_book(
     return True
 
 
-_ABSENCE_CLAIM_MARKERS = (
-    "書裡沒有",
-    "書中沒有",
-    "沒有提到",
-    "沒提到",
-    "不在書裡",
-    "書裡沒提到",
-)
-# Canonically present gifts/objects in week-1 story (never "not in book")
-_WEEK1_CANONICAL_GIVEABLES = (
-    "柿子蒂",
-    "樹枝",
-    "葉子",
-    "枯葉",
-    "種子",
-)
-
-
 def _book_reference_mentions(book_pack: Optional[dict[str, Any]], term: str) -> bool:
     if not isinstance(book_pack, dict) or not term:
         return False
@@ -673,111 +655,9 @@ def _book_reference_mentions(book_pack: Optional[dict[str, Any]], term: str) -> 
     return term in (blob or "")
 
 
-_CUT_TREE_DRAFT_CUES = (
-    "砍光",
-    "砍掉",
-    "砍樹",
-    "樹都砍",
-    "樹都被砍",
-    "都被砍",
-    "砍了樹",
-    "把樹砍",
-    "樹砍",
-    "樹被砍",
-)
 
 
-def student_has_book_aligned_cut_tree_paraphrase(
-    student_text: str, book_pack: Optional[dict[str, Any]]
-) -> bool:
-    """True when the draft paraphrases the in-book tree-cutting climax (砍樹／樹樁)."""
-    t = normalize_match_text(student_text)
-    if not t or not isinstance(book_pack, dict):
-        return False
-    has_cut_cue = any(c in t for c in _CUT_TREE_DRAFT_CUES) or ("砍" in t and "樹" in t)
-    if not has_cut_cue:
-        return False
-    return _book_reference_mentions(book_pack, "砍") and _book_reference_mentions(book_pack, "樹")
 
-
-def _missing_denies_cut_tree_paraphrase(missing_line: str) -> bool:
-    """Feedback that treats a valid in-book 砍樹 paraphrase as a factual error."""
-    m = (missing_line or "").strip()
-    if not m:
-        return False
-    cut_in_missing = any(c in m for c in _CUT_TREE_DRAFT_CUES) or ("砍" in m and "樹" in m)
-    if not cut_in_missing:
-        return False
-    contrast_cues = (
-        "書裡其實",
-        "不是書裡",
-        "不在書裡",
-        "好像不是",
-        "不太對",
-        "不像是書",
-        "書裡沒有",
-        "沒有這件事",
-        "改成書裡",
-        "對回書裡",
-        "書裡後來",
-        "書裡是後來",
-        "書裡說的是",
-    )
-    return any(c in m for c in contrast_cues)
-
-
-def scrub_false_book_absence_claims(
-    *,
-    missing: list[str],
-    suggestions: list[str],
-    book_pack: Optional[dict[str, Any]],
-    student_text: str = "",
-) -> tuple[list[str], list[str]]:
-    """Drop / rewrite feedback that falsely says canonical book items are absent.
-
-    Example false claim: 「書裡沒有提到爺爺分享樹枝和柿子蒂」— both items are in-book.
-    """
-    if not missing:
-        return missing, suggestions
-    m0 = (missing[0] or "").strip()
-    if not m0:
-        return missing, suggestions
-
-    # False denial of tree-cutting paraphrases — check before absence-marker gate.
-    if student_text and student_has_book_aligned_cut_tree_paraphrase(student_text, book_pack):
-        if _missing_denies_cut_tree_paraphrase(m0):
-            return [], suggestions
-    cut_paraphrase_cues = (
-        "砍光",
-        "砍掉",
-        "砍樹",
-        "樹都砍",
-        "樹都被砍",
-        "都被砍光",
-        "把自己的樹",
-        "把樹砍",
-        "樹砍",
-    )
-    if any(c in m0 for c in cut_paraphrase_cues) and _book_reference_mentions(
-        book_pack, "砍"
-    ) and _book_reference_mentions(book_pack, "樹"):
-        return [], suggestions
-
-    if not any(tok in m0 for tok in _ABSENCE_CLAIM_MARKERS):
-        return missing, suggestions
-
-    hit_terms = [
-        t for t in _WEEK1_CANONICAL_GIVEABLES if t in m0 and _book_reference_mentions(book_pack, t)
-    ]
-    if hit_terms:
-        soft = (
-            "書裡確實有阿松爺爺把柿子蒂、葉子或樹枝給哎唷奶奶和小朋友；"
-            "你可以再說清楚：甜柿子當時還多半藏著，他先給出去的比較像蒂／葉子／樹枝。"
-        )
-        sug = "試著補一句：他給了柿子蒂或樹枝之後，甜柿子怎麼了？（例如藏進倉庫）"
-        return [soft], [sug]
-
-    return missing, suggestions
 
 
 # Near-synonym clusters: student wording vs book wording must not be treated as factual error.
@@ -801,7 +681,7 @@ _BOOK_SYNONYM_GROUPS: tuple[tuple[str, ...], ...] = (
     ("大口吃", "大口", "狼吞虎嚥"),
     ("藏進倉庫", "藏到倉庫", "藏進", "藏到屋後", "藏起來"),
     ("柿子蒂", "蒂"),
-    ("哎唷奶奶", "哎喲奶奶", "阿婆", "奶奶"),
+    ("哎喲奶奶", "哎唷奶奶", "阿婆", "奶奶"),
     ("用柿子蒂打陀螺", "拿柿子蒂打陀螺", "柿子蒂當陀螺", "柿子蒂陀螺"),
     ("把葉子給大家", "拿葉子給大家", "給小朋友葉子", "把剩下的葉子提供給小朋友"),
 )
@@ -896,57 +776,4 @@ def student_uses_supported_event_paraphrase(
     return False
 
 
-_SYNONYM_MISMATCH_CUES: tuple[str, ...] = (
-    "不太一樣",
-    "稍微不太一樣",
-    "不是書裡",
-    "書裡沒有",
-    "書中沒有",
-    "跟書裡",
-    "書裡說的是",
-    "書裡比較像是",
-    "書裡實際",
-    "書裡真正",
-    "改成書裡",
-    "對回書裡",
-    "書裡真的",
-    "再對回",
-)
 
-
-def scrub_false_synonym_mismatch_claims(
-    *,
-    missing: list[str],
-    suggestions: list[str],
-    book_pack: Optional[dict[str, Any]],
-    student_text: str = "",
-) -> tuple[list[str], list[str]]:
-    """Drop feedback that nitpicks in-book near-synonyms as factual errors.
-
-    Example false claim: student「一直自己吃」vs book「一直獨占」— same selfishness beat.
-    """
-    if not missing or not student_text:
-        return missing, suggestions
-    m0 = (missing[0] or "").strip()
-    if not m0:
-        return missing, suggestions
-    draft = normalize_match_text(student_text)
-    normalized_missing = normalize_match_text(m0)
-    for group in _event_paraphrase_groups_for_book(book_pack):
-        draft_hits = [t for t in group if normalize_match_text(t) in draft]
-        missing_hits = [t for t in group if normalize_match_text(t) in normalized_missing]
-        book_hits = [t for t in group if _book_reference_mentions(book_pack, t)]
-        explicit_mismatch = any(c in m0 for c in _SYNONYM_MISMATCH_CUES)
-        # A correction that quotes the student's wording and then substitutes a
-        # second term from the same in-book concept is itself evidence of a
-        # false synonym mismatch, even when the model invents a new phrase such
-        # as「這句不在書裡」. This removes dependence on an endless cue list.
-        same_concept_substitution = len(set(missing_hits)) >= 2
-        if (
-            draft_hits
-            and book_hits
-            and missing_hits
-            and (explicit_mismatch or same_concept_substitution)
-        ):
-            return [], []
-    return missing, suggestions

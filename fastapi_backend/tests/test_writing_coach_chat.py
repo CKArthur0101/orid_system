@@ -258,7 +258,7 @@ async def test_writing_coach_rejects_prompt_injection_text(
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_writing_coach_rejects_unsafe_text(
+async def test_writing_coach_accepts_rude_text_without_safety_record(
     test_client, db_session, authenticated_user
 ):
     session = await _make_session(
@@ -277,13 +277,11 @@ async def test_writing_coach_rejects_unsafe_text(
         },
         headers=authenticated_user["headers"],
     )
-    assert r.status_code == 400
-    assert "不要用傷人的話" in r.text
-    safety_event = (await db_session.execute(select(OridSafetyEvent))).scalars().one()
-    assert safety_event.level == 2
-    assert safety_event.category == "harassment"
-    assert safety_event.action == "block_and_rewrite"
-    assert len(safety_event.text_fingerprint) == 64
+    assert r.status_code != 400
+    assert "不要用傷人的話" not in r.text
+    assert "現在不能送出" not in r.text
+    safety_events = (await db_session.execute(select(OridSafetyEvent))).scalars().all()
+    assert safety_events == []
 
 
 @pytest.mark.asyncio(loop_scope="function")
