@@ -295,9 +295,14 @@ def build_synthesis_coach_system_prompt(
     reading_excerpt: Optional[str] = None,
     synthesis_clarify: bool = False,
     student_text: str = "",
+    material_mismatch_quote: str = "",
 ) -> str:
     """
     Week-2 synthesis: feedback on the student's integrated paragraph using Week-1 ORID slots as context.
+
+    material_mismatch_quote: the student's own sentence that the book checker
+    found to be clearly not in the book. Only the quote is passed, never the
+    book's answer, so the model can name the gap without spoiling the story.
     """
     labels = {"O": "O 客觀", "R": "R 感受", "I": "I 意義", "D": "D 行動"}
     lines: list[str] = []
@@ -305,7 +310,7 @@ def build_synthesis_coach_system_prompt(
         t = (week1_orid_lines.get(k) or "").strip()
         lines.append(f"- {labels[k]}：{t or '（尚未撰寫）'}")
     joined = "\n".join(lines)
-    hint = opening_hint or "先鎖定一段最想讀者跟上你的地方，再補一句銜接。"
+    hint = opening_hint or ""
     pasted = looks_like_pasted_stage_paragraphs(student_text, week1_orid_lines)
     abrupt_boundaries = [] if pasted else find_abrupt_orid_boundaries(student_text)
     hard_stitched_boundaries = abrupt_boundaries if len(abrupt_boundaries) >= 2 else []
@@ -317,6 +322,16 @@ def build_synthesis_coach_system_prompt(
         looks_pasted=pasted,
         hard_stitched_boundaries=hard_stitched_boundaries,
     )
+    quote = (material_mismatch_quote or "").strip()
+    if quote:
+        mismatch_block = (
+            "【教材核對結果】\n"
+            f"學生寫的「{quote}」在教材裡找不到，是明確寫錯的人物、物品或事件。\n"
+            "這一輪只談這一件。學生看得到的句子由你依這一篇來寫，不要複製這段說明，也不要每則都用同一句。\n"
+            "先肯定他另外寫到的地方，再指出上面那一句和故事對不上，最後只問一個問題，請他回想故事裡那一件事。"
+            "不要說出教材裡的正確名稱或後續情節。"
+        )
+        mid = f"{mid}\n\n{mismatch_block}" if mid else mismatch_block
     return format_synthesis_coach_playbook(
         week1_block=joined,
         book_context=book_context,

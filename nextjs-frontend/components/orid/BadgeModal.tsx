@@ -41,15 +41,7 @@ export function BadgeModal({ badgeId, bookId, week, onClose }: BadgeModalProps) 
         className="relative w-full max-w-[min(92vw,24rem)] max-h-[90dvh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="absolute inset-x-0 top-0 flex justify-around px-4 py-2 text-xl opacity-70 pointer-events-none select-none">
-          <span>🎉</span>
-          <span>✨</span>
-          <span>🌟</span>
-          <span>✨</span>
-          <span>🎉</span>
-        </div>
-
-        <div className="mt-4 flex justify-center">
+        <div className="flex justify-center">
           {imgBroken ? (
             <div className="flex h-24 w-24 items-center justify-center rounded-full bg-amber-50 text-2xl font-bold text-amber-800 ring-2 ring-amber-300">
               {fallbackLabel}

@@ -1,6 +1,7 @@
 import Image from "next/image";
 import { DilabLogo } from "@/components/orid/DilabLogo";
 import { DashboardWeekGrid } from "@/components/orid/DashboardWeekGrid";
+import { StudentHomeGreeting } from "@/components/orid/StudentHomeGreeting";
 import { DASHBOARD_ART } from "@/lib/orid-system-art";
 
 export default function StudentHomePage() {
@@ -8,12 +9,7 @@ export default function StudentHomePage() {
     <div className="orid-dashboard-page flex flex-1 flex-col gap-4 pb-6">
       <div className="kid-shell flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:gap-4 sm:px-5 sm:py-4">
         <DilabLogo height={40} className="self-start sm:shrink-0" />
-        <div>
-          <p className="text-base font-bold text-amber-950 sm:text-lg">嗨，歡迎回來！</p>
-          <p className="text-xs text-amber-900/65 sm:text-sm">
-            準備好今天的閱讀與反思了嗎？進入本週故事開始吧！
-          </p>
-        </div>
+        <StudentHomeGreeting />
       </div>
 
       <section>

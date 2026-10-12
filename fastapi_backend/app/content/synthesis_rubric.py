@@ -116,22 +116,143 @@ def first_synthesis_gap(levels: dict[str, Any] | None) -> str | None:
     return None
 
 
-def lock_synthesis_content_for_grounding(levels: dict[str, Any] | None) -> dict[str, int]:
-    """A material ambiguity or contradiction cannot earn content integration."""
-    normalized = normalize_synthesis_levels(levels)
-    normalized["content_integration"] = min(
-        normalized.get("content_integration", 2),
-        2,
+_PASS_NEXT_STEP = "可以保留現在的內容並儲存作品。"
+_PASS_DONE = "這次四個部分都已經完成，不需要再修改。"
+_PASS_PRAISE = "你有把故事、自己的想法、體會和行動寫進這篇。"
+_HEADINGS = (
+    "你已經做到：",
+    "你已經做到:",
+    "再想一想：",
+    "再想一想:",
+    "可以這樣修改：",
+    "可以這樣修改:",
+    "本階段完成：",
+    "本階段完成:",
+    "下一步：",
+    "下一步:",
+)
+_REVISION_HINTS = ("再補", "請回到", "還沒", "還可以補", "再修改", "先修改", "補上一")
+_DONE_HINTS = ("不需要", "不用再", "已經完成", "已完成", "都完成", "可以了")
+_SENTENCE_RE = re.compile(r"[^。！？!?\n]+[。！？!?]?")
+
+
+def _statement_sentences(text: str) -> list[str]:
+    body = text or ""
+    for heading in _HEADINGS:
+        body = body.replace(heading, "\n")
+    sentences: list[str] = []
+    for match in _SENTENCE_RE.finditer(body):
+        sentence = match.group(0).strip()
+        if not sentence:
+            continue
+        if sentence.endswith(("？", "?", "嗎")) or "嗎？" in sentence or "嗎?" in sentence:
+            continue
+        if any(hint in sentence for hint in _REVISION_HINTS):
+            continue
+        if sentence.strip("。！ ") == _PASS_NEXT_STEP.strip("。"):
+            continue
+        if not sentence.endswith(("。", "！")):
+            sentence = f"{sentence}。"
+        sentences.append(sentence)
+    return sentences
+
+
+def format_synthesis_pass_reply(model_reply: str | None) -> str:
+    """Turn a passed synthesis reply into an affirmation, with no revision questions."""
+    praise: list[str] = []
+    done: list[str] = []
+    for sentence in _statement_sentences(model_reply or ""):
+        if any(hint in sentence for hint in _DONE_HINTS):
+            done.append(sentence)
+        else:
+            praise.append(sentence)
+    praise_text = "".join(praise) or _PASS_PRAISE
+    done_text = "".join(done) or _PASS_DONE
+    return (
+        f"你已經做到：\n{praise_text}\n\n"
+        f"本階段完成：\n{done_text}\n\n"
+        f"下一步：\n{_PASS_NEXT_STEP}"
     )
-    return normalized
+
+
+_MISMATCH_SAID_CUES = (
+    "不太一樣",
+    "不一樣",
+    "對不上",
+    "故事裡沒有",
+    "書裡沒有",
+    "不在書",
+    "不是這樣",
+    "跟故事裡",
+    "和故事",
+    "跟書",
+    "和書",
+)
+
+
+def _reply_already_names_mismatch(text: str, span: str) -> bool:
+    """Keep the model's own wording when it already points at this sentence."""
+    if not any(cue in text for cue in _MISMATCH_SAID_CUES):
+        return False
+    if not span:
+        return False
+    if span in text:
+        return True
+    window = 6 if len(span) >= 6 else len(span)
+    return any(span[i : i + window] in text for i in range(0, len(span) - window + 1))
+
+
+def ensure_synthesis_mismatch_reply(model_reply: str | None, quote: str) -> str:
+    """Keep the model's sentences when they already name the mismatch.
+
+    A fixed card is only the backup for a reply that never says the sentence
+    differs from the story.
+    """
+    span = (quote or "").strip()
+    text = (model_reply or "").strip()
+    if not span:
+        return text
+    if text and _reply_already_names_mismatch(text, span):
+        return text
+    praise = ""
+    marker = "你已經做到："
+    if marker in text:
+        rest = text.split(marker, 1)[1]
+        for heading in ("再想一想：", "可以這樣修改：", "本階段完成：", "下一步："):
+            if heading in rest:
+                rest = rest.split(heading, 1)[0]
+        praise = "".join(
+            sentence
+            for sentence in _statement_sentences(rest)
+            if span in sentence or "你寫" in sentence
+        )
+    if not praise:
+        praise = f"你寫到「{span}」。"
+    return (
+        f"你已經做到：\n{praise}\n\n"
+        f"再想一想：\n你寫的「{span}」，跟故事裡發生的不太一樣喔。\n\n"
+        "可以這樣修改：\n你再想想看，故事裡發生的是哪一件事呢？用你自己的話，把這一句改一改就好。"
+    )
+
+
+def synthesis_visible_reply(model_reply: str | None, focus: str | None) -> str:
+    """Show the model's own sentences. A passed piece is affirmed instead of questioned."""
+    text = (model_reply or "").strip()
+    if focus is None:
+        if not text:
+            text = synthesis_fallback_reply(None)
+        return format_synthesis_pass_reply(text)
+    if text:
+        return text
+    return synthesis_fallback_reply(focus)
 
 
 def synthesis_fallback_reply(focus: str | None) -> str:
     if focus is None:
         return (
-            "你已經做到：\n你的文章已經把故事、想法、體會和行動清楚整合起來。\n"
-            "再想一想：\n這次四個部分都已經完成，不需要再修改。\n"
-            "可以這樣修改：\n可以保留現在的內容並儲存作品。"
+            "你已經做到：\n你的文章已經把故事、想法、體會和行動清楚整合起來。\n\n"
+            "本階段完成：\n這次四個部分都已經完成，不需要再修改。\n\n"
+            "下一步：\n可以保留現在的內容並儲存作品。"
         )
     guidance = {
         "content_integration": (

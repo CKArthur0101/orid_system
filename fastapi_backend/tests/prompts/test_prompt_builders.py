@@ -405,10 +405,18 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "一律使用「你」" in synthesis_system
     assert "測試學生" not in synthesis_system
     assert "test@example.com" not in synthesis_system
-    assert "先檢查段落銜接" in synthesis_system
+    assert "先檢查段落銜接" not in synthesis_system
+    assert "回到整合寫作格子" not in synthesis_system
+    assert "只鎖一個小目標" not in synthesis_system
+    assert "這一輪的唯一缺口就是這一件" in synthesis_system
     assert "你已經做到：" in synthesis_system
     assert "再想一想：" in synthesis_system
     assert "可以這樣修改：" in synthesis_system
+    assert "不要出現「老師」" in synthesis_system
+    assert "換一個比較溫和的詞" in synthesis_system
+    assert "不必刻意縮短" in synthesis_system
+    assert "本階段完成：" in synthesis_system
+    assert "不要出現問號" in synthesis_system
     assert "CASEL SEL rubric" in synthesis_system
     assert "SEL_SA" in synthesis_system
     assert "content_integration" in synthesis_system
@@ -417,11 +425,22 @@ def test_coach_and_checker_builders_keep_expected_sections():
     assert "硬串" in synthesis_system
     assert "串起來了" in synthesis_system
     assert '"rubric_levels"' in synthesis_system
-    assert "回到整合寫作格子" in synthesis_system
+    assert "不要使用固定套語" in synthesis_system
     # 可選 meta 仍會插入中段；預設不傳時僅有 playbook 內建「三段標題」與週一區塊，無【學生自填閱讀心得】中段
     assert "【學生自填閱讀心得" not in synthesis_system
     assert "【當前寫作階段】" not in synthesis_system
     assert "草稿看起來像是把上週幾段" not in synthesis_system
+
+    assert "【教材核對結果】" not in synthesis_system
+
+    syn_mismatch = build_synthesis_coach_system_prompt(
+        book_context=build_book_context_block(_book_pack()),
+        week1_orid_lines={"O": "他把柿子藏起來", "R": "", "I": "", "D": ""},
+        material_mismatch_quote="阿松爺爺把葡萄分給全班",
+    )
+    assert "【教材核對結果】" in syn_mismatch
+    assert "「阿松爺爺把葡萄分給全班」" in syn_mismatch
+    assert "這一輪只談這一件" in syn_mismatch
 
     syn_layered = build_synthesis_coach_system_prompt(
         book_context=build_book_context_block(_book_pack()),
@@ -754,5 +773,5 @@ def test_prompt_versions_cover_active_surfaces():
     }.issubset(PROMPT_VERSIONS.keys())
     assert PROMPT_VERSIONS["genai_feedback"] == "wf_v18"
     assert PROMPT_VERSIONS["feedback_narration"] == "fn_v12"
-    assert PROMPT_VERSIONS["synthesis_coach"] == "sc_v15"
+    assert PROMPT_VERSIONS["synthesis_coach"] == "sc_v20"
     assert PROMPT_VERSIONS["book_grounding_checker"] == "bgc_v3"

@@ -9,6 +9,7 @@ import { BadgeModal } from "@/components/orid/BadgeModal";
 import { FeedbackGuideCard } from "@/components/orid/FeedbackGuideCard";
 import { OridWeekHero } from "@/components/orid/OridWeekHero";
 import { OridPartnerMascot } from "@/components/orid/OridMascotImage";
+import { StudentChatAvatar } from "@/components/orid/StudentAvatarMark";
 import { PersimmonBullet } from "@/components/orid/PersimmonBullet";
 import { WritingPromptHelper } from "@/components/orid/WritingPromptHelper";
 import { getBookWeekArt } from "@/lib/orid-book-art";
@@ -35,7 +36,7 @@ import { ORID_UNLOCKED_WEEKS } from "@/lib/orid-week-access";
 import { ORID_STAGE_THEME } from "@/lib/orid-stage-theme";
 import { parseFeedbackNarration } from "@/lib/parse-feedback-narration";
 
-type ChatMsg = { role: "student" | "ai"; text: string; stage?: string };
+type ChatMsg = { role: "student" | "ai"; text: string; stage?: string; freshKey?: string };
 
 type StageKey = "O" | "R" | "I" | "D";
 type DraftKey = "d1" | "d2";
@@ -299,6 +300,10 @@ function toChatMsg(m: any): ChatMsg | null {
   const role: ChatMsg["role"] = m?.sender === "student" ? "student" : "ai";
   const stage = m?.stage ? String(m.stage) : undefined;
   return { role, text, stage };
+}
+
+function stripStudentDraftLabel(text: string): string {
+  return text.replace(/^\[[^\]]*(?:草稿|本段寫作|整合寫作)[^\]]*\]\s*\n?/, "");
 }
 
 function normalizeDraftKey(v: unknown, fallback: DraftKey): DraftKey {
@@ -1328,7 +1333,8 @@ export default function WeekBookPage() {
   function appendAiReply(text: unknown, stage?: string) {
     const reply = String(text ?? "").trim();
     if (!reply) return;
-    setMessages((prev) => [...prev, { role: "ai", text: reply, stage }]);
+    const freshKey = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setMessages((prev) => [...prev, { role: "ai", text: reply, stage, freshKey }]);
   }
 
   async function persistWritingSnapshot(
@@ -1352,6 +1358,8 @@ export default function WeekBookPage() {
     setFbLoading(true);
     setFbError(null);
     const draft: DraftKey = "d1";
+    const acceptedStudent = text;
+    setMessages((prev) => [...prev, { role: "student", text: acceptedStudent, stage }]);
 
     try {
       const r = await fetch("/api/orid/writing-coach/chat", {
@@ -1373,8 +1381,6 @@ export default function WeekBookPage() {
       if (!r.ok) throw new Error(formatApiError(r.status, raw, "回饋失敗"));
 
       const data = raw ? JSON.parse(raw) : {};
-      const acceptedStudent = `[${stage} 本段寫作]\n${text}`;
-      setMessages((prev) => [...prev, { role: "student", text: acceptedStudent, stage }]);
       appendAiReply(data?.ai_reply, stage);
       const outStage = coerceStageKey(data?.stage, stage);
       const outDraft: DraftKey = normalizeDraftKey(data?.meta?.draft ?? data?.draft, draft);
@@ -1447,6 +1453,13 @@ export default function WeekBookPage() {
       }
       await persistWritingSnapshot(nextWriting, allBadges);
     } catch (e: any) {
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.role === "student" && last.stage === stage && last.text === acceptedStudent) {
+          return prev.slice(0, -1);
+        }
+        return prev;
+      });
       setFbError(e?.message ?? "回饋失敗");
     } finally {
       fbInflightRef.current -= 1;
@@ -1520,6 +1533,7 @@ export default function WeekBookPage() {
     fbInflightRef.current += 1;
     setFbLoading(true);
     setFbError(null);
+    setMessages((prev) => [...prev, { role: "student", text: draft, stage: "ALL" }]);
 
     try {
       const r = await fetch("/api/orid/writing-coach/chat", {
@@ -1542,11 +1556,6 @@ export default function WeekBookPage() {
       if (!r.ok) throw new Error(formatApiError(r.status, raw, "整合回饋失敗"));
 
       const data = raw ? JSON.parse(raw) : {};
-      const acceptedStudent = `[整合寫作]\n${draft}`;
-      setMessages((prev) => [
-        ...prev,
-        { role: "student", text: acceptedStudent, stage: "ALL" },
-      ]);
       appendAiReply(data?.ai_reply, "ALL");
       const savedId = String(data?.meta?.saved_to_writing_id ?? "");
       if (isUuid(savedId)) setWritingId(savedId);
@@ -1588,6 +1597,13 @@ export default function WeekBookPage() {
         await persistWritingSnapshot(nextWriting, earnedBadges);
       }
     } catch (e: any) {
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.role === "student" && last.stage === "ALL" && last.text === draft) {
+          return prev.slice(0, -1);
+        }
+        return prev;
+      });
       setFbError(e?.message ?? "整合回饋失敗");
     } finally {
       fbInflightRef.current -= 1;
@@ -2233,13 +2249,16 @@ export default function WeekBookPage() {
                             >
                               {!isStudent && <div className="shrink-0">{helperAvatar}</div>}
                               <div
-                                className={
+                                className={[
                                   isStudent
                                     ? "max-w-[min(88%,16rem)] shrink-0"
                                     : parsedFeedback
                                       ? "shrink min-w-0"
-                                      : "max-w-[min(95%,22rem)] shrink min-w-0"
-                                }
+                                      : "max-w-[min(95%,22rem)] shrink min-w-0",
+                                  !isStudent && m.freshKey ? "kid-bubble-send" : "",
+                                ]
+                                  .filter(Boolean)
+                                  .join(" ")}
                               >
                                 {parsedFeedback ? (
                                   <FeedbackGuideCard
@@ -2250,26 +2269,45 @@ export default function WeekBookPage() {
                                   <div
                                     className={
                                       isStudent
-                                        ? "kid-bubble-student"
+                                        ? `kid-bubble-student${
+                                            showAiTyping && idx === synthesisTabMessages.length - 1
+                                              ? " kid-bubble-send"
+                                              : ""
+                                          }`
                                         : isOpening
                                           ? "kid-bubble-ai border border-amber-100/80 bg-amber-50/40"
                                           : "kid-bubble-ai"
                                     }
                                   >
                                     <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                                      {m.text}
+                                      {isStudent ? stripStudentDraftLabel(m.text) : m.text}
                                     </div>
                                   </div>
                                 )}
                               </div>
-                              {isStudent && (
-                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-lg ring-2 ring-amber-200/80">
-                                  <span aria-hidden>🧒</span>
-                                </div>
-                              )}
+                              {isStudent && <StudentChatAvatar />}
                             </div>
                           );
                         })}
+                        {showAiTyping && (
+                          <div className="flex items-end gap-2" aria-live="polite">
+                            {getBookWeekArt(weekNum) ? (
+                              <BookHelperAvatar week={weekNum} size={44} />
+                            ) : (
+                              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white ring-2 ring-amber-100">
+                                <OridPartnerMascot size={32} />
+                              </div>
+                            )}
+                            <div className="kid-bubble-ai max-w-[16rem]">
+                              <div className="flex items-center gap-1.5 py-0.5">
+                                <span className="h-2 w-2 animate-bounce rounded-full bg-amber-500/80 [animation-delay:-0.24s]" />
+                                <span className="h-2 w-2 animate-bounce rounded-full bg-amber-500/80 [animation-delay:-0.12s]" />
+                                <span className="h-2 w-2 animate-bounce rounded-full bg-amber-500/80" />
+                                <span className="ml-2 text-xs text-amber-900/70">松果小幫手正在思考…</span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                         {synthesisTabMessages.length <= 1 &&
                           synthesisTabMessages.every((m) => m.role === "ai") && (
                             <p className="px-1 text-center text-xs text-amber-900/45">
@@ -2303,55 +2341,32 @@ export default function WeekBookPage() {
                             >
                               {!isStudent && <div className="shrink-0">{helperAvatar}</div>}
                               <div
-                                className={
+                                className={[
                                   isStudent
                                     ? "max-w-[min(88%,16rem)] shrink-0"
                                     : parsedFeedback
                                       ? "shrink min-w-0"
-                                      : "max-w-[min(88%,18rem)] shrink-0"
-                                }
+                                      : "max-w-[min(88%,18rem)] shrink-0",
+                                  !isStudent && m.freshKey ? "kid-bubble-send" : "",
+                                ]
+                                  .filter(Boolean)
+                                  .join(" ")}
                               >
                                 {parsedFeedback ? (
                                   <FeedbackGuideCard parsed={parsedFeedback} />
                                 ) : (
                                   <div className={isStudent ? "kid-bubble-student" : "kid-bubble-ai"}>
-                                    <div className="whitespace-pre-wrap leading-relaxed">{m.text}</div>
+                                    <div className="whitespace-pre-wrap leading-relaxed">{isStudent ? stripStudentDraftLabel(m.text) : m.text}</div>
                                   </div>
                                 )}
                               </div>
-                              {isStudent && (
-                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-lg ring-2 ring-amber-200/80">
-                                  <span aria-hidden>🧒</span>
-                                </div>
-                              )}
+                              {isStudent && <StudentChatAvatar />}
                             </div>
                           );
                         })}
                       </div>
                     )}
                     <div ref={chatEndRef} className="h-0 shrink-0" aria-hidden />
-                  </div>
-                )}
-
-                {showAiTyping && chatTab === "synthesis" && !isControl && (
-                  <div className="shrink-0 border-t border-amber-100 bg-white/90 px-3 py-2" aria-live="polite">
-                    <div className="flex items-end gap-2">
-                      {getBookWeekArt(weekNum) ? (
-                        <BookHelperAvatar week={weekNum} size={44} />
-                      ) : (
-                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white ring-2 ring-amber-100">
-                          <OridPartnerMascot size={32} />
-                        </div>
-                      )}
-                      <div className="kid-bubble-ai max-w-[16rem]">
-                        <div className="flex items-center gap-1.5 py-0.5">
-                          <span className="h-2 w-2 animate-bounce rounded-full bg-amber-500/80 [animation-delay:-0.24s]" />
-                          <span className="h-2 w-2 animate-bounce rounded-full bg-amber-500/80 [animation-delay:-0.12s]" />
-                          <span className="h-2 w-2 animate-bounce rounded-full bg-amber-500/80" />
-                          <span className="ml-2 text-xs text-amber-900/70">松果小幫手正在思考…</span>
-                        </div>
-                      </div>
-                    </div>
                   </div>
                 )}
               </div>
@@ -2392,7 +2407,7 @@ export default function WeekBookPage() {
                   </div>
 
                   <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-2 sm:p-3">
-                    {oridStageMessages.length === 0 ? (
+                    {oridStageMessages.length === 0 && !showAiTyping ? (
                       <div className="flex h-full min-h-[6rem] items-center justify-center px-2 text-center text-xs text-amber-900/50 sm:text-sm">
                         {error && !sessionId
                           ? error
@@ -2424,56 +2439,62 @@ export default function WeekBookPage() {
                             >
                               {!isStudent && <div className="shrink-0">{helperAvatar}</div>}
                               <div
-                                className={
+                                className={[
                                   isStudent
                                     ? "max-w-[min(88%,16rem)] shrink-0"
                                     : parsedFeedback
                                       ? "shrink min-w-0"
-                                      : "max-w-[min(88%,18rem)] shrink-0"
-                                }
+                                      : "max-w-[min(88%,18rem)] shrink-0",
+                                  !isStudent && m.freshKey ? "kid-bubble-send" : "",
+                                ]
+                                  .filter(Boolean)
+                                  .join(" ")}
                               >
                                 {parsedFeedback ? (
                                   <FeedbackGuideCard parsed={parsedFeedback} />
                                 ) : (
-                                  <div className={isStudent ? "kid-bubble-student" : "kid-bubble-ai"}>
-                                    <div className="whitespace-pre-wrap leading-relaxed">{m.text}</div>
+                                  <div
+                                    className={
+                                      isStudent
+                                        ? `kid-bubble-student${
+                                            showAiTyping && idx === oridStageMessages.length - 1
+                                              ? " kid-bubble-send"
+                                              : ""
+                                          }`
+                                        : "kid-bubble-ai"
+                                    }
+                                  >
+                                    <div className="whitespace-pre-wrap leading-relaxed">{isStudent ? stripStudentDraftLabel(m.text) : m.text}</div>
                                   </div>
                                 )}
                               </div>
-                              {isStudent && (
-                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-lg ring-2 ring-amber-200/80">
-                                  <span aria-hidden>🧒</span>
-                                </div>
-                              )}
+                              {isStudent && <StudentChatAvatar />}
                             </div>
                           );
                         })}
+                        {showAiTyping && (
+                          <div className="flex items-end gap-2" aria-live="polite">
+                            {getBookWeekArt(weekNum) ? (
+                              <BookHelperAvatar week={weekNum} size={44} />
+                            ) : (
+                              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white ring-2 ring-amber-100">
+                                <OridPartnerMascot size={32} />
+                              </div>
+                            )}
+                            <div className="kid-bubble-ai max-w-[16rem]">
+                              <div className="flex items-center gap-1.5 py-0.5">
+                                <span className="h-2 w-2 animate-bounce rounded-full bg-amber-500/80 [animation-delay:-0.24s]" />
+                                <span className="h-2 w-2 animate-bounce rounded-full bg-amber-500/80 [animation-delay:-0.12s]" />
+                                <span className="h-2 w-2 animate-bounce rounded-full bg-amber-500/80" />
+                                <span className="ml-2 text-xs text-amber-900/70">松果小幫手正在思考…</span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                     <div ref={chatEndRef} className="h-0 shrink-0" aria-hidden />
                   </div>
-
-                  {showAiTyping && (
-                    <div className="shrink-0 border-t border-amber-100 bg-white/90 px-3 py-2" aria-live="polite">
-                      <div className="flex items-end gap-2">
-                        {getBookWeekArt(weekNum) ? (
-                          <BookHelperAvatar week={weekNum} size={44} />
-                        ) : (
-                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white ring-2 ring-amber-100">
-                            <OridPartnerMascot size={32} />
-                          </div>
-                        )}
-                        <div className="kid-bubble-ai max-w-[16rem]">
-                          <div className="flex items-center gap-1.5 py-0.5">
-                            <span className="h-2 w-2 rounded-full bg-amber-500/80 animate-bounce [animation-delay:-0.24s]" />
-                            <span className="h-2 w-2 rounded-full bg-amber-500/80 animate-bounce [animation-delay:-0.12s]" />
-                            <span className="h-2 w-2 rounded-full bg-amber-500/80 animate-bounce" />
-                            <span className="ml-2 text-xs text-amber-900/70">松果小幫手正在思考…</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
                 </div>
               )}
             </>

@@ -685,6 +685,21 @@ def test_character_action_relation_not_in_book_is_ungrounded():
     assert grounding.extract_unsupported_action_phrase("要做好人，因為爺爺吃奶奶", book_pack) == "爺爺吃奶奶"
 
 
+def test_even_week_placeholder_reading_uses_the_book():
+    """第2週教材若只是占位文字，仍要對到上一週的書，不能當成沒有故事。"""
+    from types import SimpleNamespace
+
+    from app.routes.orid import load_book_pack_from_reading
+
+    reading = SimpleNamespace(title="第 2 週（暫定教材）", content="先用測試文字，之後再換正式教材。")
+    pack = load_book_pack_from_reading(reading)
+    assert pack is not None
+    assert pack["book_title"] == "阿松爺爺的柿子樹"
+    blob = grounding.extract_story_reference_blob(pack)
+    assert "柿子" in blob
+    assert "水蜜桃" not in blob
+
+
 def test_wrong_food_noun_detected_for_sweet_potato():
     """O 段誤寫地瓜（書裡是柿子）應被 heuristic 抓到，並能對照書中名詞。"""
     from app.routes.orid import BOOK_PACK_BY_WEEK
@@ -695,6 +710,21 @@ def test_wrong_food_noun_detected_for_sweet_potato():
     assert grounding.looks_likely_ungrounded_in_book(t, book_pack, "O") is True
     assert grounding.extract_wrong_concrete_noun(t, book_pack) == "地瓜"
     assert grounding.book_contrast_noun_for("地瓜", book_pack) == "柿子"
+    grape = "阿松爺爺把葡萄分給全班，大家都很開心。我覺得分享最好。"
+    assert grounding.concrete_mismatch_sentence(grape, book_pack) == "阿松爺爺把葡萄分給全班，大家都很開心"
+    assert grounding.concrete_mismatch_sentence(grape, None) == ""
+    assert (
+        grounding.first_concrete_mismatch_sentence(grape, None, book_pack)
+        == "阿松爺爺把葡萄分給全班，大家都很開心"
+    )
+    peach = "阿松爺爺把水蜜桃給奶奶，大家都很開心。我覺得分享最好。下次我也會把便當分給同學。"
+    assert (
+        grounding.concrete_mismatch_sentence(peach, book_pack)
+        == "阿松爺爺把水蜜桃給奶奶，大家都很開心"
+    )
+    assert grounding.concrete_mismatch_sentence("下次我也會把便當分給同學。", book_pack) == ""
+    assert grounding.align_grounding_span(peach, "阿松爺爺把水蜜桃給奶奶") == "阿松爺爺把水蜜桃給奶奶"
+    assert grounding.align_grounding_span(peach, "把水蜜桃送給奶奶") == "阿松爺爺把水蜜桃給奶奶，大家都很開心"
 
 
 @pytest.mark.asyncio

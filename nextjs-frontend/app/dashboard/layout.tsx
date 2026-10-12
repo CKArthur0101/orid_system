@@ -6,6 +6,8 @@ import { useEffect, useState } from "react";
 import { Home, LogOut } from "lucide-react";
 import { BadgeDisplay } from "@/components/orid/BadgeDisplay";
 import { DilabLogo } from "@/components/orid/DilabLogo";
+import { StudentAvatarPicker } from "@/components/orid/StudentAvatarPicker";
+import { studentAvatarKey } from "@/lib/orid/student-avatars";
 import { LeaveWritingConfirmModal } from "@/components/orid/LeaveWritingConfirmModal";
 import { BADGE_ORDER, type BadgeId } from "@/lib/orid/badgeRules";
 import { logoutToLogin } from "@/lib/logout";
@@ -171,9 +173,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   />
                 ) : null}
                 {greeting ? (
-                  <span className="max-w-[9rem] truncate text-xs text-amber-900 sm:max-w-[14rem] sm:text-sm">
-                    🌰 {greeting}
-                  </span>
+                  <StudentAvatarPicker userKey={studentAvatarKey(auth.user)} name={greeting} />
                 ) : null}
               </div>
             ) : null}

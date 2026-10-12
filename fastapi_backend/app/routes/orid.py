@@ -75,10 +75,10 @@ from app.services.orid_badges import (
 )
 from app.content.synthesis_rubric import (
     SYNTHESIS_CRITERIA_ORDER,
+    ensure_synthesis_mismatch_reply,
     first_synthesis_gap,
-    lock_synthesis_content_for_grounding,
     normalize_synthesis_levels,
-    synthesis_fallback_reply,
+    synthesis_visible_reply,
 )
 from app.services.orid_research_summary import (
     bump_guide_use,
@@ -108,9 +108,11 @@ from app.prompts.policy.turn_destination import (
 )
 from app.prompts.builders.checker import build_book_grounding_checker_prompts
 from app.prompts.policy.grounding import (
+    align_grounding_span,
     extract_story_reference_blob,
     extract_unsupported_action_phrase,
     extract_wrong_concrete_noun,
+    first_concrete_mismatch_sentence,
     book_contrast_noun_for,
     looks_likely_factual_mismatch,
     looks_likely_ungrounded_in_book,
@@ -274,10 +276,6 @@ ORID_MAIN_FALLBACK_TEMPERATURE = float(os.getenv("ORID_MAIN_FALLBACK_TEMPERATURE
 
 ORID_ALLOW_HEURISTIC_PASS = _env_bool("ORID_ALLOW_HEURISTIC_PASS", False)
 ORID_ENABLE_RATE_LIMIT = _env_bool("ORID_ENABLE_RATE_LIMIT", True)
-
-
-def _draft_label_zh(draft: str) -> str:
-    return "草稿1" if (draft or "").strip().lower() == "d1" else "草稿2"
 
 
 def get_required_pass(stage: str) -> int:
@@ -724,8 +722,20 @@ BOOK_PACK_BY_WEEK[5] = {
 BOOK_PACK_BY_WEEK[6] = BOOK_PACK_BY_WEEK[5]
 
 
+def canonical_book_pack_for_week(week: Optional[int]) -> Optional[dict[str, Any]]:
+    """Even weeks use the previous week's book. Week 2 has no pack of its own."""
+    if not isinstance(week, int) or week < 1:
+        return None
+    book_week = week - 1 if week % 2 == 0 else week
+    for candidate in (book_week, week):
+        pack = BOOK_PACK_BY_WEEK.get(candidate)
+        if isinstance(pack, dict) and extract_story_reference_blob(pack):
+            return pack
+    return None
+
+
 def _default_reading_content_for_week(week: int) -> str:
-    pack = BOOK_PACK_BY_WEEK.get(week)
+    pack = canonical_book_pack_for_week(week)
     if pack:
         return json.dumps(pack, ensure_ascii=False)
     return "先用測試文字，之後再換正式教材。"
@@ -961,19 +971,28 @@ def _extract_week_from_reading_title(title: str) -> Optional[int]:
 
 
 def load_book_pack_from_reading(reading: Optional[Reading]) -> Optional[dict[str, Any]]:
-    if not reading or not (reading.content or "").strip():
+    if not reading:
         return None
-    pack = resolve_book_pack(parse_book_pack(reading.content))
-    if not isinstance(pack, dict):
-        return pack
-    out = dict(pack)
     reading_title = str(reading.title or "")
-    out.setdefault("reading_title", reading_title)
     week = _extract_week_from_reading_title(reading_title)
+    content = (reading.content or "").strip()
+    pack = resolve_book_pack(parse_book_pack(content)) if content else None
+    # Even-week readings were stored as placeholder text, so the checker never
+    # saw the story. Use that book's own pack instead of giving up.
+    if not isinstance(pack, dict) or not extract_story_reference_blob(pack):
+        fallback = canonical_book_pack_for_week(week)
+        if isinstance(fallback, dict):
+            pack = dict(fallback)
+        elif not isinstance(pack, dict):
+            return None
+    out = dict(pack)
+    out.setdefault("reading_title", reading_title)
     if week:
         out.setdefault("week", week)
         out.setdefault("embedding_bundle_id", f"week_{week}")
         default_week = BOOK_PACK_BY_WEEK.get(week)
+        if not isinstance(default_week, dict):
+            default_week = canonical_book_pack_for_week(week)
         if isinstance(default_week, dict):
             out = resolve_book_pack({**default_week, **out, "reading_title": reading_title, "week": week})
     return out
@@ -1485,15 +1504,6 @@ def _semantic_material_grounding_feedback(
         "請回到教材，找一件真正發生的事再說一次。",
     )
     return missing, suggestion
-
-
-def _synthesis_grounding_reply(missing: str, suggestion: str) -> str:
-    """Render a material-accuracy lock using the synthesis three-part contract."""
-    return (
-        "你已經做到：\n你有把故事和自己的想法放進整合稿。\n"
-        f"再想一想：\n{missing}\n"
-        f"可以這樣修改：\n{suggestion}"
-    )
 
 
 def _is_grounding_specific_message(text: str) -> bool:
@@ -2812,19 +2822,7 @@ async def writing_coach_chat(
             meta={"rate_limited": True},
         )
 
-    if source == "feedback_button":
-        display_student = f"[{stage_ctx} {_draft_label_zh(draft_key)}]\n{body}"
-    elif source == "synthesis_feedback":
-        syn_tags = ["整合寫作"]
-        sp = getattr(data, "synthesis_phase", None)
-        if sp:
-            syn_tags.append(str(sp).replace("_", " "))
-        fr = int(getattr(data, "feedback_round", None) or 1)
-        if fr != 1:
-            syn_tags.append(f"第{fr}輪")
-        display_student = f"[{'·'.join(syn_tags)}]\n{body}"
-    else:
-        display_student = body
+    display_student = body
 
     db.add(OridChatMessage(session_id=session.id, stage=stage_ctx, sender="student", text=display_student))
     await db.commit()
@@ -3060,6 +3058,35 @@ async def writing_coach_chat(
             syn_round = 1
         reading_ex = getattr(data, "reading_excerpt", None)
         syn_clarify = bool(getattr(data, "synthesis_clarify", False))
+        # The book checker runs first so its finding can be handed to the model
+        # as input. Only the student's own sentence is passed, not the answer.
+        synthesis_grounding_check: Optional[BookGroundingCheck] = None
+        try:
+            synthesis_grounding_check = await timed_call(
+                "book_grounding",
+                _llm_book_grounding_check(
+                    student_text=body,
+                    stage="ALL",
+                    book_pack=book_pack,
+                ),
+            )
+        except Exception as grounding_error:
+            logger.warning("synthesis book grounding failed: %s", grounding_error)
+            synthesis_grounding_check = None
+        mismatch_quote = ""
+        if (
+            synthesis_grounding_check is not None
+            and synthesis_grounding_check.grounded is False
+            and synthesis_grounding_check.status == "contradicted"
+        ):
+            mismatch_quote = align_grounding_span(
+                body, synthesis_grounding_check.unsupported_span
+            )
+        if not mismatch_quote:
+            canonical_pack = BOOK_PACK_BY_WEEK.get(prior_orid_week)
+            mismatch_quote = first_concrete_mismatch_sentence(
+                body, book_pack, canonical_pack if isinstance(canonical_pack, dict) else None
+            )
         sys_p = build_synthesis_coach_system_prompt(
             book_context=book_context,
             week1_orid_lines=prior_orid_slots,
@@ -3072,6 +3099,7 @@ async def writing_coach_chat(
             reading_excerpt=reading_ex,
             synthesis_clarify=syn_clarify,
             student_text=body,
+            material_mismatch_quote=mismatch_quote,
         )
         hist_syn: list[dict[str, str]] = []
         for m in msgs[-ORID_HISTORY_LIMIT:]:
@@ -3079,16 +3107,8 @@ async def writing_coach_chat(
             hist_syn.append({"role": role, "content": str(m.text or "")})
         oa_syn: list[dict[str, str]] = [{"role": "system", "content": sys_p}]
         oa_syn.extend(hist_syn)
-        grounding_result, synthesis_result = await asyncio.gather(
-            timed_call(
-                "book_grounding",
-                _llm_book_grounding_check(
-                    student_text=body,
-                    stage="ALL",
-                    book_pack=book_pack,
-                ),
-            ),
-            timed_call(
+        try:
+            raw_synthesis = await timed_call(
                 "synthesis_evaluation",
                 _chat_completion(
                     oa_syn,
@@ -3100,28 +3120,12 @@ async def writing_coach_chat(
                     ),
                     response_format={"type": "json_object"},
                 ),
-            ),
-            return_exceptions=True,
-        )
-        if isinstance(grounding_result, BaseException):
-            logger.warning("synthesis book grounding failed: %s", grounding_result)
-            synthesis_grounding_check = None
-        else:
-            synthesis_grounding_check = grounding_result
-        synthesis_grounding_lock = _semantic_material_grounding_feedback(
-            student_text=body,
-            book_pack=book_pack,
-            stage="ALL",
-            check=synthesis_grounding_check,
-        )
-        try:
-            if isinstance(synthesis_result, BaseException):
-                raise synthesis_result
-            raw_synthesis = synthesis_result
+            )
             parsed_synthesis = extract_json_object(raw_synthesis)
             synthesis_levels = normalize_synthesis_levels(
                 parsed_synthesis.get("rubric_levels")
             )
+            ai_reply = str(parsed_synthesis.get("reply") or "").strip()
             if len(synthesis_levels) == len(SYNTHESIS_CRITERIA_ORDER):
                 gap = first_synthesis_gap(synthesis_levels)
                 requested_focus = str(parsed_synthesis.get("focus") or "").strip()
@@ -3138,25 +3142,23 @@ async def writing_coach_chat(
                     if requested_sel in {"SEL_SA", "SEL_SM", "SEL_SOA", "SEL_RS", "SEL_RD"}
                     else None
                 )
-                ai_reply = str(parsed_synthesis.get("reply") or "").strip()
-                if gap is None or focus_is_valid is None or not ai_reply:
-                    ai_reply = synthesis_fallback_reply(synthesis_focus)
             else:
                 synthesis_focus = "content_integration"
-                ai_reply = synthesis_fallback_reply(synthesis_focus)
+            ai_reply = synthesis_visible_reply(ai_reply, synthesis_focus)
         except Exception:
             ai_reply = "我這邊有點忙不過來，你先儲存草稿，等一下再試試看。"
-        if synthesis_grounding_lock is not None:
-            synthesis_levels = lock_synthesis_content_for_grounding(synthesis_levels)
+        if mismatch_quote:
             synthesis_focus = "content_integration"
-            synthesis_sel_focus = None
-            ai_reply = _synthesis_grounding_reply(*synthesis_grounding_lock)
-            coach_meta["synthesis_material_grounded"] = False
-            coach_meta["synthesis_grounding_status"] = synthesis_grounding_check.status
-            coach_meta["synthesis_grounding_span"] = synthesis_grounding_check.unsupported_span
-        elif synthesis_grounding_check is not None:
+            if synthesis_levels:
+                synthesis_levels["content_integration"] = min(
+                    int(synthesis_levels.get("content_integration", 2)),
+                    2,
+                )
+            ai_reply = ensure_synthesis_mismatch_reply(ai_reply, mismatch_quote)
+        if synthesis_grounding_check is not None:
             coach_meta["synthesis_material_grounded"] = synthesis_grounding_check.grounded
             coach_meta["synthesis_grounding_status"] = synthesis_grounding_check.status
+            coach_meta["synthesis_grounding_span"] = synthesis_grounding_check.unsupported_span
         if not (ai_reply or "").strip():
             ai_reply = "我有看到你的整合草稿，你可以再說一下最想調整的是銜接、具體例子，還是心得的深度？"
         coach_meta["synthesis_context"] = True

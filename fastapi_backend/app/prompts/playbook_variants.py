@@ -19,7 +19,6 @@ from app.prompts.policy.student_input_bucket import (
 _VARIANTS: Final[dict[str, list[str]]] = {
     BUCKET_NORMAL: [
         "先把你最在意的一句寫滿，再往回補細節。",
-        "這一輪我們只鎖一個小目標，寫完再往下。",
         "你可以先照順序把「誰／做了什麼」說清楚。",
         "想到哪就寫哪一句，我們再一起把它變完整。",
         "先寫一個你記得最清楚的畫面。",

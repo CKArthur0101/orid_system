@@ -575,7 +575,7 @@ async def test_writing_coach_synthesis_feedback_uses_prior_orid_week(
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_synthesis_material_error_blocks_content_badge_and_completion(
+async def test_synthesis_material_error_keeps_model_reply_and_rubric(
     test_client, db_session, authenticated_user, monkeypatch
 ):
     async def fake_grounding_check(**kwargs):
@@ -587,7 +587,10 @@ async def test_synthesis_material_error_blocks_content_badge_and_completion(
             material_evidence="阿松爺爺家的柿子很甜，但他一直獨占，故意在大家面前大口吃。",
         )
 
+    captured: dict[str, str] = {}
+
     async def fake_chat_completion(messages, **kwargs):
+        captured["system"] = messages[0]["content"]
         return json.dumps(
             {
                 "reply": (
@@ -647,11 +650,20 @@ async def test_synthesis_material_error_blocks_content_badge_and_completion(
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["meta"]["synthesis_rubric_levels"]["content_integration"] == 2
-    assert data["meta"]["synthesis_focus"] == "content_integration"
+    assert data["meta"].get("synthesis_focus") == "content_integration"
     assert data["meta"]["synthesis_complete"] is False
     assert data["meta"]["synthesis_material_grounded"] is False
+    assert data["meta"]["synthesis_grounding_status"] == "contradicted"
+    assert data["meta"]["synthesis_grounding_span"] == "阿松爺爺把地瓜分給大家"
+    assert "跟故事裡發生的不太一樣喔" in data["ai_reply"]
     assert "阿松爺爺把地瓜分給大家" in data["ai_reply"]
+    assert "你有把故事和自己的想法放進整合稿" not in data["ai_reply"]
     assert "badge_synthesis_content" not in data["meta"]["earnedBadges"]
+    # The checker's finding is handed to the model as input: the student's own
+    # sentence only, never the book's answer.
+    assert "【教材核對結果】" in captured["system"]
+    assert "阿松爺爺把地瓜分給大家" in captured["system"]
+    assert "故意在大家面前大口吃" not in captured["system"]
 
 
 @pytest.mark.asyncio(loop_scope="function")

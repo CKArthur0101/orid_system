@@ -34,19 +34,25 @@ export default async function Page({
         <div className="absolute bottom-0 left-1/2 h-48 w-96 -translate-x-1/2 rounded-full bg-amber-300/10 blur-3xl" />
       </div>
 
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Huninn&display=swap" />
       <LoginCornerDecorations />
 
       <div className="relative z-10 w-full max-w-md">
         <div className="mb-5 flex flex-col items-center gap-3 text-center">
           <div className="flex flex-col items-center gap-2.5 sm:flex-row sm:gap-3">
             <DilabLogo height={36} />
-            <h1 className="text-2xl font-bold text-amber-950 sm:text-3xl">AI–ORID 反思寫作</h1>
+            <h1
+              className="text-2xl text-amber-950 sm:text-3xl"
+              style={{ fontFamily: '"Huninn", "PingFang TC", "Microsoft JhengHei", sans-serif' }}
+            >
+              AI–ORID 反思寫作
+            </h1>
           </div>
         </div>
 
         <form action="/api/auth/login" method="post" className="kid-shell p-5 sm:p-7">
           <h2 className="mb-1 text-center text-lg font-bold text-amber-950 sm:text-xl">
-            歡迎回來！
+            歡迎使用！
           </h2>
           <p className="mb-5 text-center text-sm text-amber-800/60 sm:text-base">
             輸入你的帳號密碼登入系統

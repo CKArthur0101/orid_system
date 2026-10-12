@@ -12,8 +12,9 @@ from app.services.orid_badges import (
 )
 from app.content.synthesis_rubric import (
     first_synthesis_gap,
-    lock_synthesis_content_for_grounding,
+    ensure_synthesis_mismatch_reply,
     synthesis_fallback_reply,
+    synthesis_visible_reply,
 )
 
 
@@ -184,18 +185,55 @@ class TestCalculateEarnedSynthesisBadge:
         assert "為什麼" in reply
         assert "下一次遇到" not in reply
 
-    def test_material_grounding_issue_caps_content_and_blocks_its_badge(self):
-        levels = lock_synthesis_content_for_grounding(
-            {
-                "content_integration": 4,
-                "coherence": 4,
-                "reflection_depth": 4,
-                "action_application": 4,
-            }
+    def test_visible_reply_keeps_model_sentences_and_falls_back_only_when_empty(self):
+        fail_reply = (
+            "你已經做到：\n你寫到阿松爺爺不分享柿子。\n"
+            "再想一想：\n還可以補一件事。\n可以這樣修改：\n他給了什麼？"
         )
+        assert synthesis_visible_reply(fail_reply, "content_integration") == fail_reply
+        fallback = synthesis_visible_reply("  ", "content_integration")
+        assert fallback == synthesis_fallback_reply("content_integration")
+        assert "你有把故事和自己的想法放進整合稿" not in fallback
 
-        assert levels["content_integration"] == 2
-        assert first_synthesis_gap(levels) == "content_integration"
-        assert "badge_synthesis_content" not in calculate_earned_synthesis_badges(
-            rubric_levels=levels
+    def test_passed_synthesis_reply_affirms_without_questions(self):
+        model_reply = (
+            "你已經做到：\n"
+            "你寫到柿子很甜、阿松爺爺只把柿子蒂給哎喲奶奶，也說出自己覺得他小氣。"
+            "你覺得這個畫面有把阿松爺爺的做法寫清楚嗎？\n"
+            "再想一想：\n"
+            "你從他不分享想到自己也不會比較開心，接著寫出借彩色筆。"
+            "故事和行動之間的關係，讀起來清楚嗎？\n"
+            "可以這樣修改：\n"
+            "你的文章已經有故事、自己的體會和做得到的行動，不需要特別修改。"
+            "你可以保留這個版本完成整合短文嗎？"
         )
+        reply = synthesis_visible_reply(model_reply, None)
+        assert "你寫到柿子很甜、阿松爺爺只把柿子蒂給哎喲奶奶" in reply
+        assert "借彩色筆" in reply
+        assert "本階段完成：" in reply
+        assert "不需要特別修改" in reply
+        assert "下一步：" in reply
+        assert "可以保留現在的內容並儲存作品。" in reply
+        assert "再想一想：" not in reply
+        assert "可以這樣修改：" not in reply
+        assert "？" not in reply
+        assert "?" not in reply
+
+    def test_mismatch_reply_names_the_student_sentence(self):
+        reply = ensure_synthesis_mismatch_reply(
+            "你已經做到：\n你寫到阿松爺爺把葡萄分給全班。\n再想一想：\n可以多說分享。\n可以這樣修改：\n哪個地方讓你覺得分享很好？",
+            "阿松爺爺把葡萄分給全班",
+        )
+        assert "你寫到阿松爺爺把葡萄分給全班" in reply
+        assert "跟故事裡發生的不太一樣喔" in reply
+        assert "哪個地方讓你覺得分享很好" not in reply
+
+    def test_mismatch_reply_keeps_model_wording_when_it_already_says_so(self):
+        model = (
+            "你已經做到：\n你有寫到想把便當分給同學。\n"
+            "再想一想：\n阿松爺爺把葡萄分給全班，這件事故事裡沒有發生。\n"
+            "可以這樣修改：\n你還記得故事裡大家後來一起做了什麼嗎？用你自己的話說說看。"
+        )
+        reply = ensure_synthesis_mismatch_reply(model, "阿松爺爺把葡萄分給全班")
+        assert reply == model
+        assert "跟故事裡發生的不太一樣喔" not in reply

@@ -27,7 +27,7 @@ _COMMON_STORY_ANCHORS = {
 # word boundaries, so taking arbitrary characters after「吃／拿／用」can turn
 # valid text such as「用柿子蒂和小朋友」into the fake noun「柿子蒂和」.
 _HIGH_CONFIDENCE_CONCRETE_NOUNS: tuple[str, ...] = (
-    "地瓜", "番薯", "蕃薯", "馬鈴薯", "香蕉", "蘋果", "西瓜", "橘子",
+    "地瓜", "番薯", "蕃薯", "馬鈴薯", "葡萄", "香蕉", "蘋果", "西瓜", "橘子",
     "柳丁", "糖果", "巧克力", "蛋糕", "籃球", "足球", "電動",
 )
 _CONCRETE_NOUN_ACTION_RE = re.compile(
@@ -394,6 +394,130 @@ def extract_unsupported_action_phrase(
         if left and right and left not in reference_blob and right not in reference_blob:
             phrase = re.sub(r"^(因為|所以|為了)", "", sp).strip() or sp.strip()
             return phrase
+    return ""
+
+
+def concrete_mismatch_sentence(
+    student_text: str, book_pack: Optional[dict[str, Any]]
+) -> str:
+    """Return the student's own sentence that names a thing the book does not have."""
+    reference_blob = extract_story_reference_blob(book_pack)
+    if not reference_blob:
+        return ""
+    reference = normalize_match_text(reference_blob)
+    text = (student_text or "").strip()
+    for noun in _HIGH_CONFIDENCE_CONCRETE_NOUNS:
+        noun_norm = normalize_match_text(noun)
+        if not noun_norm or noun_norm in reference or noun not in text:
+            continue
+        idx = text.find(noun)
+        start = 0
+        for sep in "。！？\n":
+            pos = text.rfind(sep, 0, idx)
+            if pos + 1 > start:
+                start = pos + 1
+        end = len(text)
+        for sep in "。！？\n":
+            pos = text.find(sep, idx)
+            if 0 <= pos < end:
+                end = pos
+        sentence = text[start:end].strip(" ，,")
+        return sentence or noun
+    for match in re.finditer(r"把([^，。！？\n把]{1,8}?)(?:分給|送給|給)", text):
+        obj = match.group(1).strip()
+        obj_norm = normalize_match_text(obj)
+        if len(obj_norm) < 2 or obj_norm in {"東西", "這個", "那個", "一些", "什麼"}:
+            continue
+        if obj_norm in reference or any(
+            obj_norm[i : i + 2] in reference for i in range(len(obj_norm) - 1)
+        ):
+            continue
+        idx = match.start()
+        start = 0
+        for sep in "。！？\n":
+            pos = text.rfind(sep, 0, idx)
+            if pos + 1 > start:
+                start = pos + 1
+        end = len(text)
+        for sep in "。！？\n":
+            pos = text.find(sep, idx)
+            if 0 <= pos < end:
+                end = pos
+        sentence = text[start:end].strip(" ，,")
+        if any(mark in sentence for mark in ("下次", "以後", "我也會", "我想", "我要", "我會")):
+            continue
+        return sentence or obj
+    return ""
+
+
+def first_concrete_mismatch_sentence(
+    student_text: str, *book_packs: Optional[dict[str, Any]]
+) -> str:
+    """Try each book pack until one shows the student named something it does not contain."""
+    for pack in book_packs:
+        sentence = concrete_mismatch_sentence(student_text, pack)
+        if sentence:
+            return sentence
+    return ""
+
+
+def _longest_common_run(left: str, right: str) -> int:
+    best = 0
+    prev = [0] * (len(right) + 1)
+    for char in left:
+        cur = [0]
+        for j, other in enumerate(right):
+            if char == other:
+                val = prev[j] + 1
+                cur.append(val)
+                if val > best:
+                    best = val
+            else:
+                cur.append(0)
+        prev = cur
+    return best
+
+
+def align_grounding_span(student_text: str, span: str) -> str:
+    """Return the student's own words for a contradicted quote, even if the checker paraphrased it."""
+    text = (student_text or "").strip()
+    quote = (span or "").strip().strip("「」\"' ")
+    if not text or not quote:
+        return ""
+    if quote in text:
+        return quote
+    compact_quote = re.sub(r"\s+", "", quote)
+    compact_text = re.sub(r"\s+", "", text)
+    if compact_quote and compact_quote in compact_text:
+        start = compact_text.find(compact_quote)
+        # Map the compact slice back onto the original text.
+        visible = 0
+        origin = 0
+        while origin < len(text) and visible < start:
+            if not text[origin].isspace():
+                visible += 1
+            origin += 1
+        end_origin = origin
+        taken = 0
+        while end_origin < len(text) and taken < len(compact_quote):
+            if not text[end_origin].isspace():
+                taken += 1
+            end_origin += 1
+        mapped = text[origin:end_origin].strip()
+        if mapped:
+            return mapped
+    best = ""
+    best_score = 0
+    for sentence in re.split(r"[。！？\n]", text):
+        sentence = sentence.strip(" ，,")
+        if len(sentence) < 2:
+            continue
+        score = _longest_common_run(sentence, quote)
+        if score > best_score:
+            best_score = score
+            best = sentence
+    if best and best_score >= 4:
+        return best
     return ""
 
 
