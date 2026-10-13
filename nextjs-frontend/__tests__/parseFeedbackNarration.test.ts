@@ -63,7 +63,7 @@ describe("parseFeedbackNarration", () => {
   });
 
   it("returns null when not feedback narration", () => {
-    expect(parseFeedbackNarration("哈囉！我是你的寫作小幫手 🤖")).toBeNull();
+    expect(parseFeedbackNarration("哈囉！我是你的寫作小幫手")).toBeNull();
   });
 
   it("does not treat inline 試試看這樣寫 as the third section heading", () => {

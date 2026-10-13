@@ -56,13 +56,13 @@ class TestNormalizeWritingText:
 
 
 class TestTaskTypeForWeek:
-    def test_odd_week_is_orid_stage(self):
-        assert task_type_for_week(1) == "orid_stage"
-        assert task_type_for_week(3) == "orid_stage"
+    def test_orid_weeks(self):
+        for week in (1, 2, 4, 6):
+            assert task_type_for_week(week) == "orid_stage"
 
-    def test_even_week_is_synthesis(self):
-        assert task_type_for_week(2) == "synthesis"
-        assert task_type_for_week(6) == "synthesis"
+    def test_synthesis_weeks(self):
+        for week in (3, 5, 7):
+            assert task_type_for_week(week) == "synthesis"
 
 
 class TestComputeWordCount:
@@ -80,17 +80,26 @@ class TestComputeWordCount:
             obj["synthesis_draft"] = synthesis
         return obj
 
-    def test_odd_week_sums_stage_d1_only(self):
+    def test_orid_week_sums_stage_d1_only(self):
         obj = self._obj(o="abc", r="de")
         assert compute_word_count(obj, week=1) == 5
 
-    def test_odd_week_ignores_synthesis_draft(self):
-        obj = self._obj(o="abc", synthesis="should not count on odd week")
+    def test_orid_week_ignores_synthesis_draft(self):
+        obj = self._obj(o="abc", synthesis="should not count on orid week")
         assert compute_word_count(obj, week=1) == 3
 
-    def test_even_week_includes_synthesis_draft(self):
+    def test_week_counts_only_its_writable_stages(self):
+        obj = self._obj(o="abc", r="de")
+        obj["stages"]["I"] = {"d1": "wxyz"}
+        # Week 1 writes O/R only; week 2 writes I/D only; week 4 writes all four.
+        assert compute_word_count(obj, week=1) == 5
+        assert compute_word_count(obj, week=2) == 4
+        assert compute_word_count(obj, week=4) == 9
+
+    def test_synthesis_week_counts_synthesis_draft_only(self):
         obj = self._obj(o="abc", synthesis="xyz")
-        assert compute_word_count(obj, week=2) == 6
+        assert compute_word_count(obj, week=3) == 3
+        assert compute_word_count(obj, week=5) == 3
 
     def test_whitespace_normalized_before_counting(self):
         obj = self._obj(o="a b\nc")

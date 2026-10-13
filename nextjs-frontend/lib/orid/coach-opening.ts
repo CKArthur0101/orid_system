@@ -1,3 +1,6 @@
+import { partnerVoice } from "@/lib/orid-book-art";
+import { bookUnitFromWeek } from "@/lib/orid/week-flow";
+
 /**
  * Coach opening message for odd-week ORID writing sessions.
  *
@@ -27,9 +30,11 @@ function _shorten(text: string, max = 35): string {
  *
  * @param bookPack - Book metadata (may be null when the pack is loading).
  */
-export function buildCoachOpeningMessage(bookPack: BookPackForOpening | null): string {
+export function buildCoachOpeningMessage(bookPack: BookPackForOpening | null, week = 1): string {
   const title = (bookPack?.book_title ?? "").trim();
   const book = title ? `《${title}》` : "這本書";
+  const voice = partnerVoice(week);
+  const isBook1 = bookUnitFromWeek(week) === 1;
 
   // Story hook: prefer first key_event, fall back to first core_theme
   const events = bookPack?.key_events ?? [];
@@ -38,7 +43,7 @@ export function buildCoachOpeningMessage(bookPack: BookPackForOpening | null): s
   const hook = rawHook ? _shorten(rawHook) : "";
 
   const lines: string[] = [
-    `嗨！我是你的松果小夥伴 🌰`,
+    `嗨！我是${isBook1 ? "你的" : ""}${voice.name}${isBook1 ? " 🌰" : ""}`,
     `今天我們要聊 ${book}。`,
   ];
 

@@ -138,12 +138,12 @@ def test_synonym_自己吃_vs_獨占_not_factual_error():
             "別人想吃他也不給",
         ),
         (
-            3,
+            4,
             "媽媽每天做完家事還要去上班，後來媽媽走了，家裡變得亂七八糟。",
             "媽媽走了",
         ),
         (
-            5,
+            6,
             "獅子不識字，所以找動物代寫，可是信裡都不是他真正想說的話。",
             "獅子不識字",
         ),
@@ -373,7 +373,7 @@ def test_genai_d_off_theme_keeps_the_model_sentences():
     ok, missing, suggestions, example, meta = orid._enforce_d_theme_alignment(
         stage="D",
         student_text=draft,
-        book_pack=orid.BOOK_PACK_BY_WEEK[3],
+        book_pack=orid.BOOK_PACK_BY_WEEK[4],
         ok=True,
         missing=model_missing,
         suggestions=model_suggestions,
@@ -399,7 +399,7 @@ def test_d_week3_concrete_but_off_theme_action_is_not_passed():
     ok, missing, suggestions, example, meta = orid._enforce_d_theme_alignment(
         stage="D",
         student_text=draft,
-        book_pack=orid.BOOK_PACK_BY_WEEK[3],
+        book_pack=orid.BOOK_PACK_BY_WEEK[4],
         ok=True,
         missing=[],
         suggestions=[],
@@ -427,7 +427,7 @@ def test_d_week3_concrete_but_off_theme_action_is_not_passed():
     assert example is None
 
 
-@pytest.mark.parametrize("week", [1, 3, 5])
+@pytest.mark.parametrize("week", [1, 4, 6])
 def test_unified_d_theme_guard_enforces_story_alignment_for_every_book(week):
     ok, missing, suggestions, _example, meta = orid._enforce_d_theme_alignment(
         stage="D",
@@ -453,7 +453,7 @@ def test_d_week3_theme_aligned_action_keeps_semantic_pass():
     ok, missing, suggestions, _example, meta = orid._enforce_d_theme_alignment(
         stage="D",
         student_text="洗衣機停了以後，我會把自己的衣服拿去陽台晾好。",
-        book_pack=orid.BOOK_PACK_BY_WEEK[3],
+        book_pack=orid.BOOK_PACK_BY_WEEK[4],
         ok=True,
         missing=[],
         suggestions=[],
@@ -474,7 +474,7 @@ def test_d_week3_missing_structured_theme_assessment_fails_closed_for_genai():
     ok, missing, suggestions, _example, meta = orid._enforce_d_theme_alignment(
         stage="D",
         student_text="每天放學後，我會練習投籃二十分鐘。",
-        book_pack=orid.BOOK_PACK_BY_WEEK[3],
+        book_pack=orid.BOOK_PACK_BY_WEEK[4],
         ok=True,
         missing=[],
         suggestions=[],
@@ -495,7 +495,7 @@ def test_d_week3_prompt_defines_narrow_action_scope_not_generic_responsibility()
     system_prompt, _ = build_genai_feedback_prompts(
         stage="D",
         text="每天放學後，我會練習投籃二十分鐘。",
-        book_pack=orid.BOOK_PACK_BY_WEEK[3],
+        book_pack=orid.BOOK_PACK_BY_WEEK[4],
     )
 
     assert "D 段行動主題範圍" in system_prompt
@@ -506,7 +506,7 @@ def test_d_week3_prompt_defines_narrow_action_scope_not_generic_responsibility()
 def test_resolve_known_book_pack_always_overlays_latest_experiment_policy():
     stored = {
         "schema": "book_pack_v1",
-        "version": orid.BOOK_PACK_BY_WEEK[3]["version"],
+        "version": orid.BOOK_PACK_BY_WEEK[4]["version"],
         "book_title": "朱家故事",
         "key_events": ["舊資料仍保留自己的故事內容"] * 3,
         "writing_rubric": {"by_stage": {"D": []}},
@@ -516,7 +516,7 @@ def test_resolve_known_book_pack_always_overlays_latest_experiment_policy():
 
     assert resolved["d_action_student_theme"] == "一起分擔家事、體諒家人"
     assert "為家人主動做哪一件事" in resolved["d_action_question"]
-    assert resolved["writing_rubric"] == orid.BOOK_PACK_BY_WEEK[3]["writing_rubric"]
+    assert resolved["writing_rubric"] == orid.BOOK_PACK_BY_WEEK[4]["writing_rubric"]
     assert resolved["key_events"] == stored["key_events"]
 
 
@@ -525,7 +525,7 @@ def test_d_theme_policy_feedback_is_locked_before_generic_revision_scrub():
     ok, missing, suggestions, example, meta = orid._enforce_d_theme_alignment(
         stage="D",
         student_text=draft,
-        book_pack=orid.BOOK_PACK_BY_WEEK[3],
+        book_pack=orid.BOOK_PACK_BY_WEEK[4],
         ok=True,
         missing=[],
         suggestions=[],

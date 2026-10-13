@@ -9,8 +9,12 @@ describe("control-guide-pages parameterization", () => {
   test("week maps to book ids", () => {
     expect(controlGuideBookIdFromWeek(1)).toBe("book1");
     expect(controlGuideBookIdFromWeek(2)).toBe("book1");
-    expect(controlGuideBookIdFromWeek(3)).toBe("book2");
-    expect(controlGuideBookIdFromWeek(5)).toBe("book3");
+    expect(controlGuideBookIdFromWeek(3)).toBe("book1");
+    expect(controlGuideBookIdFromWeek(4)).toBe("book2");
+    expect(controlGuideBookIdFromWeek(5)).toBe("book2");
+    expect(controlGuideBookIdFromWeek(6)).toBe("book3");
+    expect(controlGuideBookIdFromWeek(7)).toBe("book3");
+    expect(controlGuideBookIdFromWeek(8)).toBe("generic");
   });
 
   test("book1 keeps character-grounded SEL prompts", () => {
@@ -75,13 +79,20 @@ describe("control-guide-pages parameterization", () => {
 
 describe("buildSynthesisOpeningMessage condition wording", () => {
   test("experimental mentions 取得整合回饋", () => {
-    const text = buildSynthesisOpeningMessage(null, "測試書", 2);
+    const text = buildSynthesisOpeningMessage(null, "測試書", 3);
     expect(text).toContain("取得整合回饋");
+    expect(text.startsWith("歡迎來到第 3 週")).toBe(true);
   });
 
   test("control points to fixed prompts instead", () => {
-    const text = buildSynthesisOpeningMessage(null, "測試書", 2, { isControl: true });
+    const text = buildSynthesisOpeningMessage(null, "測試書", 3, { isControl: true });
     expect(text).not.toContain("取得整合回饋");
     expect(text).toContain("整合寫作提示");
+  });
+
+  test("names the source weeks for each integration week", () => {
+    expect(buildSynthesisOpeningMessage(null, "測試書", 3)).toContain("第 1、2 週");
+    expect(buildSynthesisOpeningMessage(null, "測試書", 5)).toContain("第 4 週");
+    expect(buildSynthesisOpeningMessage(null, "測試書", 7)).toContain("第 6 週");
   });
 });

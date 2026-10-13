@@ -2,7 +2,7 @@ import type { MissionStageKey } from "@/lib/orid-mission-copy";
 import { BookIllustration } from "@/components/orid/BookIllustration";
 import { ORID_STAGE_THEME } from "@/lib/orid-stage-theme";
 import { getBookWeekArt } from "@/lib/orid-book-art";
-import { isOddWeek } from "@/lib/orid/week-flow";
+import { isOridWeek, writableStages } from "@/lib/orid/week-flow";
 import { OridMissionProgress } from "@/components/orid/OridMissionProgress";
 
 type StageMissionStatus = "not_started" | "drafting" | "feedback" | "passed";
@@ -10,7 +10,21 @@ type StageMissionStatus = "not_started" | "drafting" | "feedback" | "passed";
 type StageProgress = {
   stage: MissionStageKey;
   status: StageMissionStatus;
+  /** Saved in an earlier week; shown for reference only this week. */
+  readOnly?: boolean;
 };
+
+const STAGE_SHORT: Record<MissionStageKey, string> = { O: "觀察", R: "感受", I: "意義", D: "行動" };
+const CN_COUNT = ["零", "一", "兩", "三", "四"];
+
+function oridWeekSubtitle(weekNum: number): string {
+  const stages = writableStages(weekNum);
+  if (stages.length === 4 || stages.length === 0) {
+    return `第 ${weekNum} 週｜完成四個反思小任務`;
+  }
+  const names = stages.map((s) => STAGE_SHORT[s]).join("、");
+  return `第 ${weekNum} 週｜完成${CN_COUNT[stages.length] ?? stages.length}個反思小任務（${names}）`;
+}
 
 export function OridWeekHero({
   weekNum,
@@ -43,8 +57,8 @@ export function OridWeekHero({
   className?: string;
 }) {
   const focusTheme = ORID_STAGE_THEME[focusStage];
-  const subtitle = isOddWeek(weekNum)
-    ? `第 ${weekNum} 週｜完成四個反思小任務`
+  const subtitle = isOridWeek(weekNum)
+    ? oridWeekSubtitle(weekNum)
     : `第 ${weekNum} 週｜先寫作（左）→ 回饋夥伴（右）`;
   const hasBookArt = !!getBookWeekArt(weekNum);
 
@@ -114,7 +128,7 @@ export function OridWeekHero({
               ) : null}
             </div>
           </div>
-          {isOddWeek(weekNum) || !compact ? (
+          {isOridWeek(weekNum) || !compact ? (
             <div
                 className={[
                 "mt-1 min-w-0 overflow-x-auto rounded-xl border border-amber-100 bg-white/85 xl:mt-1.5",

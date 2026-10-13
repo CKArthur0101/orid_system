@@ -58,10 +58,12 @@ const COMPLETE_SECTIONS: CompleteSection[] = [
 export function FeedbackGuideCard({
   parsed,
   section3Label,
+  week = 1,
 }: {
   parsed: ParsedFeedbackNarration;
   /** Override the third-section label for revision cards (e.g. synthesis view). */
   section3Label?: string;
+  week?: number;
 }) {
   if (parsed.kind === "complete") {
     const sections = parsed.nextStep
@@ -85,7 +87,7 @@ export function FeedbackGuideCard({
                 className={`rounded-xl border p-2.5 text-sm leading-relaxed text-amber-950 ${section.panelClass}`}
               >
                 <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-emerald-800/80">
-                  <PersimmonBullet size={18} />
+                  <PersimmonBullet week={week} size={18} />
                   <span>{section.label}</span>
                 </div>
                 <div className="max-h-[5.5rem] overflow-y-auto whitespace-pre-wrap pl-0.5 text-xs leading-snug md:max-h-[6rem] md:text-sm md:leading-relaxed">
@@ -126,7 +128,7 @@ export function FeedbackGuideCard({
               className={`rounded-xl border p-2.5 text-sm leading-relaxed text-amber-950 ${section.panelClass}`}
             >
               <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-amber-900/80">
-                <PersimmonBullet size={18} />
+                <PersimmonBullet week={week} size={18} />
                 <span>{section.label}</span>
               </div>
               <div className="max-h-[5.5rem] overflow-y-auto whitespace-pre-wrap pl-0.5 text-xs leading-snug md:max-h-[6rem] md:text-sm md:leading-relaxed">

@@ -19,6 +19,8 @@ import {
 import { FlaskConical, TableProperties, TrendingUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { badgeIdsForWeek } from "@/lib/orid/badgeRules";
+import { ORID_TOTAL_WEEKS, isSynthesisWeek } from "@/lib/orid/week-flow";
 
 // ── Types (mirror TeacherResearchOverview schema) ───────────────────────────
 type ResearchSummaryCards = {
@@ -109,7 +111,7 @@ const TEACHER_CARD =
 const TEACHER_SELECT =
   "rounded-xl border-amber-200 bg-[#fffcf7] text-amber-950 focus:ring-amber-400/30";
 
-const WEEK_OPTIONS = [1, 2, 3, 4, 5, 6];
+const WEEK_OPTIONS = Array.from({ length: ORID_TOTAL_WEEKS }, (_, i) => i + 1);
 
 function numOrZero(v: number | null | undefined): number {
   return typeof v === "number" ? v : 0;
@@ -206,10 +208,16 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
   const metricTitle = `${metricLabel}（${metricUnit}）`;
   const metricUnitNote = `數值為每位學生每週平均；單位：${metricUnit}`;
   const isBadgeMetric = metric === "avg_badge_count";
-  const badgeAxisMax = isBadgeMetric && typeof week === "number" && week % 2 === 0 ? 1 : isBadgeMetric ? 4 : undefined;
+  const badgeAxisMax = !isBadgeMetric
+    ? undefined
+    : typeof week === "number" && isSynthesisWeek(week)
+      ? 1
+      : typeof week === "number"
+        ? badgeIdsForWeek(week).length
+        : 4;
   const badgeAxisTicks = badgeAxisMax === 1 ? [0, 0.25, 0.5, 0.75, 1] : undefined;
   const metricHelpText = isBadgeMetric
-    ? "徽章為平均獲得個數；奇數週 ORID 徽章上限 4 個，偶數週整合寫作徽章上限 1 個，跨週比較請留意任務不同。"
+    ? "徽章為平均獲得個數；ORID 分段週徽章上限 4 個（第 1、2 週各 2 個），整合寫作週徽章上限 1 個，跨週比較請留意任務不同。"
     : metricUnitNote;
 
   if (loading) {
@@ -238,7 +246,7 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部週次（1–6）</SelectItem>
+              <SelectItem value="all">全部週次（1–{ORID_TOTAL_WEEKS}）</SelectItem>
               {WEEK_OPTIONS.map((w) => (
                 <SelectItem key={w} value={String(w)}>
                   第 {w} 週

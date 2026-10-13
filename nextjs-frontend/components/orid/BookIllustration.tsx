@@ -1,6 +1,6 @@
 import Image from "next/image";
 
-import { getBookWeekArt } from "@/lib/orid-book-art";
+import { getBookWeekArt, partnerVoice } from "@/lib/orid-book-art";
 
 export function BookIllustration({
   week,
@@ -85,7 +85,7 @@ export function BookHelperAvatar({
     <div className={["shrink-0 overflow-visible bg-transparent", className].filter(Boolean).join(" ")}>
       <Image
         src={art.helper}
-        alt="松果小夥伴"
+        alt={partnerVoice(week).name}
         width={size}
         height={size}
         className="object-contain drop-shadow-sm"

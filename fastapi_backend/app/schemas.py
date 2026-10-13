@@ -326,7 +326,7 @@ class WritingCoachChatRequest(BaseModel):
     stage: str = Field(..., pattern="^(O|R|I|D|ALL)$")
     draft: str = Field("d1", pattern="^(d1|d2)$")
     source: str = Field(..., pattern="^(free_text|feedback_button|synthesis_feedback)$")
-    week: int = Field(1, ge=1, le=6)
+    week: int = Field(1, ge=1, le=7)
     save_feedback: bool = True
     # Week-2 synthesis_feedback only (optional; omitted = legacy behavior)
     synthesis_phase: str | None = None
@@ -589,7 +589,7 @@ class ResearchStudentRow(BaseModel):
 class TeacherResearchOverview(BaseModel):
     class_id: UUID
     class_name: str
-    week: int | None = None  # None = aggregated across weeks 1–6
+    week: int | None = None  # None = aggregated across weeks 1–7
     summary_cards: ResearchSummaryCards
     group_comparison: list[ResearchGroupComparisonRow]
     weekly_trends: list[ResearchWeeklyTrendPoint]

@@ -1,3 +1,5 @@
+import { referenceWeeksLabel } from "@/lib/orid/week-flow";
+
 type StageKey = "O" | "R" | "I" | "D";
 
 type WeekStages = {
@@ -31,17 +33,17 @@ export const SYNTHESIS_CHECKLIST_LABELS: {
 export function buildSynthesisOpeningMessage(
   _priorWeek: WeekStages | null,
   bookTitle?: string | null,
-  evenWeekNum: number = 2,
+  synthesisWeekNum: number = 3,
   options?: { isControl?: boolean },
 ): string {
   const book = bookTitle?.trim() ? `《${bookTitle.trim()}》` : "這本書";
-  const priorWeekNum = evenWeekNum - 1;
+  const sourceLabel = referenceWeeksLabel(synthesisWeekNum) || "之前";
   const closing = options?.isControl
-    ? "左邊可看／複製上週原文。右邊可以翻「整合寫作提示」，一步一步想清楚再寫。"
-    : "左邊可看／複製上週原文。寫好後按「取得整合回饋」，我一次只幫你改一個重點。";
+    ? `左邊可看／複製${sourceLabel}的原文。右邊可以翻「整合寫作提示」，一步一步想清楚再寫。`
+    : `左邊可看／複製${sourceLabel}的原文。寫好後按「取得整合回饋」，我一次只幫你改一個重點。`;
   return [
-    `歡迎來到第 ${evenWeekNum} 週「整合寫作」！`,
-    `這週把第 ${priorWeekNum} 週的四格，收成一篇跟 ${book} 有關的短文。`,
+    `歡迎來到第 ${synthesisWeekNum} 週「整合寫作」！`,
+    `這週把${sourceLabel}寫好的四格，收成一篇跟 ${book} 有關的短文。`,
     "",
     "可以照這個順序寫：",
     "1. 故事裡的事　2. 感受＋原因　3. 學到什麼　4. 以後怎麼做",

@@ -1,13 +1,15 @@
 import type { MissionStageKey } from "@/lib/orid-mission-copy";
 import { PersimmonBullet } from "@/components/orid/PersimmonBullet";
 import { ORID_STAGE_THEME, STAGE_STATUS_BADGE } from "@/lib/orid-stage-theme";
-import { isOddWeek } from "@/lib/orid/week-flow";
+import { isOridWeek } from "@/lib/orid/week-flow";
 
 type StageMissionStatus = "not_started" | "drafting" | "feedback" | "passed";
 
 type StageProgress = {
   stage: MissionStageKey;
   status: StageMissionStatus;
+  /** Saved in an earlier week (e.g. week 1 O/R while on week 2); view only. */
+  readOnly?: boolean;
 };
 
 const STATUS_LABEL: Record<StageMissionStatus, string> = {
@@ -67,9 +69,10 @@ export function OridMissionProgress({
   /** 平板兩欄版面：略縮進度列，不影響大螢幕 */
   tabletTight?: boolean;
 }) {
-  const usePersimmon = isOddWeek(week ?? 0);
+  const usePersimmon = isOridWeek(week ?? 0);
   const bulletSize = compact ? 14 : tabletTight ? 14 : usePersimmon ? 18 : 16;
   const tight = compact || tabletTight;
+  const writableTotal = progress.filter((p) => !p.readOnly).length || 4;
 
   return (
     <div className="flex min-w-0 flex-nowrap items-center gap-0.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] sm:gap-1 md:gap-0.5 lg:gap-1.5 [&::-webkit-scrollbar]:hidden">
@@ -77,6 +80,7 @@ export function OridMissionProgress({
         const theme = ORID_STAGE_THEME[item.stage];
         const active = focusStage === item.stage;
         const done = item.status === "passed";
+        const readOnly = !!item.readOnly;
         return (
           <div key={item.stage} className="flex shrink-0 items-center gap-0.5 sm:gap-1">
             {idx > 0 ? (
@@ -94,16 +98,21 @@ export function OridMissionProgress({
                   : tight
                     ? "min-h-[28px] md:min-h-[30px] xl:min-h-[38px] xl:gap-2 xl:px-2.5 xl:py-1 xl:text-xs"
                     : "min-h-[32px] md:min-h-[34px] lg:min-h-[40px] lg:gap-2 lg:px-2.5 lg:py-1 lg:text-xs",
-                done
-                  ? "border-emerald-400 bg-emerald-50 text-emerald-900"
-                  : active
-                    ? theme.statusActive
-                    : STAGE_STATUS_BADGE[item.status],
+                readOnly
+                  ? active
+                    ? "border-amber-400 bg-amber-50 text-amber-900"
+                    : "border-dashed border-amber-300 bg-white/70 text-amber-800/70"
+                  : done
+                    ? "border-emerald-400 bg-emerald-50 text-emerald-900"
+                    : active
+                      ? theme.statusActive
+                      : STAGE_STATUS_BADGE[item.status],
               ].join(" ")}
-              aria-label={`切換到 ${item.stage} ${theme.shortLabel}`}
+              aria-label={`切換到 ${item.stage} ${theme.shortLabel}${readOnly ? "（唯讀）" : ""}`}
+              title={readOnly ? "之前幾週寫好的內容，這週只能看" : undefined}
             >
               {usePersimmon ? (
-                <PersimmonBullet size={bulletSize} />
+                <PersimmonBullet week={week} size={bulletSize} />
               ) : (
                 <StageDot stage={item.stage} size={bulletSize} />
               )}
@@ -114,7 +123,7 @@ export function OridMissionProgress({
                   compact || tabletTight ? "hidden xl:inline" : "hidden sm:inline",
                 ].join(" ")}
               >
-                {STATUS_LABEL[item.status]}
+                {readOnly ? "唯讀" : STATUS_LABEL[item.status]}
               </span>
             </button>
           </div>
@@ -126,7 +135,7 @@ export function OridMissionProgress({
           tabletTight ? "xl:ml-auto xl:pl-0" : "sm:ml-auto sm:pl-0",
         ].join(" ")}
       >
-        已寫 {writtenCount} / 4
+        已寫 {writtenCount} / {writableTotal}
       </span>
     </div>
   );

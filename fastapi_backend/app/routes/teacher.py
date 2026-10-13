@@ -44,6 +44,13 @@ from app.schemas import (
     ResearchStudentRow,
 )
 from app.users import current_active_user
+from app.content.week_plan import (
+    TOTAL_WEEKS,
+    book_unit_for_week,
+    first_week_of_book_unit,
+    task_type_for_week,
+    weeks_in_book_unit,
+)
 
 router = APIRouter(tags=["teacher"])
 
@@ -73,7 +80,7 @@ def _dt_for_message_filter(dt: datetime | None) -> datetime | None:
 
 
 def _book_unit_from_week(week: int) -> int:
-    return (week + 1) // 2
+    return book_unit_for_week(week)
 
 
 async def _latest_orid_session_for_student_week(
@@ -114,8 +121,8 @@ async def _week_activity_start(
     session: OridSession,
     week: int,
 ) -> datetime | None:
-    """第 week 週對話開始時間（同 book_unit session 內；week 1 為 session 建立時）。"""
-    if week <= 1:
+    """第 week 週對話開始時間（同 book_unit session 內；該書第一週為 session 建立時）。"""
+    if week <= first_week_of_book_unit(week):
         return session.created_at
 
     prev_week = week - 1
@@ -155,18 +162,20 @@ async def _week_chat_bounds(
     session: OridSession,
     week: int,
 ) -> tuple[datetime | None, datetime | None]:
-    """回傳 (lower, upper) 供篩選 OridChatMessage；lower 為 None 表示本週無可辨識對話。"""
-    if week % 2 == 1:
-        lower = _dt_for_message_filter(session.created_at)
-        upper = None
-        if week < 6:
-            upper = _dt_for_message_filter(
-                await _week_activity_start(db, session, week + 1)
-            )
-        return lower, upper
+    """回傳 (lower, upper) 供篩選 OridChatMessage；lower 為 None 表示本週無可辨識對話。
 
-    lower = _dt_for_message_filter(await _week_activity_start(db, session, week))
-    return lower, None
+    同一本書的幾週共用一個 session：該書第一週從 session 建立開始，之後每週
+    從上一週存檔之後開始；若同書還有下一週，則以下一週開始為上界。
+    """
+    unit_weeks = weeks_in_book_unit(book_unit_for_week(week))
+    if week <= min(unit_weeks):
+        lower = _dt_for_message_filter(session.created_at)
+    else:
+        lower = _dt_for_message_filter(await _week_activity_start(db, session, week))
+    upper = None
+    if week < max(unit_weeks):
+        upper = _dt_for_message_filter(await _week_activity_start(db, session, week + 1))
+    return lower, upper
 
 
 def _message_time_filters(
@@ -390,7 +399,7 @@ async def teacher_me_classes(
 @router.get("/classes/{class_id}/overview", response_model=TeacherClassOverview)
 async def teacher_class_overview(
     class_id: UUID,
-    week: int = Query(1, ge=1, le=6),
+    week: int = Query(1, ge=1, le=TOTAL_WEEKS),
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
@@ -625,7 +634,7 @@ async def teacher_class_overview(
 async def teacher_student_summary(
     class_id: UUID,
     student_id: UUID,
-    week: int = Query(1, ge=1, le=6),
+    week: int = Query(1, ge=1, le=TOTAL_WEEKS),
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
@@ -746,7 +755,7 @@ async def teacher_student_summary(
 async def teacher_student_chat_messages(
     class_id: UUID,
     student_id: UUID,
-    week: int = Query(1, ge=1, le=6),
+    week: int = Query(1, ge=1, le=TOTAL_WEEKS),
     limit: int = Query(500, ge=1, le=2000),
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
@@ -792,7 +801,7 @@ async def teacher_student_chat_messages(
 async def get_post_test_scores(
     class_id: UUID,
     student_id: UUID,
-    week: int = Query(1, ge=1, le=6),
+    week: int = Query(1, ge=1, le=TOTAL_WEEKS),
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
@@ -866,7 +875,7 @@ async def upsert_post_test_score(
 
 @router.get("/rubric")
 async def get_writing_rubric(
-    week: int = Query(1, ge=1, le=6),
+    week: int = Query(1, ge=1, le=TOTAL_WEEKS),
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
@@ -911,7 +920,7 @@ async def get_writing_rubric(
 @router.get("/classes/{class_id}/export")
 async def export_class_csv(
     class_id: UUID,
-    week: int = Query(1, ge=1, le=6),
+    week: int = Query(1, ge=1, le=TOTAL_WEEKS),
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
@@ -1066,7 +1075,7 @@ def _research_condition_for_student(student: User) -> str:
 
 
 def _research_task_type_for_week(week: int) -> str:
-    return "orid_stage" if week % 2 == 1 else "synthesis"
+    return task_type_for_week(week)
 
 
 def _empty_research_student_row(student: User, week: int) -> ResearchStudentRow:
@@ -1176,8 +1185,8 @@ async def teacher_research_overview(
     control_count = len(students) - experimental_count
 
     # Rows in scope for cards / group comparison / completion / student table.
-    # `week=None` means "aggregated across weeks 1–6" (each student-week row is
-    # one data point) — weekly_trends below always spans all 6 weeks regardless.
+    # `week=None` means "aggregated across weeks 1–7" (each student-week row is
+    # one data point) — weekly_trends below always spans all 7 weeks regardless.
     scope_stmt = select(OridWeeklyResearchSummary).where(
         OridWeeklyResearchSummary.user_id.in_(student_ids)
     )
@@ -1236,7 +1245,7 @@ async def teacher_research_overview(
     ]
     trend_weeks = {row.week for row in trend_student_rows}
     weekly_trends: list[ResearchWeeklyTrendPoint] = []
-    for wk in range(1, 7):
+    for wk in range(1, TOTAL_WEEKS + 1):
         if wk not in trend_weeks:
             continue
         wk_rows = _fill_missing_research_student_rows(
@@ -1281,21 +1290,21 @@ async def teacher_research_overview(
 @router.get("/classes/{class_id}/research-overview", response_model=TeacherResearchOverview)
 async def get_teacher_research_overview(
     class_id: UUID,
-    week: int | None = Query(None, ge=1, le=6),
+    week: int | None = Query(None, ge=1, le=TOTAL_WEEKS),
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
     """Research-analysis data for the "研究分析" tab: guiding-method (condition)
     vs. writing engagement/revision, built from OridWeeklyResearchSummary.
-    `week` omitted → aggregated across weeks 1–6 (weekly_trends always spans
-    all 6 weeks regardless, since that is its purpose)."""
+    `week` omitted → aggregated across weeks 1–7 (weekly_trends always spans
+    all 7 weeks regardless, since that is its purpose)."""
     return await teacher_research_overview(class_id, week, db, user)
 
 
 @router.get("/classes/{class_id}/research-export")
 async def export_research_csv(
     class_id: UUID,
-    week: int | None = Query(None, ge=1, le=6),
+    week: int | None = Query(None, ge=1, le=TOTAL_WEEKS),
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):

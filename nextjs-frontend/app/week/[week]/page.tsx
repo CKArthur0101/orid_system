@@ -12,13 +12,21 @@ import { OridPartnerMascot } from "@/components/orid/OridMascotImage";
 import { StudentChatAvatar } from "@/components/orid/StudentAvatarMark";
 import { PersimmonBullet } from "@/components/orid/PersimmonBullet";
 import { WritingPromptHelper } from "@/components/orid/WritingPromptHelper";
-import { getBookWeekArt } from "@/lib/orid-book-art";
+import { getBookWeekArt, partnerVoice } from "@/lib/orid-book-art";
 import { buildCoachOpeningMessage } from "@/lib/orid/coach-opening";
 import { buildSynthesisOpeningMessage } from "@/lib/orid/synthesis-opening";
-import { isEvenWeek, isOddWeek, priorOddWeek } from "@/lib/orid/week-flow";
 import {
-  ORID_BADGE_ORDER,
-  SYNTHESIS_BADGE_ORDER,
+  bookUnitFromWeek,
+  isOridWeek,
+  isStageWritable,
+  isSynthesisWeek,
+  referenceWeeks,
+  referenceWeeksLabel,
+  stageSourceWeek,
+  writableStages,
+} from "@/lib/orid/week-flow";
+import {
+  badgeIdsForWeek,
   type BadgeId,
   type SynthesisCriterionId,
   calculateEarnedBadges,
@@ -330,10 +338,30 @@ function createEmptyWriting(week: number): OridWritingV1 {
     week,
     stages,
   };
-  if (week === 2) {
+  if (isSynthesisWeek(week)) {
     return { ...base, week2_flow: "orid_review", synthesis_draft: "" };
   }
   return base;
+}
+
+/**
+ * Merge the saved ORID cards of several earlier weeks into one read-only
+ * writing object: each stage is taken from the week allowed to write it
+ * (week 3 → O/R from week 1, I/D from week 2; week 5 → all from week 4).
+ */
+function mergeReferenceWritings(
+  viewWeek: number,
+  byWeek: Partial<Record<number, OridWritingV1>>,
+): OridWritingV1 {
+  const refs = referenceWeeks(viewWeek);
+  const merged = createEmptyWriting(refs[refs.length - 1] ?? viewWeek);
+  for (const { key } of STAGES) {
+    const src = stageSourceWeek(viewWeek, key);
+    if (src == null || src === viewWeek) continue;
+    const stage = byWeek[src]?.stages?.[key];
+    if (stage) merged.stages[key] = stage;
+  }
+  return merged;
 }
 
 function normalizeFeedbackObject(input: any): WritingFeedback | null {
@@ -385,7 +413,7 @@ function normalizeWritingContent(raw: unknown, week: number): OridWritingV1 {
 
   const weekNum = Number(obj?.week ?? week) || week;
   const flow: Week2Flow | undefined =
-    obj?.week2_flow === "synthesis" || obj?.week2_flow === "orid_review" ? obj.week2_flow : isEvenWeek(weekNum) ? "orid_review" : undefined;
+    obj?.week2_flow === "synthesis" || obj?.week2_flow === "orid_review" ? obj.week2_flow : isSynthesisWeek(weekNum) ? "orid_review" : undefined;
 
   const o = obj as any;
   const base: OridWritingV1 = {
@@ -399,7 +427,7 @@ function normalizeWritingContent(raw: unknown, week: number): OridWritingV1 {
       : {}),
   };
 
-  if (isEvenWeek(weekNum) && flow === "synthesis") {
+  if (isSynthesisWeek(weekNum) && flow === "synthesis") {
     const out: OridWritingV1 = {
       ...base,
       synthesis_draft: typeof o.synthesis_draft === "string" ? o.synthesis_draft : "",
@@ -473,18 +501,26 @@ function isLegacyCoachWelcome(text: string): boolean {
   return text.includes(LEGACY_COACH_WELCOME_SNIPPET);
 }
 
-function buildCoachWelcomeMsg(bookPack: BookPackV1 | null): ChatMsg {
+function buildCoachWelcomeMsg(bookPack: BookPackV1 | null, week: number): ChatMsg {
   return {
     role: "ai",
-    text: buildCoachOpeningMessage(bookPack),
+    text: buildCoachOpeningMessage(bookPack, week),
   };
 }
 
-function refreshLegacyCoachWelcome(prev: ChatMsg[], bookPack: BookPackV1 | null): ChatMsg[] | null {
+function refreshLegacyCoachWelcome(prev: ChatMsg[], bookPack: BookPackV1 | null, week: number): ChatMsg[] | null {
   if (prev.length === 1 && prev[0].role === "ai" && isLegacyCoachWelcome(prev[0].text)) {
-    return [buildCoachWelcomeMsg(bookPack)];
+    return [buildCoachWelcomeMsg(bookPack, week)];
   }
   return null;
+}
+
+function displayPartnerText(text: string, week: number): string {
+  if (bookUnitFromWeek(week) === 1) return text;
+  const name = partnerVoice(week).name;
+  return text
+    .replace(/我是你的松果小夥伴\s*🌰?/g, `我是${name}`)
+    .replace(/松果小夥伴\s*🌰?/g, name);
 }
 
 const SYNTHESIS_OPENING_PREFIX = "歡迎來到第 ";
@@ -557,8 +593,9 @@ export default function WeekBookPage() {
     week: number;
   }>({ sessionId: null, readingId: null, week: weekNum });
   const [oridCanForceNew, setOridCanForceNew] = useState(false);
+  /** Read-only ORID cards merged from this week's reference weeks (see WEEK_PLAN). */
   const [priorWeekData, setPriorWeekData] = useState<OridWritingV1 | null>(null);
-  const [focusStage, setFocusStage] = useState<StageKey>("O");
+  const [focusStage, setFocusStage] = useState<StageKey>(() => writableStages(weekNum)[0] ?? "O");
   const [fbLoading, setFbLoading] = useState(false);
   const [fbError, setFbError] = useState<string | null>(null);
   /** Even-week synthesis: hide left ORID review panel to widen writing + partner. */
@@ -847,41 +884,64 @@ export default function WeekBookPage() {
     return () => ac.abort();
   }, []);
 
+  const synthesisWeek = isSynthesisWeek(weekNum);
+  const oridWeek = isOridWeek(weekNum);
+  const refWeeks = referenceWeeks(weekNum);
+  const refWeeksKey = refWeeks.join(",");
+
   useEffect(() => {
-    if (!isEvenWeek(weekNum) || !sessionId) return;
-    const priorWeek = priorOddWeek(weekNum);
+    setPriorWeekData(null);
+    if (refWeeks.length === 0 || !sessionId) return;
     const ac = new AbortController();
     (async () => {
-      try {
-        const res = await fetch(`/api/orid/writings?session_id=${sessionId}&week=${priorWeek}&latest=true`, {
-          credentials: "include",
-          cache: "no-store",
-          signal: ac.signal,
-        });
-        const text = await res.text();
-        if (!res.ok) {
-          setPriorWeekData(createEmptyWriting(priorWeek));
-          return;
-        }
-        const list = text ? JSON.parse(text) : [];
-        const latest = Array.isArray(list) ? list[0] : null;
-        if (latest?.content) {
-          setPriorWeekData(parseWritingRecordContent(latest.content, priorWeek));
-        } else {
-          setPriorWeekData(createEmptyWriting(priorWeek));
-        }
-      } catch {
-        setPriorWeekData(createEmptyWriting(priorWeek));
-      }
+      const byWeek: Partial<Record<number, OridWritingV1>> = {};
+      await Promise.all(
+        refWeeks.map(async (refWeek) => {
+          try {
+            const res = await fetch(`/api/orid/writings?session_id=${sessionId}&week=${refWeek}&latest=true`, {
+              credentials: "include",
+              cache: "no-store",
+              signal: ac.signal,
+            });
+            const text = await res.text();
+            if (!res.ok) return;
+            const list = text ? JSON.parse(text) : [];
+            const latest = Array.isArray(list) ? list[0] : null;
+            if (latest?.content) {
+              byWeek[refWeek] = parseWritingRecordContent(latest.content, refWeek);
+            }
+          } catch {
+            /* missing reference week → empty cards */
+          }
+        }),
+      );
+      if (!ac.signal.aborted) setPriorWeekData(mergeReferenceWritings(weekNum, byWeek));
     })();
     return () => ac.abort();
-  }, [weekNum, sessionId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weekNum, refWeeksKey, sessionId]);
 
-  const w2Phase = isEvenWeek(weekNum) ? writingData.week2_flow ?? "orid_review" : null;
-  const oridDisplay = isEvenWeek(weekNum) ? (priorWeekData ?? createEmptyWriting(priorOddWeek(weekNum))) : writingData;
-  const showStageFeedbackButtons = isOddWeek(weekNum);
-  const showSynthesisColumn = isEvenWeek(weekNum) && w2Phase === "synthesis";
-  const oridReadOnly = isEvenWeek(weekNum);
+  const w2Phase = synthesisWeek ? writingData.week2_flow ?? "orid_review" : null;
+  const referenceDisplay = useMemo(
+    () => priorWeekData ?? mergeReferenceWritings(weekNum, {}),
+    [priorWeekData, weekNum],
+  );
+  /**
+   * Cards shown in the ORID panel: integration weeks show the merged reference
+   * weeks; ORID weeks show this week's writable cards plus any read-only cards
+   * carried over from a reference week (week 2 shows week 1's O/R).
+   */
+  const oridDisplay = useMemo((): OridWritingV1 => {
+    if (synthesisWeek) return referenceDisplay;
+    if (refWeeks.length === 0) return writingData;
+    const stages = { ...writingData.stages };
+    for (const { key } of STAGES) {
+      if (!isStageWritable(weekNum, key)) stages[key] = referenceDisplay.stages[key];
+    }
+    return { ...writingData, stages };
+  }, [synthesisWeek, referenceDisplay, refWeeks.length, writingData, weekNum]);
+  const showStageFeedbackButtons = oridWeek;
+  const showSynthesisColumn = synthesisWeek && w2Phase === "synthesis";
   const showOridLeftPanel = !showSynthesisColumn || !oridPanelCollapsed;
 
   useEffect(() => {
@@ -907,22 +967,33 @@ export default function WeekBookPage() {
     }
   }
 
-  const missionProgress = useMemo(() => {
-    const data = isEvenWeek(weekNum) ? (priorWeekData ?? createEmptyWriting(priorOddWeek(weekNum))) : writingData;
-    return STAGES.map(({ key }) => ({
+  const missionProgress = useMemo((): { stage: StageKey; status: StageMissionStatus; readOnly?: boolean }[] => {
+    if (synthesisWeek) {
+      return STAGES.map(({ key }) => ({
+        stage: key,
+        status: deriveStageMissionStatus(oridDisplay.stages[key]),
+      }));
+    }
+    // ORID weeks: only stages that exist this week — writable ones plus
+    // read-only cards from a reference week (week 1 shows O/R only).
+    return STAGES.filter(({ key }) => stageSourceWeek(weekNum, key) != null).map(({ key }) => ({
       stage: key,
-      status: deriveStageMissionStatus(data.stages[key]),
+      status: deriveStageMissionStatus(oridDisplay.stages[key]),
+      readOnly: !isStageWritable(weekNum, key),
     }));
-  }, [writingData, priorWeekData, weekNum]);
+  }, [oridDisplay, synthesisWeek, weekNum]);
   const writtenCount = useMemo(
-    () => missionProgress.filter((item) => item.status !== "not_started").length,
+    () => missionProgress.filter((item) => !item.readOnly && item.status !== "not_started").length,
     [missionProgress],
   );
+  const thisWeekStages = useMemo(() => writableStages(weekNum), [weekNum]);
   const allStagesWritten = useMemo(
-    () => STAGES.every(({ key }) => String(writingData.stages[key].d1 ?? "").trim().length > 0),
-    [writingData],
+    () =>
+      thisWeekStages.length > 0 &&
+      thisWeekStages.every((key) => String(writingData.stages[key].d1 ?? "").trim().length > 0),
+    [writingData, thisWeekStages],
   );
-  const canSubmitWriting = isEvenWeek(weekNum)
+  const canSubmitWriting = synthesisWeek
     ? String(writingData.synthesis_draft ?? "").trim().length > 0
     : allStagesWritten;
   const autosaveStatusText =
@@ -939,7 +1010,7 @@ export default function WeekBookPage() {
       ? "orid-synthesis-grid grid min-h-0 w-full flex-1 grid-cols-1 gap-2 overflow-hidden max-md:gap-2.5 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] md:gap-2 lg:gap-3"
       : "orid-synthesis-grid grid min-h-0 w-full flex-1 grid-cols-1 gap-2 overflow-hidden max-md:gap-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,1fr)] md:gap-2 lg:gap-3"
     : "grid min-h-0 w-full flex-1 grid-cols-1 gap-2.5 overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-3";
-  const visibleBadgeIds = isEvenWeek(weekNum) ? SYNTHESIS_BADGE_ORDER : ORID_BADGE_ORDER;
+  const visibleBadgeIds = useMemo(() => badgeIdsForWeek(weekNum), [weekNum]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -947,7 +1018,7 @@ export default function WeekBookPage() {
       earnedBadges,
       badgeIds: visibleBadgeIds,
       week: weekNum,
-      bookId: weekNum <= 2 ? "book1" : weekNum <= 4 ? "book2" : "book3",
+      bookId: `book${bookUnitFromWeek(weekNum)}`,
     };
     const dispatchBadgeDisplay = () => {
       window.dispatchEvent(new CustomEvent("orid:badge-display", { detail }));
@@ -967,6 +1038,9 @@ export default function WeekBookPage() {
 
   const activeStageDef = STAGES.find((s) => s.key === focusStage) ?? STAGES[0];
   const activeStage = activeStageDef.key;
+  /** Integration weeks are fully read-only; ORID weeks lock cards owned by a reference week. */
+  const oridReadOnly = synthesisWeek || !isStageWritable(weekNum, activeStage);
+  const activeStageSourceWeek = stageSourceWeek(weekNum, activeStage);
   const activeTheme = ORID_STAGE_THEME[activeStage];
   const activeStageStatus = deriveStageMissionStatus(oridDisplay.stages[activeStage]);
   const activeMissionMeta = STAGE_MISSION_META[activeStage];
@@ -1315,20 +1389,20 @@ export default function WeekBookPage() {
     return () => ac.abort();
   }, [sessionId, weekNum, progressHydratedSessionId, condition]);
 
-  /** 聊天載入後：奇數週空聊天才種 ORID 開場；整合寫作開場改由 synthesisTabMessages 顯示，不寫入全域 messages */
+  /** 聊天載入後：ORID 週空聊天才種 ORID 開場；整合寫作開場改由 synthesisTabMessages 顯示，不寫入全域 messages */
   useEffect(() => {
     if (!historyLoaded || !readingContentReady) return;
-    if (isEvenWeek(weekNum) && writingData.week2_flow === "synthesis") return;
+    if (synthesisWeek && writingData.week2_flow === "synthesis") return;
 
     setMessages((prev) => {
-      const refreshed = refreshLegacyCoachWelcome(prev, bookPack);
+      const refreshed = refreshLegacyCoachWelcome(prev, bookPack, weekNum);
       if (refreshed) return refreshed;
 
       if (!seededInitial) return prev;
       if (prev.length > 0) return prev;
-      return [buildCoachWelcomeMsg(bookPack)];
+      return [buildCoachWelcomeMsg(bookPack, weekNum)];
     });
-  }, [historyLoaded, readingContentReady, seededInitial, bookPack, weekNum, writingData.week2_flow]);
+  }, [historyLoaded, readingContentReady, seededInitial, bookPack, weekNum, synthesisWeek, writingData.week2_flow]);
 
   function appendAiReply(text: unknown, stage?: string) {
     const reply = String(text ?? "").trim();
@@ -1346,7 +1420,7 @@ export default function WeekBookPage() {
   }
 
   async function runFeedback(stage: StageKey) {
-    if (!sessionId || !showStageFeedbackButtons) return;
+    if (!sessionId || !showStageFeedbackButtons || !isStageWritable(weekNum, stage)) return;
 
     const text = String(writingData.stages[stage]?.d1 ?? "").trim();
     if (!text) {
@@ -1432,14 +1506,27 @@ export default function WeekBookPage() {
         ? (meta.earnedBadges as BadgeId[])
         : [];
       if (mergedBadges.length === 0) {
+        // Local fallback mirrors the backend: this week's writable cards plus
+        // the read-only cards carried over from reference weeks (week 2 needs
+        // week 1's O/R to reach the silver/gold badges).
+        const combined: OridWritingV1 = {
+          ...nextWriting,
+          stages: { ...nextWriting.stages },
+        };
+        for (const { key } of STAGES) {
+          if (!isStageWritable(weekNum, key) && referenceDisplay.stages[key]) {
+            combined.stages[key] = referenceDisplay.stages[key];
+          }
+        }
         const stagesPassed = isControlConditionValue(normalizedCondition)
-          ? stagesPassedFromWritingContent(nextWriting)
-          : stagesPassedFromWritingOk(nextWriting);
+          ? stagesPassedFromWritingContent(combined)
+          : stagesPassedFromWritingOk(combined);
+        const allowed = new Set<BadgeId>(badgeIdsForWeek(weekNum));
         mergedBadges = calculateEarnedBadges({
           hasWritingContent: text.length > 0,
           hasUsedFeedbackOrPrompt: true,
           stagesPassed,
-        });
+        }).filter((b) => allowed.has(b));
       }
       const allBadges = Array.from(new Set([...earnedBadges, ...mergedBadges])) as BadgeId[];
       const newOnes: BadgeId[] = Array.isArray(meta.newlyEarnedBadges)
@@ -1493,7 +1580,7 @@ export default function WeekBookPage() {
     if (!clean) return;
     setFbError(null);
     let nextWriting: OridWritingV1 | null = null;
-    if (isEvenWeek(weekNum) && w2Phase === "synthesis") {
+    if (synthesisWeek && w2Phase === "synthesis") {
       const cur = String(writingData.synthesis_draft ?? "").trimEnd();
       const next = cur ? `${cur}\n${clean}` : clean;
       nextWriting = { ...writingData, synthesis_draft: next };
@@ -1520,7 +1607,7 @@ export default function WeekBookPage() {
   }
 
   async function runSynthesisFeedback() {
-    if (!sessionId || !isEvenWeek(weekNum) || isControl) return;
+    if (!sessionId || !synthesisWeek || isControl) return;
 
     const draft = String(writingData.synthesis_draft ?? "").trim();
     if (draft.length < 12) {
@@ -1618,7 +1705,7 @@ export default function WeekBookPage() {
     if (!sessionId) return;
     const snapshot = options?.writingSnapshot ?? writingData;
     const stage = options?.stage ?? focusStage;
-    const wordCount = isEvenWeek(weekNum)
+    const wordCount = synthesisWeek
       ? String(snapshot.synthesis_draft ?? "").trim().length
       : String(snapshot.stages[stage]?.d1 ?? "").trim().length;
     try {
@@ -1739,7 +1826,7 @@ export default function WeekBookPage() {
   }
 
   async function submitWeek2PhaseToSynthesis() {
-    if (!sessionId || !readingId || !isEvenWeek(weekNum)) return;
+    if (!sessionId || !readingId || !synthesisWeek) return;
     try {
       setWritingSubmitting(true);
       setWritingError(null);
@@ -1830,12 +1917,12 @@ export default function WeekBookPage() {
           />
 
           <div className="kid-shell flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden max-md:min-h-[40vh]">
-            {isEvenWeek(weekNum) ? (
+            {synthesisWeek ? (
               <div className="flex shrink-0 items-center justify-between gap-2 border-b border-amber-100 px-3 py-1.5 text-[10px] text-amber-900/70 sm:text-xs">
                 <span className="min-w-0 truncate text-left">
                   {w2Phase === "orid_review"
-                    ? `顯示第 ${priorOddWeek(weekNum)} 週已儲存內容（唯讀）`
-                    : `第 ${priorOddWeek(weekNum)} 週四段（唯讀）`}
+                    ? `顯示${referenceWeeksLabel(weekNum)}已儲存內容（唯讀）`
+                    : `${referenceWeeksLabel(weekNum)}四段（唯讀）`}
                 </span>
                 {showSynthesisColumn ? (
                   <button
@@ -1844,9 +1931,17 @@ export default function WeekBookPage() {
                     onClick={() => setOridPanelCollapsedPersist(true)}
                   >
                     <span aria-hidden>←</span>
-                    收起上週
+                    收起四段
                   </button>
                 ) : null}
+              </div>
+            ) : oridReadOnly && activeStageSourceWeek != null ? (
+              <div className="flex shrink-0 items-center gap-2 border-b border-amber-100 px-3 py-1.5 text-[10px] text-amber-900/70 sm:text-xs">
+                <span className="min-w-0 truncate text-left">
+                  {`第 ${activeStageSourceWeek} 週已儲存內容（唯讀）— 這週請寫${thisWeekStages
+                    .map((s) => STAGE_TITLES[s])
+                    .join("、")}`}
+                </span>
               </div>
             ) : null}
 
@@ -1862,10 +1957,10 @@ export default function WeekBookPage() {
                   <div className="min-w-0 flex-1 pr-1 sm:pr-2">
                     <div className="flex min-w-0 flex-col gap-0.5">
                       <div className={`break-words text-sm font-bold leading-snug sm:text-sm ${activeTheme.titleColor}`}>
-                        {isOddWeek(weekNum) ? activeCardMeta.title : STAGE_TITLES[activeStage]}
+                        {oridWeek ? activeCardMeta.title : STAGE_TITLES[activeStage]}
                       </div>
                     <div className="break-words text-[11px] leading-snug text-amber-900/65 sm:text-xs">
-                      {isOddWeek(weekNum) ? activeCardMeta.question : STAGE_WRITING_HINT[activeStage]}
+                      {oridWeek ? activeCardMeta.question : STAGE_WRITING_HINT[activeStage]}
                     </div>
                     </div>
                     <span
@@ -1890,7 +1985,7 @@ export default function WeekBookPage() {
                         複製
                       </button>
                     ) : null}
-                    {isOddWeek(weekNum) ? (
+                    {oridWeek ? (
                       <>
                         <button
                           type="button"
@@ -1905,7 +2000,7 @@ export default function WeekBookPage() {
                           className="kid-btn-3d-secondary shrink-0"
                           disabled={!sessionId || !readingId || writingSubmitting || !canSubmitWriting}
                           onClick={() => saveWriting("submit")}
-                          title="四段完成後正式提交"
+                          title={thisWeekStages.length === 4 ? "四段完成後正式提交" : "這週的段落完成後正式提交"}
                         >
                           提交
                         </button>
@@ -1915,7 +2010,7 @@ export default function WeekBookPage() {
                 </div>
 
                 <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden px-2 pt-0 sm:px-2.5 md:px-2 md:pt-0">
-                  {isOddWeek(weekNum) ? (
+                  {oridWeek && !oridReadOnly ? (
                     <div className="mb-1 shrink-0 text-[10px] text-amber-900/60 sm:text-[11px] md:hidden lg:block lg:text-[11px]">
                       {activeMissionMeta.helperHint}
                     </div>
@@ -1964,19 +2059,19 @@ export default function WeekBookPage() {
                         ].join(" ")}
                       >
                         <div className={["mb-1 flex shrink-0 items-center gap-1 font-semibold", activeTheme.hintTitle].join(" ")}>
-                          {isOddWeek(weekNum) ? <PersimmonBullet size={16} /> : null}
+                          {oridWeek ? <PersimmonBullet week={weekNum} size={16} /> : null}
                           {activeAiExample ? "小幫手建議：" : "可以這樣開頭："}
                         </div>
                         <div className="flex flex-col gap-1">
                           {activeAiExample ? (
                             <div className="flex gap-1 break-words font-medium text-amber-950/85">
-                              {isOddWeek(weekNum) ? <PersimmonBullet size={14} className="mt-0.5" /> : null}
+                              {oridWeek ? <PersimmonBullet week={weekNum} size={14} className="mt-0.5" /> : null}
                               <span>{activeAiExample}</span>
                             </div>
                           ) : (
                             STAGE_SCAFFOLD_LINES[activeStage].map((line) => (
                               <div key={line} className="flex gap-1 break-words">
-                                <PersimmonBullet size={14} className="mt-0.5" />
+                                <PersimmonBullet week={weekNum} size={14} className="mt-0.5" />
                                 <span>{line}</span>
                               </div>
                             ))
@@ -1991,7 +2086,7 @@ export default function WeekBookPage() {
 
             <div className="shrink-0 border-t border-amber-100 px-3 pb-2 pt-2 md:px-2 md:pb-1.5 md:pt-1.5 lg:px-3 lg:pb-2.5">
               <div className="flex flex-col gap-2">
-                {isEvenWeek(weekNum) && w2Phase === "orid_review" ? (
+                {synthesisWeek && w2Phase === "orid_review" ? (
                   <button
                     type="button"
                     className="kid-btn-3d-primary kid-btn-3d-block"
@@ -2000,7 +2095,7 @@ export default function WeekBookPage() {
                   >
                     ⏭️ 進入整合寫作
                   </button>
-                ) : showStageFeedbackButtons && !isControl ? (
+                ) : showStageFeedbackButtons && !isControl && !oridReadOnly ? (
                   <button
                     type="button"
                     className="kid-btn-3d-primary kid-btn-3d-block"
@@ -2083,7 +2178,7 @@ export default function WeekBookPage() {
                   onClick={() => setOridPanelCollapsedPersist(!oridPanelCollapsed)}
                 >
                   <span aria-hidden>{oridPanelCollapsed ? "→" : "←"}</span>
-                  {oridPanelCollapsed ? "展開上週" : "收起上週"}
+                  {oridPanelCollapsed ? "展開四段" : "收起四段"}
                 </button>
               </div>
             </div>
@@ -2208,7 +2303,7 @@ export default function WeekBookPage() {
                             : "text-amber-700/60 hover:text-amber-800",
                         ].join(" ")}
                       >
-                        {tab === "synthesis" ? "整合寫作對話" : "上週對話"}
+                        {tab === "synthesis" ? "整合寫作對話" : "分段寫作對話"}
                       </button>
                     ))}
                   </div>
@@ -2264,6 +2359,7 @@ export default function WeekBookPage() {
                                   <FeedbackGuideCard
                                     parsed={parsedFeedback}
                                     section3Label="③ 可以這樣修改"
+                                    week={weekNum}
                                   />
                                 ) : (
                                   <div
@@ -2280,7 +2376,7 @@ export default function WeekBookPage() {
                                     }
                                   >
                                     <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                                      {isStudent ? stripStudentDraftLabel(m.text) : m.text}
+                                      {isStudent ? stripStudentDraftLabel(m.text) : displayPartnerText(m.text, weekNum)}
                                     </div>
                                   </div>
                                 )}
@@ -2303,7 +2399,7 @@ export default function WeekBookPage() {
                                 <span className="h-2 w-2 animate-bounce rounded-full bg-amber-500/80 [animation-delay:-0.24s]" />
                                 <span className="h-2 w-2 animate-bounce rounded-full bg-amber-500/80 [animation-delay:-0.12s]" />
                                 <span className="h-2 w-2 animate-bounce rounded-full bg-amber-500/80" />
-                                <span className="ml-2 text-xs text-amber-900/70">松果小幫手正在思考…</span>
+                                <span className="ml-2 text-xs text-amber-900/70">{partnerVoice(weekNum).thinking}</span>
                               </div>
                             </div>
                           </div>
@@ -2317,7 +2413,7 @@ export default function WeekBookPage() {
                       </div>
                     ) : week1Messages.length === 0 ? (
                       <div className="flex h-full min-h-[6rem] items-center justify-center px-2 text-center text-xs text-amber-900/50 sm:text-sm">
-                        {!historyLoaded ? "載入中…" : "目前沒有上週對話紀錄。"}
+                        {!historyLoaded ? "載入中…" : "目前沒有分段寫作的對話紀錄。"}
                       </div>
                     ) : (
                       <div className="flex flex-col gap-3">
@@ -2353,10 +2449,10 @@ export default function WeekBookPage() {
                                   .join(" ")}
                               >
                                 {parsedFeedback ? (
-                                  <FeedbackGuideCard parsed={parsedFeedback} />
+                                  <FeedbackGuideCard parsed={parsedFeedback} week={weekNum} />
                                 ) : (
                                   <div className={isStudent ? "kid-bubble-student" : "kid-bubble-ai"}>
-                                    <div className="whitespace-pre-wrap leading-relaxed">{isStudent ? stripStudentDraftLabel(m.text) : m.text}</div>
+                                    <div className="whitespace-pre-wrap leading-relaxed">{isStudent ? stripStudentDraftLabel(m.text) : displayPartnerText(m.text, weekNum)}</div>
                                   </div>
                                 )}
                               </div>
@@ -2399,7 +2495,7 @@ export default function WeekBookPage() {
                         </div>
                       )}
                       <div className="kid-bubble-ai max-w-[calc(100%-5rem)] text-xs leading-relaxed sm:max-w-[18rem] sm:text-sm">
-                        你好！我是松果小夥伴 🌰
+                        {partnerVoice(weekNum).hello}
                         <br />
                         寫好後點「取得回饋」，我會用小小卡片回你，不會一次塞滿整頁喔。
                       </div>
@@ -2451,7 +2547,7 @@ export default function WeekBookPage() {
                                   .join(" ")}
                               >
                                 {parsedFeedback ? (
-                                  <FeedbackGuideCard parsed={parsedFeedback} />
+                                  <FeedbackGuideCard parsed={parsedFeedback} week={weekNum} />
                                 ) : (
                                   <div
                                     className={
@@ -2464,7 +2560,7 @@ export default function WeekBookPage() {
                                         : "kid-bubble-ai"
                                     }
                                   >
-                                    <div className="whitespace-pre-wrap leading-relaxed">{isStudent ? stripStudentDraftLabel(m.text) : m.text}</div>
+                                    <div className="whitespace-pre-wrap leading-relaxed">{isStudent ? stripStudentDraftLabel(m.text) : displayPartnerText(m.text, weekNum)}</div>
                                   </div>
                                 )}
                               </div>
@@ -2486,7 +2582,7 @@ export default function WeekBookPage() {
                                 <span className="h-2 w-2 animate-bounce rounded-full bg-amber-500/80 [animation-delay:-0.24s]" />
                                 <span className="h-2 w-2 animate-bounce rounded-full bg-amber-500/80 [animation-delay:-0.12s]" />
                                 <span className="h-2 w-2 animate-bounce rounded-full bg-amber-500/80" />
-                                <span className="ml-2 text-xs text-amber-900/70">松果小幫手正在思考…</span>
+                                <span className="ml-2 text-xs text-amber-900/70">{partnerVoice(weekNum).thinking}</span>
                               </div>
                             </div>
                           </div>

@@ -3,16 +3,14 @@ import Link from "next/link";
 import { SYSTEM_ILLUSTRATIONS } from "@/lib/orid-system-art";
 import { OridStageDots, type StageState } from "@/components/orid/OridStageDots";
 import type { OridStageKey } from "@/lib/orid-stage-theme";
-import {
-  ORID_BADGE_ORDER,
-  SYNTHESIS_BADGE_ORDER,
-  getHomeMedalImagePath,
-} from "@/lib/orid/badgeRules";
+import { badgeIdsForWeek, getHomeMedalImagePath } from "@/lib/orid/badgeRules";
 import { studentWeekPath } from "@/lib/student-routes";
 
 interface WeekSelectionCardProps {
   week: number;
   title?: string;
+  /** Short task label under the title, e.g. 「O・R 觀察與感受」 for week 1. */
+  subtitle?: string;
   coverThumb?: string;
   locked?: boolean;
   earnedBadges?: string[];
@@ -22,20 +20,21 @@ interface WeekSelectionCardProps {
 function CardBody({
   week,
   title,
+  subtitle,
   coverThumb,
   locked,
   earnedBadges,
   stageStates,
 }: WeekSelectionCardProps) {
   const thumbSrc = coverThumb ?? SYSTEM_ILLUSTRATIONS.reading;
-  const expectedBadgeIds = week % 2 === 0 ? SYNTHESIS_BADGE_ORDER : ORID_BADGE_ORDER;
+  const expectedBadgeIds = badgeIdsForWeek(week);
   const earnedBadgeSet = new Set(earnedBadges ?? []);
   const earnedBadgeCount = expectedBadgeIds.filter((id) => earnedBadgeSet.has(id)).length;
   const hasBadges = earnedBadgeCount > 0;
 
   return (
     <>
-      <div className="flex min-w-0 flex-1 flex-col justify-between gap-3 p-4 sm:p-5">
+      <div className="flex min-w-0 flex-1 flex-col justify-between gap-2.5 p-3.5 sm:gap-3 sm:p-4 lg:p-5">
         <div>
           <p
             className={`text-xs font-semibold uppercase tracking-wide sm:text-sm ${
@@ -45,12 +44,15 @@ function CardBody({
             第 {week} 週
           </p>
           <p
-            className={`mt-1 text-base font-bold leading-snug sm:text-lg ${
+            className={`mt-1 text-base font-bold leading-snug md:text-[15px] md:leading-snug lg:text-lg ${
               locked ? "text-amber-900/50" : "text-amber-950"
             }`}
           >
             {locked ? "尚未開放" : title ? `《${title}》` : "故事即將公布"}
           </p>
+          {!locked && subtitle ? (
+            <p className="mt-1 text-sm font-semibold text-amber-800/80 md:text-[13px] lg:text-base">{subtitle}</p>
+          ) : null}
           {locked ? (
             <p className="mt-1 text-xs text-amber-900/40 sm:text-sm">請等老師通知</p>
           ) : null}
@@ -86,7 +88,7 @@ function CardBody({
         ) : null}
       </div>
 
-      <div className="flex w-[84px] shrink-0 items-center justify-center p-2 sm:w-[96px] md:w-[108px]">
+      <div className="flex w-[76px] shrink-0 items-center justify-center p-1.5 sm:w-[84px] md:w-[72px] lg:w-[100px] lg:p-2 xl:w-[108px]">
         {locked ? (
           <span className="text-3xl opacity-40 sm:text-4xl" aria-hidden>
             🔒
@@ -97,7 +99,7 @@ function CardBody({
             alt=""
             width={108}
             height={108}
-            className="h-auto max-h-[96px] w-full object-contain drop-shadow-sm sm:max-h-[104px]"
+            className="h-auto max-h-[84px] w-full object-contain drop-shadow-sm md:max-h-[76px] lg:max-h-[100px]"
           />
         )}
       </div>

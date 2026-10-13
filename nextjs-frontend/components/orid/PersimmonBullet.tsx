@@ -4,8 +4,16 @@ import { getBookWeekArt } from "@/lib/orid-book-art";
 
 const FALLBACK = "/images/orid/week1/week1-persimmon-bullet.png";
 
-export function PersimmonBullet({ size = 18, className }: { size?: number; className?: string }) {
-  const art = getBookWeekArt(1);
+export function PersimmonBullet({
+  size = 18,
+  className,
+  week = 1,
+}: {
+  size?: number;
+  className?: string;
+  week?: number;
+}) {
+  const art = getBookWeekArt(week);
   const src = art?.persimmonBullet ?? FALLBACK;
 
   return (

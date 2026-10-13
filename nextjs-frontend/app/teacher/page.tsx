@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/select";
 import { TeacherDashboardHeaderDecor } from "@/components/orid/TeacherDashboardDecor";
 import { ResearchAnalyticsPanel } from "@/components/teacher/ResearchAnalyticsPanel";
+import { ORID_TOTAL_WEEKS } from "@/lib/orid/week-flow";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 type ClassInfo = {
@@ -131,7 +132,7 @@ function overviewParticipationLabel(stage: string): string {
   return STAGE_LABELS[stage] ?? stage;
 }
 const ORID_STAGES = ["O", "R", "I", "D"] as const;
-const WEEKS = [1, 2, 3, 4, 5, 6];
+const WEEKS = Array.from({ length: ORID_TOTAL_WEEKS }, (_, i) => i + 1);
 const POST_TEST_STAGES = ["O", "R", "I", "D", "ALL"];
 
 /** Demo：後測評分尚未完成時設 false，隱藏區塊並略過 cpt／rubric 請求 */

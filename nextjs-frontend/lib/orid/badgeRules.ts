@@ -3,6 +3,8 @@
  * Tooltip and modal copy is centralised here.
  */
 
+import { bookUnitFromWeek, isSynthesisWeek, writableStages } from "@/lib/orid/week-flow";
+
 export type BadgeId =
   | "badge_start"
   | "badge_30"
@@ -119,12 +121,28 @@ export function resolveBadgeBookId(
   if (key === "book2" || key === "2") return "book2";
   if (key === "book3" || key === "3") return "book3";
   if (typeof week === "number" && Number.isFinite(week) && week >= 1) {
-    const unit = Math.ceil(week / 2);
+    const unit = bookUnitFromWeek(week);
     if (unit === 1) return "book1";
     if (unit === 2) return "book2";
     if (unit === 3) return "book3";
   }
   return "book1";
+}
+
+/**
+ * Badge IDs a given week can newly earn (mirrors backend
+ * `badge_ids_available_for_week`): integration weeks → four synthesis badges;
+ * week 1 (O/R only) → start + bronze; week 2 (I/D only) → silver + gold;
+ * full ORID weeks → all four stage badges.
+ */
+export function badgeIdsForWeek(week: number): BadgeId[] {
+  if (isSynthesisWeek(week)) return SYNTHESIS_BADGE_ORDER;
+  const stages = new Set(writableStages(week));
+  const hasOR = stages.has("O") || stages.has("R");
+  const hasID = stages.has("I") || stages.has("D");
+  if (hasOR && !hasID) return ["badge_start", "badge_30"];
+  if (hasID && !hasOR) return ["badge_60", "badge_90"];
+  return ORID_BADGE_ORDER;
 }
 
 export function getBadgeImagePath(

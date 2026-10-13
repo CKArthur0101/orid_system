@@ -399,8 +399,15 @@ def test_coach_and_checker_builders_keep_expected_sections():
         student_login="test@example.com",
         opening_hint="先檢查段落銜接。",
         prev_ai_opener="我有看到",
+        source_weeks=(1, 2),
     )
-    assert "第 1 週四段（唯讀參考）" in synthesis_system
+    assert "【第 1、2 週分段寫作四段（唯讀參考）】" in synthesis_system
+
+    synthesis_default_label = build_synthesis_coach_system_prompt(
+        book_context=build_book_context_block(_book_pack()),
+        week1_orid_lines={"O": "他把柿子藏起來", "R": "", "I": "", "D": ""},
+    )
+    assert "【之前分段寫作四段（唯讀參考）】" in synthesis_default_label
     assert "O 客觀" in synthesis_system
     assert "一律使用「你」" in synthesis_system
     assert "測試學生" not in synthesis_system
@@ -552,7 +559,7 @@ def test_synthesis_pasted_stage_paragraphs_detection():
         week1_orid_lines=week1_lines,
         student_text=pasted_draft,
     )
-    assert "草稿看起來像是把上週幾段" in synthesis_pasted_system
+    assert "草稿看起來像是把之前寫好的幾段" in synthesis_pasted_system
     assert "連貫" in synthesis_pasted_system
     assert "不要**要求整篇重寫" in synthesis_pasted_system
     assert "先不要談 SEL" in synthesis_pasted_system
@@ -562,7 +569,7 @@ def test_synthesis_pasted_stage_paragraphs_detection():
         week1_orid_lines=week1_lines,
         student_text=written_draft,
     )
-    assert "草稿看起來像是把上週幾段" not in synthesis_written_system
+    assert "草稿看起來像是把之前寫好的幾段" not in synthesis_written_system
 
 
 def test_synthesis_hard_stitched_orid_forces_coherence_priority():
@@ -647,7 +654,7 @@ def test_synthesis_hard_stitched_orid_forces_coherence_priority():
         student_text=integrated,
     )
     assert "【偵測】草稿雖然故事／感受／體會／行動大致都有" not in integrated_system
-    assert "【偵測】草稿看起來像是把上週幾段" not in integrated_system
+    assert "【偵測】草稿看起來像是把之前寫好的幾段" not in integrated_system
 
 
 def test_normalize_feedback_focus_o_high_avoids_sequence_regression():

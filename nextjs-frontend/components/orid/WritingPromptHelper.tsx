@@ -28,7 +28,7 @@ interface WritingPromptHelperProps {
   openingText?: string;
   /** Book pack key for parameterized control guides (book2/3 fall back to generic). */
   bookId?: ControlGuideBookId | string | null;
-  /** Academic week 1–6; used when bookId is omitted. */
+  /** Academic week 1–7; used when bookId is omitted. */
   week?: number;
 }
 
@@ -337,7 +337,7 @@ export function WritingPromptHelper({
                   : `想一想：${topicTitles[pageIndex] ?? current.badge}`}
               </div>
               <div className="flex items-start gap-2 rounded-2xl border border-sky-200 bg-sky-50/90 p-3">
-                <PersimmonBullet size={18} className="mt-0.5 shrink-0" />
+                <PersimmonBullet week={week} size={18} className="mt-0.5 shrink-0" />
                 <p className="text-sm leading-relaxed text-amber-950 md:text-[15px] md:leading-relaxed">
                   {mode === "sentence" ? "選一個適合的句型，填入自己的故事和想法。" : current.text}
                 </p>
@@ -388,7 +388,7 @@ export function WritingPromptHelper({
                       }}
                       className="flex w-full cursor-grab touch-none items-start gap-2 rounded-xl border border-amber-200 bg-amber-50/90 px-3 py-2 text-left text-sm font-semibold leading-relaxed text-amber-950 transition hover:bg-amber-100 active:cursor-grabbing"
                     >
-                      <PersimmonBullet size={16} className="mt-0.5 shrink-0" />
+                      <PersimmonBullet week={week} size={16} className="mt-0.5 shrink-0" />
                       <span className="min-w-0 flex-1">{text}</span>
                       <Plus className="mt-0.5 h-4 w-4 shrink-0 text-amber-800" aria-hidden />
                     </button>

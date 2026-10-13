@@ -70,7 +70,7 @@ async def _find_latest_reading_id(title: str) -> Optional[str]:
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Seed demo book_pack into readings table.")
-    parser.add_argument("--week", type=int, required=True, help="Week number (1-6)")
+    parser.add_argument("--week", type=int, required=True, help="Week number (1-7)")
     parser.add_argument(
         "--path",
         type=str,
@@ -85,8 +85,8 @@ async def main() -> None:
     )
     args = parser.parse_args()
 
-    if args.week < 1 or args.week > 6:
-        raise ValueError("week must be between 1 and 6")
+    if args.week < 1 or args.week > 7:
+        raise ValueError("week must be between 1 and 7")
 
     title = args.title or DEFAULT_READING_TITLE_TEMPLATE.format(week=args.week)
 

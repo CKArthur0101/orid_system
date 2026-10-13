@@ -215,7 +215,7 @@ async def test_writing_coach_genai_feedback_button_persists_messages(
 @pytest.mark.asyncio(loop_scope="function")
 async def test_writing_coach_rejects_empty_free_text(test_client, db_session, authenticated_user):
     session = await _make_session(
-        db_session, authenticated_user["user"], condition="genai", title="第3週 測試"
+        db_session, authenticated_user["user"], condition="genai", title="第1週 測試"
     )
     r = await test_client.post(
         "/orid/writing-coach/chat",
@@ -225,7 +225,7 @@ async def test_writing_coach_rejects_empty_free_text(test_client, db_session, au
             "stage": "O",
             "draft": "d1",
             "source": "free_text",
-            "week": 3,
+            "week": 1,
             "save_feedback": False,
         },
         headers=authenticated_user["headers"],
@@ -262,7 +262,7 @@ async def test_writing_coach_accepts_rude_text_without_safety_record(
     test_client, db_session, authenticated_user
 ):
     session = await _make_session(
-        db_session, authenticated_user["user"], condition="genai", title="第5週 測試"
+        db_session, authenticated_user["user"], condition="genai", title="第6週 測試"
     )
     r = await test_client.post(
         "/orid/writing-coach/chat",
@@ -272,7 +272,7 @@ async def test_writing_coach_accepts_rude_text_without_safety_record(
             "stage": "O",
             "draft": "d1",
             "source": "free_text",
-            "week": 5,
+            "week": 6,
             "save_feedback": False,
         },
         headers=authenticated_user["headers"],
@@ -508,7 +508,7 @@ async def test_writing_coach_synthesis_feedback_uses_prior_orid_week(
 
     user = authenticated_user["user"]
     reading = Reading(
-        title="第 4 週 測試",
+        title="第 5 週 測試",
         content=json.dumps(orid.BOOK_PACK_BY_WEEK[4], ensure_ascii=False),
     )
     db_session.add(reading)
@@ -528,11 +528,11 @@ async def test_writing_coach_synthesis_feedback_uses_prior_orid_week(
     await db_session.refresh(session)
 
     week1_content = json.dumps(
-        {"schema": "orid_writing_v1", "stages": {"O": {"d1": "第一週阿松內容不該被第4週整合抓到"}}},
+        {"schema": "orid_writing_v1", "stages": {"O": {"d1": "第一週阿松內容不該被第5週整合抓到"}}},
         ensure_ascii=False,
     )
-    week3_content = json.dumps(
-        {"schema": "orid_writing_v1", "stages": {"O": {"d1": "第三週朱家內容應該被第4週整合抓到"}}},
+    week4_content = json.dumps(
+        {"schema": "orid_writing_v1", "stages": {"O": {"d1": "第四週朱家內容應該被第5週整合抓到"}}},
         ensure_ascii=False,
     )
     db_session.add_all(
@@ -548,8 +548,8 @@ async def test_writing_coach_synthesis_feedback_uses_prior_orid_week(
                 user_id=user.id,
                 reading_id=reading.id,
                 session_id=session.id,
-                week=3,
-                content=week3_content,
+                week=4,
+                content=week4_content,
             ),
         ]
     )
@@ -563,15 +563,15 @@ async def test_writing_coach_synthesis_feedback_uses_prior_orid_week(
             "stage": "ALL",
             "draft": "d1",
             "source": "synthesis_feedback",
-            "week": 4,
+            "week": 5,
             "save_feedback": False,
         },
         headers=authenticated_user["headers"],
     )
 
     assert r.status_code == 200, r.text
-    assert "第三週朱家內容應該被第4週整合抓到" in captured.get("system", "")
-    assert "第一週阿松內容不該被第4週整合抓到" not in captured.get("system", "")
+    assert "第四週朱家內容應該被第5週整合抓到" in captured.get("system", "")
+    assert "第一週阿松內容不該被第5週整合抓到" not in captured.get("system", "")
 
 
 @pytest.mark.asyncio(loop_scope="function")

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
+from typing import Iterable, Optional
 
 from app.prompts.orid_playbook import (
     format_feedback_narration_playbook,
@@ -116,7 +116,7 @@ def find_abrupt_orid_boundaries(text: str) -> list[str]:
 def _coherence_priority_mid_block(*, kind: str, abrupt_boundaries: Optional[list[str]] = None) -> str:
     if kind == "pasted":
         head = (
-            "【偵測】草稿看起來像是把上週幾段（觀察／感受／體會／行動）直接貼上、"
+            "【偵測】草稿看起來像是把之前寫好的幾段（觀察／感受／體會／行動）直接貼上、"
             "段落之間還沒加銜接語。這種情況通常代表「完整性」已經有了；"
         )
     else:
@@ -286,6 +286,7 @@ def build_synthesis_coach_system_prompt(
     *,
     book_context: str,
     week1_orid_lines: dict[str, str],
+    source_weeks: Optional[Iterable[int]] = None,
     student_display_name: Optional[str] = None,
     student_login: Optional[str] = None,
     opening_hint: str = "",
@@ -298,7 +299,9 @@ def build_synthesis_coach_system_prompt(
     material_mismatch_quote: str = "",
 ) -> str:
     """
-    Week-2 synthesis: feedback on the student's integrated paragraph using Week-1 ORID slots as context.
+    Integration-week synthesis: feedback on the student's integrated paragraph
+    using the earlier ORID slots as context. `source_weeks` names the weeks
+    those slots came from (week 3 reads weeks 1 and 2; week 5 reads week 4).
 
     material_mismatch_quote: the student's own sentence that the book checker
     found to be clearly not in the book. Only the quote is passed, never the
@@ -332,6 +335,8 @@ def build_synthesis_coach_system_prompt(
             "不要說出教材裡的正確名稱或後續情節。"
         )
         mid = f"{mid}\n\n{mismatch_block}" if mid else mismatch_block
+    weeks_list = [int(w) for w in (source_weeks or []) if str(w).strip()]
+    source_label = f"第 {'、'.join(str(w) for w in weeks_list)} 週" if weeks_list else "之前"
     return format_synthesis_coach_playbook(
         week1_block=joined,
         book_context=book_context,
@@ -340,6 +345,7 @@ def build_synthesis_coach_system_prompt(
         opening_hint=hint,
         prev_ai_opener=prev_ai_opener,
         synthesis_mid=mid,
+        source_weeks_label=source_label,
     )
 
 

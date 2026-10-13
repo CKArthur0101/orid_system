@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from uuid import UUID, uuid4
-from typing import Optional, Any, Tuple, List, Dict, Union
+from typing import Optional, Any, Iterable, Tuple, List, Dict, Union
 from dataclasses import dataclass, field
 import asyncio
 import os
@@ -130,6 +130,19 @@ from app.services.orid_condition import (
     session_condition_from_user_orid_condition,
 )
 from app.services.orid_writing_store import ensure_orid_writing_obj
+from app.content.week_plan import (
+    STAGE_KEYS,
+    TOTAL_WEEKS,
+    WEEK_PLAN,
+    badge_ids_available_for_week,
+    book_unit_for_week,
+    is_synthesis_week,
+    is_valid_week,
+    orid_source_weeks_for_synthesis,
+    reference_weeks,
+    task_type_for_week,
+    writable_stages,
+)
 # ----------------------------
 # OpenAI settings (from env)
 # ----------------------------
@@ -620,14 +633,10 @@ BOOK_PACK_BY_WEEK: dict[int, dict[str, Any]] = {
             ],
         },
     },
-    # Week 4 uses the same book as week 3 (synthesis week)
-    4: None,  # resolved dynamically via book_unit_from_week → week 3 pack
 }
 
-    # Week 4 is the synthesis week for book 2; resolve it to the same pack as week 3
-BOOK_PACK_BY_WEEK[4] = BOOK_PACK_BY_WEEK[3]
-
-BOOK_PACK_BY_WEEK[5] = {
+# Book 3 (不會寫字的獅子). Week keys are remapped to the 7-week plan below.
+_BOOK3_PACK: dict[str, Any] = {
     "schema": "book_pack_v1",
     "version": 1,
     "rag_source": "file",
@@ -718,19 +727,24 @@ BOOK_PACK_BY_WEEK[5] = {
     },
 }
 
-# Week 6 is the synthesis week for book 3; resolve it to the same pack as week 5
-BOOK_PACK_BY_WEEK[6] = BOOK_PACK_BY_WEEK[5]
+# Remap packs onto the 7-week plan. The literal above was authored with the
+# older 6-week keys (1 = 柿子樹, 3 = 朱家); every week in a book unit shares
+# that unit's pack.
+_BOOK1_PACK: dict[str, Any] = BOOK_PACK_BY_WEEK[1]
+_BOOK2_PACK: dict[str, Any] = BOOK_PACK_BY_WEEK[3]
+_BOOK_PACK_BY_UNIT: dict[int, dict[str, Any]] = {1: _BOOK1_PACK, 2: _BOOK2_PACK, 3: _BOOK3_PACK}
+BOOK_PACK_BY_WEEK = {
+    week: _BOOK_PACK_BY_UNIT[plan.book_unit] for week, plan in WEEK_PLAN.items()
+}
 
 
 def canonical_book_pack_for_week(week: Optional[int]) -> Optional[dict[str, Any]]:
-    """Even weeks use the previous week's book. Week 2 has no pack of its own."""
-    if not isinstance(week, int) or week < 1:
+    """Every week in a book unit uses that unit's pack."""
+    if not is_valid_week(week):
         return None
-    book_week = week - 1 if week % 2 == 0 else week
-    for candidate in (book_week, week):
-        pack = BOOK_PACK_BY_WEEK.get(candidate)
-        if isinstance(pack, dict) and extract_story_reference_blob(pack):
-            return pack
+    pack = BOOK_PACK_BY_WEEK.get(int(week))
+    if isinstance(pack, dict) and extract_story_reference_blob(pack):
+        return pack
     return None
 
 
@@ -742,27 +756,31 @@ def _default_reading_content_for_week(week: int) -> str:
 
 
 DEFAULT_READING_CONTENT_BY_WEEK = {
-    1: _default_reading_content_for_week(1),
-    3: _default_reading_content_for_week(3),
-    4: _default_reading_content_for_week(4),
-    5: _default_reading_content_for_week(5),
-    6: _default_reading_content_for_week(6),
+    week: _default_reading_content_for_week(week) for week in WEEK_PLAN
 }
 DEFAULT_ORID_CONDITION = os.getenv("ORID_DEFAULT_CONDITION", "genai")
 
+_WEEK_RANGE_DETAIL = f"week must be 1..{TOTAL_WEEKS}"
+
 
 def book_unit_from_week(week: int) -> int:
-    """週 1–2 → 1，3–4 → 2，5–6 → 3（兩週一書同一 session）。"""
-    if week < 1 or week > 6:
-        raise HTTPException(status_code=400, detail="week must be 1..6")
-    return (week + 1) // 2
+    """週 1–3 → 1，4–5 → 2，6–7 → 3（同一本書共用一個 session）。"""
+    if not is_valid_week(week):
+        raise HTTPException(status_code=400, detail=_WEEK_RANGE_DETAIL)
+    return book_unit_for_week(week)
+
+
+def prior_orid_weeks_for_synthesis(week: int) -> tuple[int, ...]:
+    """ORID weeks an integration week reads: 3→(1, 2), 5→(4,), 7→(6,)."""
+    if not is_valid_week(week):
+        raise HTTPException(status_code=400, detail=_WEEK_RANGE_DETAIL)
+    sources = orid_source_weeks_for_synthesis(week)
+    return sources if sources else (week,)
 
 
 def prior_orid_week_for_synthesis(week: int) -> int:
-    """Even synthesis weeks use the preceding ORID week: 2→1, 4→3, 6→5."""
-    if week < 1 or week > 6:
-        raise HTTPException(status_code=400, detail="week must be 1..6")
-    return week - 1 if week % 2 == 0 else week
+    """Last ORID week feeding this integration week (kept for callers that need one)."""
+    return prior_orid_weeks_for_synthesis(week)[-1]
 
 
 def _parse_force_new_allowlist() -> set[str]:
@@ -820,7 +838,7 @@ def _week_from_reading_title(title: str | None) -> Optional[int]:
         return None
     try:
         w = int(m.group(1))
-        if 1 <= w <= 6:
+        if is_valid_week(w):
             return w
     except (TypeError, ValueError):
         pass
@@ -874,6 +892,66 @@ async def _fetch_latest_writing_content_for_week(
     if not w or w.content is None:
         return None
     return str(w.content)
+
+
+async def _orid_stage_slots_from_weeks(
+    db: AsyncSession,
+    user_id: UUID,
+    session_id: UUID,
+    weeks: Iterable[int],
+) -> dict[str, str]:
+    """Merge saved O/R/I/D text across several weeks.
+
+    Each stage is taken from the week that was allowed to write it, so week 3
+    gets O/R from week 1 and I/D from week 2, while week 5 reads all four from
+    week 4.
+    """
+    out: dict[str, str] = {"O": "", "R": "", "I": "", "D": ""}
+    for wk in weeks:
+        raw = await _fetch_latest_writing_content_for_week(db, user_id, session_id, wk)
+        slots = _orid_stage_d1_from_writing_content(raw)
+        allowed = set(writable_stages(wk)) or set(out)
+        for key in out:
+            if key in allowed and slots.get(key, "").strip():
+                out[key] = slots[key]
+    return out
+
+
+def _stages_passed_across_weeks(
+    writings: dict[int, dict[str, Any] | None], *, mode: str
+) -> set[str]:
+    """Stage completion merged across the weeks of one book unit.
+
+    Only the stages a week was allowed to write count from that week.
+    """
+    passed: set[str] = set()
+    for wk, obj in writings.items():
+        if obj is None:
+            continue
+        week_passed = stages_passed_from_writing_obj(obj, mode=mode)
+        allowed = set(writable_stages(wk)) or set(STAGE_KEYS)
+        passed |= week_passed & allowed
+    return passed
+
+
+async def _load_reference_writing_objs(
+    db: AsyncSession,
+    user_id: UUID,
+    session_id: UUID,
+    week: int,
+) -> dict[int, dict[str, Any] | None]:
+    """Saved writing objects for the earlier weeks this week reads from."""
+    out: dict[int, dict[str, Any] | None] = {}
+    for ref in reference_weeks(week):
+        raw = await _fetch_latest_writing_content_for_week(db, user_id, session_id, ref)
+        out[ref] = (
+            ensure_orid_writing_obj(
+                raw_content=raw, week=ref, empty_factory=_ensure_orid_writing_v1
+            )
+            if raw
+            else None
+        )
+    return out
 
 
 def parse_book_pack(content: str) -> Optional[dict[str, Any]]:
@@ -977,24 +1055,32 @@ def load_book_pack_from_reading(reading: Optional[Reading]) -> Optional[dict[str
     week = _extract_week_from_reading_title(reading_title)
     content = (reading.content or "").strip()
     pack = resolve_book_pack(parse_book_pack(content)) if content else None
-    # Even-week readings were stored as placeholder text, so the checker never
-    # saw the story. Use that book's own pack instead of giving up.
-    if not isinstance(pack, dict) or not extract_story_reference_blob(pack):
-        fallback = canonical_book_pack_for_week(week)
-        if isinstance(fallback, dict):
-            pack = dict(fallback)
+    canonical = canonical_book_pack_for_week(week)
+    # Some readings were stored as placeholder text, so the checker never saw
+    # the story. Others still carry the book from the older 6-week numbering.
+    # The week plan decides which book a week is; the stored row only adds
+    # per-reading detail when it is the same book.
+    stored_title = str((pack or {}).get("book_title") or "").strip() if isinstance(pack, dict) else ""
+    canonical_title = str((canonical or {}).get("book_title") or "").strip() if isinstance(canonical, dict) else ""
+    title_mismatch = bool(stored_title and canonical_title and stored_title != canonical_title)
+    if (
+        not isinstance(pack, dict)
+        or not extract_story_reference_blob(pack)
+        or title_mismatch
+    ):
+        if isinstance(canonical, dict):
+            pack = dict(canonical)
         elif not isinstance(pack, dict):
             return None
     out = dict(pack)
     out.setdefault("reading_title", reading_title)
     if week:
         out.setdefault("week", week)
-        out.setdefault("embedding_bundle_id", f"week_{week}")
-        default_week = BOOK_PACK_BY_WEEK.get(week)
-        if not isinstance(default_week, dict):
-            default_week = canonical_book_pack_for_week(week)
-        if isinstance(default_week, dict):
-            out = resolve_book_pack({**default_week, **out, "reading_title": reading_title, "week": week})
+        # RAG bundles are named per book, not per student-facing week.
+        bundle_id = str((canonical or {}).get("embedding_bundle_id") or "").strip() if isinstance(canonical, dict) else ""
+        out.setdefault("embedding_bundle_id", bundle_id or f"week_{week}")
+        if isinstance(canonical, dict):
+            out = resolve_book_pack({**canonical, **out, "reading_title": reading_title, "week": week})
     return out
 
 
@@ -1005,7 +1091,7 @@ def build_writing_coach_welcome_text(book_pack: Optional[dict[str, Any]]) -> str
     title = str((book_pack or {}).get("book_title") or "").strip()
     book = f"《{title}》" if title else "這本書"
     return (
-        "哈囉！我是你的寫作小幫手 🤖\n"
+        "哈囉！我是你的寫作小幫手\n"
         f"左邊四格，你想先寫哪一格都可以喔！我們一起來想想讀{book}的心得。\n"
         "寫不出來的時候，按那一格的「取得回饋」，我就會在這裡陪你喔！"
     )
@@ -1040,6 +1126,21 @@ async def seed_writing_coach_welcome_if_needed(
             if legacy and LEGACY_WRITING_COACH_WELCOME_SNIPPET in str(legacy.text or ""):
                 legacy.text = text
                 await db.commit()
+                return
+        # Drop the robot emoji from welcomes already stored before it was removed.
+        stored = (
+            await db.scalars(
+                select(OridChatMessage).where(OridChatMessage.session_id == session.id)
+            )
+        ).all()
+        changed = False
+        for row in stored:
+            body = str(row.text or "")
+            if row.sender == "ai" and "寫作小幫手" in body and "🤖" in body:
+                row.text = body.replace(" 🤖", "").replace("🤖", "")
+                changed = True
+        if changed:
+            await db.commit()
     except Exception:
         await db.rollback()
         logger.warning("seed_writing_coach_welcome failed for session %s", session.id, exc_info=True)
@@ -1227,7 +1328,7 @@ async def _load_recent_session_messages(
 # ----------------------------
 class WritingAssistRequest(BaseModel):
     session_id: UUID
-    week: int = Field(..., ge=1, le=6)
+    week: int = Field(..., ge=1, le=TOTAL_WEEKS)
     stage: str = Field(..., pattern="^(O|R|I|D)$")
     draft: str = Field("d1", pattern="^(d1|d2)$")
     base_text: Optional[str] = None
@@ -1293,7 +1394,7 @@ async def llm_generate_writing(
 # ----------------------------
 class WritingFeedbackRequest(BaseModel):
     session_id: UUID
-    week: int = Field(..., ge=1, le=6)
+    week: int = Field(..., ge=1, le=TOTAL_WEEKS)
     stage: str = Field(..., pattern="^(O|R|I|D)$")
     draft: str = Field("d1", pattern="^(d1|d2)$")
     text: Optional[str] = None
@@ -2518,7 +2619,7 @@ async def create_session(
 
 @router.post("/sessions/ensure", response_model=OridSessionRead)
 async def ensure_session(
-    week: int = Query(..., ge=1, le=6),
+    week: int = Query(..., ge=1, le=TOTAL_WEEKS),
     condition: Optional[str] = Query(default=None),
     force_new: bool = Query(False, description="true 時強制建立新 session；false 取最近一次（同書單元）。"),
     db: AsyncSession = Depends(get_async_session),
@@ -2629,7 +2730,7 @@ async def ensure_session(
 @router.get("/progress", response_model=OridProgressRead)
 async def get_orid_progress(
     session_id: UUID = Query(...),
-    week: int = Query(..., ge=1, le=6),
+    week: int = Query(..., ge=1, le=TOTAL_WEEKS),
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
@@ -2684,34 +2785,44 @@ async def record_prompt_usage(
 
     # Badge evaluation (control: stage progress by saved content)
     has_content = bool(word_count and word_count > 0)
-    is_synthesis_week = week % 2 == 0
+    synthesis_week = is_synthesis_week(week)
     stages_passed: set[str] = set()
     current_badges: list[str] = []
-    if is_synthesis_week:
+    if synthesis_week:
         # The fixed-prompt control path has no rubric assessor. Do not award
         # quality badges from writing length or prompt views alone.
         current_badges = []
     else:
         try:
+            writings: dict[int, dict[str, Any] | None] = await _load_reference_writing_objs(
+                db, user.id, session.id, week
+            )
             writing_raw = await _fetch_latest_writing_content_for_week(
                 db, user.id, session.id, week
             )
-            if writing_raw:
-                writing_obj = ensure_orid_writing_obj(
+            writings[week] = (
+                ensure_orid_writing_obj(
                     raw_content=writing_raw,
                     week=week,
                     empty_factory=_ensure_orid_writing_v1,
                 )
-                stages_passed = stages_passed_from_writing_obj(writing_obj, mode="content")
+                if writing_raw
+                else None
+            )
+            stages_passed = _stages_passed_across_weeks(writings, mode="content")
         except Exception:
             logger.warning("prompt-usage stage progress lookup failed", exc_info=True)
-        if has_content and stage in ("O", "R", "I", "D"):
+        if has_content and stage in writable_stages(week):
             stages_passed.add(stage)
-        current_badges = calculate_earned_badges(
-            has_writing_content=has_content,
-            has_used_feedback_or_prompt=True,
-            stages_passed=stages_passed,
-        )
+        current_badges = [
+            b
+            for b in calculate_earned_badges(
+                has_writing_content=has_content,
+                has_used_feedback_or_prompt=True,
+                stages_passed=stages_passed,
+            )
+            if b in badge_ids_available_for_week(week)
+        ]
 
     prev_badges = await get_earned_badges_from_db(db, user_id=user.id, session_id=session.id, week=week)
     new_badges = get_new_badges(prev_badges, current_badges)
@@ -2722,7 +2833,7 @@ async def record_prompt_usage(
             session_id=session.id,
             reading_id=session.reading_id,
             week=week,
-            task_type="synthesis" if is_synthesis_week else "orid_stage",
+            task_type=task_type_for_week(week),
             condition=session.condition,
             new_badge_ids=new_badges,
             word_count=word_count,
@@ -3046,11 +3157,11 @@ async def writing_coach_chat(
             )
             # fb_ok is False in this branch; _maybe_advance_stage not called
     elif source == "synthesis_feedback":
-        prior_orid_week = prior_orid_week_for_synthesis(int(data.week or 1))
-        prior_orid_raw = await _fetch_latest_writing_content_for_week(
-            db, user.id, session.id, prior_orid_week
+        prior_orid_weeks = prior_orid_weeks_for_synthesis(int(data.week or 1))
+        prior_orid_week = prior_orid_weeks[-1]
+        prior_orid_slots = await _orid_stage_slots_from_weeks(
+            db, user.id, session.id, prior_orid_weeks
         )
-        prior_orid_slots = _orid_stage_d1_from_writing_content(prior_orid_raw)
         book_context = build_book_context_block(book_pack)
         syn_phase = getattr(data, "synthesis_phase", None)
         syn_round = int(getattr(data, "feedback_round", None) or 1)
@@ -3090,6 +3201,7 @@ async def writing_coach_chat(
         sys_p = build_synthesis_coach_system_prompt(
             book_context=book_context,
             week1_orid_lines=prior_orid_slots,
+            source_weeks=prior_orid_weeks,
             student_display_name=display_nm,
             student_login=login_id,
             opening_hint=opening_hint,
@@ -3223,13 +3335,13 @@ async def writing_coach_chat(
         await bump_guide_use(db, user_id=user.id, week=data.week, session_id=session.id, amount=1)
         await db.commit()
         try:
-            # Academic week 1–6 (not book_unit). Badge events + writing lookup must match
+            # Academic week 1–7 (not book_unit). Badge events + writing lookup must match
             # OridWeekSubmission.week / research summary week keys.
             try:
                 week_num = int(data.week)
             except (ValueError, TypeError):
                 week_num = 1
-            if week_num < 1 or week_num > 6:
+            if not is_valid_week(week_num):
                 week_num = 1
 
             orid_levels: dict[str, Any] = {}
@@ -3267,29 +3379,39 @@ async def writing_coach_chat(
             stage_u = (stage_ctx or "O").strip().upper()
             is_control = is_control_condition(condition, default=DEFAULT_ORID_CONDITION)
             stages_passed: set[str] = set()
-            if saved_obj is not None:
-                try:
-                    stages_passed = stages_passed_from_writing_obj(
-                        saved_obj,
-                        mode="content" if is_control else "ok",
-                    )
-                except Exception:
-                    logger.warning("stages_passed_from_writing_obj failed", exc_info=True)
+            try:
+                # Week 2 (I/D) is judged together with week 1 (O/R): silver and
+                # gold need the whole book-unit's stages, not only this week's.
+                writings_by_week = await _load_reference_writing_objs(
+                    db, user.id, session.id, week_num
+                )
+                writings_by_week[week_num] = saved_obj
+                stages_passed = _stages_passed_across_weeks(
+                    writings_by_week,
+                    mode="content" if is_control else "ok",
+                )
+            except Exception:
+                logger.warning("stages_passed_from_writing_obj failed", exc_info=True)
 
+            this_week_stages = set(writable_stages(week_num))
             if is_control:
-                if has_content and stage_u in ("O", "R", "I", "D"):
+                if has_content and stage_u in this_week_stages:
                     stages_passed.add(stage_u)
             else:
-                stages_passed |= stages_passed_from_orid_levels(orid_levels)
-                if fb_ok and stage_u in ("O", "R", "I", "D"):
+                stages_passed |= stages_passed_from_orid_levels(orid_levels) & this_week_stages
+                if fb_ok and stage_u in this_week_stages:
                     stages_passed.add(stage_u)
 
             prev_badges = await get_earned_badges_from_db(db, user_id=user.id, session_id=session.id, week=week_num)
-            current_badges = calculate_earned_badges(
-                has_writing_content=has_content,
-                has_used_feedback_or_prompt=True,
-                stages_passed=stages_passed,
-            )
+            current_badges = [
+                b
+                for b in calculate_earned_badges(
+                    has_writing_content=has_content,
+                    has_used_feedback_or_prompt=True,
+                    stages_passed=stages_passed,
+                )
+                if b in badge_ids_available_for_week(week_num)
+            ]
             new_badges = get_new_badges(prev_badges, current_badges)
             try:
                 if new_badges:
@@ -3338,7 +3460,7 @@ async def writing_coach_chat(
                 week_num = int(data.week)
             except (ValueError, TypeError):
                 week_num = 1
-            if week_num < 1 or week_num > 6:
+            if not is_valid_week(week_num):
                 week_num = 1
 
             prev_badges = await get_earned_badges_from_db(
@@ -3650,8 +3772,8 @@ async def create_writing(
     if session.reading_id != data.reading_id:
         raise HTTPException(status_code=400, detail="reading_id does not match session.reading_id")
 
-    if data.week < 1 or data.week > 6:
-        raise HTTPException(status_code=400, detail="week must be between 1 and 6")
+    if not is_valid_week(data.week):
+        raise HTTPException(status_code=400, detail=f"week must be between 1 and {TOTAL_WEEKS}")
 
     if not data.content.strip():
         raise HTTPException(status_code=400, detail="content is empty")

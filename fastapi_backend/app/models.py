@@ -126,7 +126,7 @@ class OridWeekSubmission(Base):
     reading_id = Column(UUID(as_uuid=True), ForeignKey("readings.id"), nullable=False)
     session_id = Column(UUID(as_uuid=True), ForeignKey("orid_sessions.id"), nullable=False)
 
-    week = Column(Integer, nullable=False)  # 第幾週(1~6)
+    week = Column(Integer, nullable=False)  # 第幾週(1~7)
     content = Column(Text, nullable=False)  # 寫作 JSON
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -289,7 +289,7 @@ class OridWeeklyResearchSummary(Base):
     session_id = Column(UUID(as_uuid=True), ForeignKey("orid_sessions.id"), nullable=False)
     class_id = Column(UUID(as_uuid=True), ForeignKey("classes.id"), nullable=True)
 
-    week = Column(Integer, nullable=False)           # 1–6
+    week = Column(Integer, nullable=False)           # 1–7
     task_type = Column(String(32), nullable=True)     # orid_stage (odd) / synthesis (even)
     condition = Column(String(16), nullable=False, default="experimental")  # snapshot of User.orid_condition
 

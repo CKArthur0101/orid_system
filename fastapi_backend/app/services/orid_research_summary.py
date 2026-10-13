@@ -21,6 +21,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.content.week_plan import is_synthesis_week
+from app.content.week_plan import task_type_for_week as _plan_task_type_for_week
+from app.content.week_plan import writable_stages
 from app.models import OridWeeklyResearchSummary, StudentClassMembership, User
 
 logger = logging.getLogger(__name__)
@@ -36,17 +39,27 @@ def normalize_writing_text(text: Optional[str]) -> str:
 
 
 def task_type_for_week(week: int) -> str:
-    return "orid_stage" if week % 2 == 1 else "synthesis"
+    return _plan_task_type_for_week(week)
 
 
-def _stage_texts(writing_obj: dict | None) -> list[str]:
+def _stage_texts(writing_obj: dict | None, week: int | None = None) -> list[str]:
+    """Normalized `d1` text per stage, limited to the stages this week may write.
+
+    Week 1 counts only O/R and week 2 only I/D, so a stray copy of another
+    week's text can never inflate this week's counters.
+    """
     if not isinstance(writing_obj, dict):
         return []
     stages = writing_obj.get("stages")
     if not isinstance(stages, dict):
         return []
+    allowed = set(writable_stages(week)) if week is not None else set()
+    if not allowed:
+        allowed = set(_STAGE_KEYS)
     out: list[str] = []
     for key in _STAGE_KEYS:
+        if key not in allowed:
+            continue
         stage_obj = stages.get(key)
         text = stage_obj.get("d1") if isinstance(stage_obj, dict) else ""
         out.append(normalize_writing_text(str(text or "")))
@@ -56,26 +69,29 @@ def _stage_texts(writing_obj: dict | None) -> list[str]:
 def compute_word_count(writing_obj: dict | None, week: int) -> int:
     """Character count (whitespace-normalized) of this week's writing text.
 
-    Odd weeks: O/R/I/D `d1` fields. Even weeks: also includes `synthesis_draft`.
-    Chat messages are never counted (no clickstream/semantic analysis).
+    ORID weeks: the `d1` fields this week may write. Integration weeks: the
+    `synthesis_draft`. Chat messages are never counted (no clickstream or
+    semantic analysis).
     """
-    total = sum(len(t) for t in _stage_texts(writing_obj))
-    if week % 2 == 0 and isinstance(writing_obj, dict):
-        total += len(
-            normalize_writing_text(str(writing_obj.get("synthesis_draft") or ""))
-        )
-    return total
+    if is_synthesis_week(week):
+        if not isinstance(writing_obj, dict):
+            return 0
+        return len(normalize_writing_text(str(writing_obj.get("synthesis_draft") or "")))
+    return sum(len(t) for t in _stage_texts(writing_obj, week))
 
 
 def compute_content_fingerprint(writing_obj: dict | None, week: int) -> str:
     """Hash of the concatenated normalized text, used only to detect whether
     the student's saved content changed since the last save (revision_count).
     Never exposed via API/CSV."""
-    parts = _stage_texts(writing_obj)
-    if week % 2 == 0 and isinstance(writing_obj, dict):
-        parts.append(
+    if is_synthesis_week(week):
+        parts = [
             normalize_writing_text(str(writing_obj.get("synthesis_draft") or ""))
-        )
+            if isinstance(writing_obj, dict)
+            else ""
+        ]
+    else:
+        parts = _stage_texts(writing_obj, week)
     source = "|".join(parts)
     return hashlib.sha1(source.encode("utf-8")).hexdigest()
 
