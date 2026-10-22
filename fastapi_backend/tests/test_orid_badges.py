@@ -191,6 +191,14 @@ class TestCalculateEarnedSynthesisBadge:
             "再想一想：\n還可以補一件事。\n可以這樣修改：\n他給了什麼？"
         )
         assert synthesis_visible_reply(fail_reply, "content_integration") == fail_reply
+        false_pass = (
+            "你已經做到：\n你寫出想多主動一點。\n\n"
+            "本階段完成：\n這次四個部分都已經完成。\n\n"
+            "下一步：\n可以保留現在的內容並儲存作品。"
+        )
+        held = synthesis_visible_reply(false_pass, "action_application")
+        assert "本階段完成" not in held
+        assert "哪一件事" in held
         fallback = synthesis_visible_reply("  ", "content_integration")
         assert fallback == synthesis_fallback_reply("content_integration")
         assert "你有把故事和自己的想法放進整合稿" not in fallback

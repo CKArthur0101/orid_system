@@ -386,7 +386,7 @@ async def teacher_me_classes(
         return []
     q = await db.execute(
         select(ClassRoom)
-        .where(ClassRoom.id.in_(class_ids))
+        .where(ClassRoom.id.in_(class_ids), ClassRoom.archived_at.is_(None))
         .order_by(
             case((ClassRoom.external_code == "demo", 0), else_=1),
             ClassRoom.name.asc(),
@@ -414,12 +414,14 @@ async def teacher_class_overview(
 
     # ── 1. All students in class ─────────────────────────────────────────────
     student_rows = await db.execute(
-        select(User)
+        select(User, StudentClassMembership.seat_no)
         .join(StudentClassMembership, StudentClassMembership.student_id == User.id)
         .where(StudentClassMembership.class_id == class_id)
-        .order_by(User.email.asc())
+        .order_by(StudentClassMembership.seat_no.asc().nulls_last(), User.email.asc())
     )
-    students = student_rows.scalars().all()
+    student_pairs = student_rows.all()
+    students = [row[0] for row in student_pairs]
+    seat_by_student = {row[0].id: row[1] for row in student_pairs}
     if not students:
         return TeacherClassOverview(
             class_id=classroom.id,
@@ -598,6 +600,7 @@ async def teacher_class_overview(
                 student_id=student.id,
                 student_email=student.email,
                 student_display_name=_student_ui_name(student),
+                seat_no=seat_by_student.get(student.id),
                 current_stage=stage,
                 interaction_count=interaction_count,
                 writing_completed_stages=w_done,
@@ -668,6 +671,7 @@ async def teacher_student_summary(
     feedback_ok_stages = 0
     safety_event_count = 0
     high_risk_safety_event_count = 0
+    submitted_fields = _extract_submission_research_fields(None)
 
     if session:
         interaction_count, last_activity_at = await _session_message_stats(db, session, week)
@@ -683,6 +687,7 @@ async def teacher_student_summary(
         writing_content = writing.content if writing else None
         writing_completed_stages = _count_completed_stages(writing_content)
         stages_with_draft_list = _stages_with_draft(writing_content)
+        submitted_fields = _extract_submission_research_fields(writing_content)
 
         # Feedback analytics from analytics tables
         if feedback_lower is not None:
@@ -739,6 +744,12 @@ async def teacher_student_summary(
         interaction_count=interaction_count,
         writing_completed_stages=writing_completed_stages,
         stages_with_draft=stages_with_draft_list,
+        stage_texts={
+            "O": submitted_fields.get("O_text", ""),
+            "R": submitted_fields.get("R_text", ""),
+            "I": submitted_fields.get("I_text", ""),
+            "D": submitted_fields.get("D_text", ""),
+        },
         last_activity_at=last_activity_at,
         feedback_click_count=feedback_click_count,
         feedback_ok_count=feedback_ok_count,

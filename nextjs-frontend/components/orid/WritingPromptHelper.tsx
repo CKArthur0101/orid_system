@@ -78,7 +78,6 @@ export function WritingPromptHelper({
   const [pageIndex, setPageIndex] = useState(0);
   const [insertMsg, setInsertMsg] = useState<string | null>(null);
   const [touchDrag, setTouchDrag] = useState<TouchDragState | null>(null);
-  const loggedViewRef = useRef(false);
   const suppressClickRef = useRef(false);
   const touchDragRef = useRef<{
     text: string;
@@ -108,7 +107,6 @@ export function WritingPromptHelper({
     setMode("prompt");
     setPageIndex(0);
     setInsertMsg(null);
-    loggedViewRef.current = false;
   }, [focusStage, synthesisMode, resolvedBookId]);
 
   const current = activePages[pageIndex] ?? activePages[0] ?? pages[0];
@@ -116,38 +114,33 @@ export function WritingPromptHelper({
   const atStart = pageIndex <= 0;
   const atEnd = pageIndex >= total - 1;
 
-  function logViewOnce() {
-    if (!loggedViewRef.current) {
-      loggedViewRef.current = true;
-      onPromptViewed?.();
-    }
+  function notePromptOpened() {
+    onPromptViewed?.();
   }
 
   function goPrev() {
     if (mode === "check") return;
     if (atStart) return;
     setPageIndex((i) => i - 1);
-    logViewOnce();
   }
 
   function goNext() {
     if (mode === "check") return;
     if (atEnd) return;
     setPageIndex((i) => i + 1);
-    logViewOnce();
   }
 
   function switchMode(nextMode: HelperMode) {
     setMode(nextMode);
     setPageIndex(0);
     setInsertMsg(null);
-    logViewOnce();
+    if (nextMode !== "check") notePromptOpened();
   }
 
   function selectTopic(index: number) {
     setPageIndex(index);
     setInsertMsg(null);
-    logViewOnce();
+    notePromptOpened();
   }
 
   function sentenceOptions(): string[] {
@@ -159,7 +152,6 @@ export function WritingPromptHelper({
   function insertText(text: string) {
     onInsertText?.(textForWritingBox(text));
     setInsertMsg("已放進寫作格");
-    logViewOnce();
     window.setTimeout(() => setInsertMsg(null), 1600);
   }
 
@@ -370,7 +362,6 @@ export function WritingPromptHelper({
                       title="拖到寫作格，或按加號加入"
                       onDragStart={(event) => {
                         event.dataTransfer.setData("text/plain", textForWritingBox(text));
-                        logViewOnce();
                       }}
                       onPointerDown={(event) => startTouchDrag(event, text)}
                       onPointerMove={moveTouchDrag}

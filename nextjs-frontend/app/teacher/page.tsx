@@ -38,6 +38,7 @@ type StudentRow = {
   student_email: string;
   /** 後端 TeacherStudentRow.student_display_name；無則用 student_email */
   student_display_name?: string | null;
+  seat_no?: number | null;
   current_stage: string;
   interaction_count: number;
   writing_completed_stages: number;
@@ -71,6 +72,7 @@ type StudentSummary = {
   interaction_count: number;
   writing_completed_stages: number;
   stages_with_draft: string[];
+  stage_texts?: Record<string, string>;
   last_activity_at: string | null;
   feedback_click_count: number;
   feedback_ok_count: number;
@@ -453,24 +455,9 @@ export default function TeacherDashboardPage() {
           <TeacherDashboardHeaderDecor />
         </div>
         <div className="flex items-center gap-3">
-          <Select
-            value={classId}
-            onValueChange={(id) => {
-              setClassId(id);
-              setSelectedStudentId("");
-              setStudentDetail(null);
-              setDetailError(null);
-            }}
-          >
-            <SelectTrigger className={`w-[200px] ${TEACHER_SELECT}`}>
-              <SelectValue placeholder="選擇班級" />
-            </SelectTrigger>
-            <SelectContent>
-              {classes.map((c) => (
-                <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className={`flex h-10 w-[200px] items-center px-3 text-sm ${TEACHER_SELECT}`}>
+            {className || "班級"}
+          </div>
           <Select value={String(week)} onValueChange={(v) => setWeek(Number(v))}>
             <SelectTrigger className={`w-[100px] ${TEACHER_SELECT}`}>
               <SelectValue />
@@ -631,6 +618,9 @@ export default function TeacherDashboardPage() {
                               }}
                             >
                               <td className="whitespace-nowrap px-4 py-2.5 font-medium text-amber-950">
+                                {row.seat_no != null ? (
+                                  <span className="mr-2 tabular-nums text-amber-800/70">{row.seat_no}</span>
+                                ) : null}
                                 {studentLabel(row)}
                                 {needsAttention && (
                                   <span className="ml-1.5 whitespace-nowrap text-base text-orange-600">
@@ -749,6 +739,11 @@ export default function TeacherDashboardPage() {
                                 style={{ width: `${pct}%`, backgroundColor: STAGE_COLORS[stage], opacity: pct === 0 ? 0 : 1 }}
                               />
                             </div>
+                            {(studentDetail.stage_texts?.[stage] ?? "").trim() ? (
+                              <p className="whitespace-pre-wrap rounded-lg bg-amber-50/80 px-3 py-2 text-sm text-amber-950">
+                                {studentDetail.stage_texts?.[stage]}
+                              </p>
+                            ) : null}
                           </div>
                         );
                       })}

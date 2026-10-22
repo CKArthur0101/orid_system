@@ -23,6 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { loadAllPages } from "./loadAllPages";
 import {
   sortAdminUsers,
   type AdminUserSortConfig,
@@ -138,16 +139,25 @@ export default function AdminUsersPage() {
     setLoading(true);
     setError(null);
     try {
-      const qs = search.trim() ? `?q=${encodeURIComponent(search.trim())}&page_size=200` : "?page_size=200";
-      const [uRes, cRes] = await Promise.all([
-        fetch(`/api/admin/users${qs}`, { cache: "no-store" }),
-        fetch("/api/admin/classes", { cache: "no-store" }),
+      const [users, classes] = await Promise.all([
+        loadAllPages(async (page, pageSize) => {
+          const params = new URLSearchParams({
+            page: String(page),
+            page_size: String(pageSize),
+          });
+          if (search.trim()) params.set("q", search.trim());
+          const response = await fetch(`/api/admin/users?${params}`, { cache: "no-store" });
+          if (!response.ok) throw new Error(await response.text());
+          const data = await response.json();
+          return { items: (data.items ?? []) as AdminUser[], total: data.total };
+        }),
+        fetch("/api/admin/classes", { cache: "no-store" }).then(async (response) => {
+          if (!response.ok) throw new Error(await response.text());
+          return response.json() as Promise<AdminClass[]>;
+        }),
       ]);
-      if (!uRes.ok) throw new Error(await uRes.text());
-      if (!cRes.ok) throw new Error(await cRes.text());
-      const uData = await uRes.json();
-      setUsers(uData.items ?? []);
-      setClasses(await cRes.json());
+      setUsers(users);
+      setClasses(classes);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "載入失敗");
     } finally {
@@ -292,7 +302,7 @@ export default function AdminUsersPage() {
       <Card>
         <CardHeader className="pb-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <CardTitle className="text-base">使用者列表</CardTitle>
+            <CardTitle className="text-base">使用者列表（{sortedUsers.length}）</CardTitle>
             <Input
               placeholder="搜尋帳號或顯示名稱…"
               value={search}

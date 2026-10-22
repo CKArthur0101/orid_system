@@ -598,6 +598,10 @@ export default function WeekBookPage() {
   const [focusStage, setFocusStage] = useState<StageKey>(() => writableStages(weekNum)[0] ?? "O");
   const [fbLoading, setFbLoading] = useState(false);
   const [fbError, setFbError] = useState<string | null>(null);
+  const [controlCheckReply, setControlCheckReply] = useState<string | null>(null);
+  useEffect(() => {
+    setControlCheckReply(null);
+  }, [weekNum]);
   /** Even-week synthesis: hide left ORID review panel to widen writing + partner. */
   const [oridPanelCollapsed, setOridPanelCollapsed] = useState(false);
   const [copyFlash, setCopyFlash] = useState<string | null>(null);
@@ -1035,6 +1039,12 @@ export default function WeekBookPage() {
     : "kid-shell order-3 flex min-h-[32vh] w-full min-w-0 flex-col overflow-hidden lg:order-2 lg:col-start-2 lg:h-full lg:min-h-0 lg:row-start-1";
 
   const isControl = isControlConditionValue(condition);
+  const controlCheckParsed = controlCheckReply ? parseFeedbackNarration(controlCheckReply) : null;
+  const controlCheckCard = controlCheckParsed ? (
+    <div className="max-h-[42%] shrink-0 overflow-y-auto border-b border-amber-100 p-2">
+      <FeedbackGuideCard parsed={controlCheckParsed} week={weekNum} />
+    </div>
+  ) : null;
 
   const activeStageDef = STAGES.find((s) => s.key === focusStage) ?? STAGES[0];
   const activeStage = activeStageDef.key;
@@ -1601,7 +1611,7 @@ export default function WeekBookPage() {
       setCopyFlash("已把固定句型放進寫作格");
     }
     if (nextWriting) {
-      void runPromptUsage({ writingSnapshot: nextWriting, stage: activeStage });
+      void runPromptUsage();
     }
     window.setTimeout(() => setCopyFlash(null), 1800);
   }
@@ -1701,13 +1711,8 @@ export default function WeekBookPage() {
     }
   }
 
-  async function runPromptUsage(options?: { writingSnapshot?: OridWritingV1; stage?: StageKey }) {
+  async function runPromptUsage() {
     if (!sessionId) return;
-    const snapshot = options?.writingSnapshot ?? writingData;
-    const stage = options?.stage ?? focusStage;
-    const wordCount = synthesisWeek
-      ? String(snapshot.synthesis_draft ?? "").trim().length
-      : String(snapshot.stages[stage]?.d1 ?? "").trim().length;
     try {
       const r = await fetch("/api/orid/prompt-usage", {
         method: "POST",
@@ -1716,27 +1721,107 @@ export default function WeekBookPage() {
         body: JSON.stringify({
           session_id: sessionId,
           week: weekNum,
-          stage,
-          word_count: wordCount,
+          stage: focusStage,
+          word_count: 0,
           prompt_view_count: 1,
         }),
       });
       if (!r.ok) return;
       const data = await r.json();
       setPromptViewCount(data.prompt_view_count ?? 0);
-      if (Array.isArray(data.earnedBadges)) {
-        const merged = data.earnedBadges as BadgeId[];
-        const newOnes = Array.isArray(data.newlyEarnedBadges)
-          ? (data.newlyEarnedBadges as BadgeId[])
-          : [];
-        setEarnedBadges(merged);
-        if (newOnes.length > 0) {
-          setBadgeModalQueue((prev) => [...prev, ...newOnes.filter((b) => !prev.includes(b))]);
-        }
-        await persistWritingSnapshot(snapshot, merged);
-      }
     } catch {
       // silently ignore prompt usage logging errors
+    }
+  }
+
+  function applyControlBadges(data: { earnedBadges?: BadgeId[]; newlyEarnedBadges?: BadgeId[] }, snapshot: OridWritingV1) {
+    const merged = Array.isArray(data.earnedBadges)
+      ? (Array.from(new Set([...earnedBadges, ...data.earnedBadges])) as BadgeId[])
+      : earnedBadges;
+    const newOnes: BadgeId[] = Array.isArray(data.newlyEarnedBadges)
+      ? data.newlyEarnedBadges
+      : getNewlyEarnedBadges(earnedBadges, merged);
+    setEarnedBadges(merged);
+    if (newOnes.length > 0) {
+      setBadgeModalQueue((prev) => [...prev, ...newOnes.filter((b) => !prev.includes(b))]);
+    }
+    return persistWritingSnapshot(mergeProgressIntoWriting(snapshot, merged), merged);
+  }
+
+  async function runControlCheck(target: StageKey | "ALL") {
+    if (!sessionId || !isControl) return;
+    const text =
+      target === "ALL"
+        ? String(writingData.synthesis_draft ?? "").trim()
+        : String(writingData.stages[target]?.d1 ?? "").trim();
+    if (!text) {
+      setFbError("請先寫一些內容再檢查。");
+      setControlCheckReply(null);
+      return;
+    }
+
+    fbInflightRef.current += 1;
+    setFbLoading(true);
+    setFbError(null);
+    try {
+      const r = await fetch("/api/orid/control-check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          session_id: sessionId,
+          week: weekNum,
+          stage: target,
+          student_text: text,
+        }),
+      });
+      const raw = await r.text();
+      if (!r.ok) throw new Error(formatApiError(r.status, raw, "檢查失敗"));
+      const data = raw ? JSON.parse(raw) : {};
+      const reply = String(data?.reply ?? "").trim();
+      setControlCheckReply(reply || null);
+
+      let nextWriting: OridWritingV1 = writingData;
+      if (target === "ALL") {
+        nextWriting = {
+          ...writingData,
+          synthesis_draft: text,
+          ...(data?.synthesis_rubric_levels && typeof data.synthesis_rubric_levels === "object"
+            ? { synthesis_rubric_levels: data.synthesis_rubric_levels }
+            : {}),
+        };
+      } else {
+        const fb: WritingFeedback = {
+          ok: !!data?.ok,
+          praise: null,
+          missing: [],
+          suggestions: [],
+          example: null,
+          improved: null,
+          meta: { student_feedback_kind: data?.ok ? "complete" : "revision" },
+        };
+        nextWriting = {
+          ...writingData,
+          stages: {
+            ...writingData.stages,
+            [target]: {
+              ...writingData.stages[target],
+              d1: text,
+              feedback: { ...(writingData.stages[target].feedback ?? {}), d1: fb },
+            },
+          },
+        };
+      }
+      setWritingData(nextWriting);
+      await applyControlBadges(data, nextWriting);
+    } catch (e: any) {
+      setFbError(e?.message ?? "檢查失敗");
+    } finally {
+      fbInflightRef.current -= 1;
+      if (fbInflightRef.current <= 0) {
+        fbInflightRef.current = 0;
+        setFbLoading(false);
+      }
     }
   }
 
@@ -2095,6 +2180,29 @@ export default function WeekBookPage() {
                   >
                     ⏭️ 進入整合寫作
                   </button>
+                ) : showStageFeedbackButtons && isControl && !oridReadOnly ? (
+                  <button
+                    type="button"
+                    className="kid-btn-3d-primary kid-btn-3d-block"
+                    disabled={!sessionId || fbLoading}
+                    onClick={() => void runControlCheck(activeStage)}
+                  >
+                    {fbLoading ? (
+                      "檢查中…"
+                    ) : (
+                      <>
+                        <Image
+                          src="/images/orid/badges/feedback_btn_icon.png"
+                          alt=""
+                          width={40}
+                          height={40}
+                          className="h-8 w-8 object-contain sm:h-9 sm:w-9 md:h-10 md:w-10"
+                          aria-hidden
+                        />
+                        檢查這一段
+                      </>
+                    )}
+                  </button>
                 ) : showStageFeedbackButtons && !isControl && !oridReadOnly ? (
                   <button
                     type="button"
@@ -2243,7 +2351,16 @@ export default function WeekBookPage() {
               {copyFlash && oridPanelCollapsed ? (
                 <div className="text-xs font-medium text-emerald-700">{copyFlash}</div>
               ) : null}
-              {!isControl ? (
+              {isControl ? (
+                <button
+                  type="button"
+                  className="kid-btn-3d-primary kid-btn-3d-block shrink-0"
+                  disabled={!sessionId || fbLoading}
+                  onClick={() => void runControlCheck("ALL")}
+                >
+                  {fbLoading ? "檢查中…" : "檢查這篇"}
+                </button>
+              ) : (
                 <button
                   type="button"
                   className="kid-btn-3d-primary kid-btn-3d-block shrink-0"
@@ -2268,7 +2385,7 @@ export default function WeekBookPage() {
                     </>
                   )}
                 </button>
-              ) : null}
+              )}
               {fbError ? (
                 <div className="whitespace-pre-wrap text-xs text-red-600 sm:text-sm" role="alert">
                   {fbError}
@@ -2310,14 +2427,17 @@ export default function WeekBookPage() {
                 ) : null}
 
                 {isControl ? (
-                  <WritingPromptHelper
-                    focusStage={focusStage}
-                    onPromptViewed={() => void runPromptUsage()}
-                    onInsertText={insertControlGuideText}
-                    synthesisMode
-                    openingText={synthesisOpeningText}
-                    week={weekNum}
-                  />
+                  <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                    {controlCheckCard}
+                    <WritingPromptHelper
+                      focusStage={focusStage}
+                      onPromptViewed={() => void runPromptUsage()}
+                      onInsertText={insertControlGuideText}
+                      synthesisMode
+                      openingText={synthesisOpeningText}
+                      week={weekNum}
+                    />
+                  </div>
                 ) : (
                   <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-2 sm:p-3">
                     {chatTab === "synthesis" ? (
@@ -2477,12 +2597,15 @@ export default function WeekBookPage() {
               </div>
 
               {isControl ? (
-                <WritingPromptHelper
-                  focusStage={focusStage}
-                  onPromptViewed={() => void runPromptUsage()}
-                  onInsertText={insertControlGuideText}
-                  week={weekNum}
-                />
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                  {controlCheckCard}
+                  <WritingPromptHelper
+                    focusStage={focusStage}
+                    onPromptViewed={() => void runPromptUsage()}
+                    onInsertText={insertControlGuideText}
+                    week={weekNum}
+                  />
+                </div>
               ) : (
                 <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#fffcf7]">
                   <div className="shrink-0 border-b border-amber-100 px-3 py-3 sm:px-4">

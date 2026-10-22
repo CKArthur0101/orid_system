@@ -17,10 +17,12 @@ async function proxyResponse(r: Response) {
   });
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   const auth = await adminAuthHeaders();
   if (auth instanceof NextResponse) return auth;
-  const r = await fetch(`${API_BASE_URL}/admin/classes`, {
+  const include = new URL(req.url).searchParams.get("include_archived") === "1";
+  const qs = include ? "?include_archived=true" : "";
+  const r = await fetch(`${API_BASE_URL}/admin/classes${qs}`, {
     headers: { Accept: "application/json", ...auth },
     cache: "no-store",
   });

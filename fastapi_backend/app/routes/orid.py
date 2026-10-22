@@ -33,6 +33,8 @@ from app.schemas import (
     WritingCoachChatResponse,
     PromptUsageRequest,
     PromptUsageResponse,
+    ControlCheckRequest,
+    ControlCheckResponse,
     OridProgressRead,
 )
 
@@ -129,7 +131,9 @@ from app.services.orid_condition import (
     normalize_orid_condition,
     session_condition_from_user_orid_condition,
 )
-from app.services.orid_writing_store import ensure_orid_writing_obj
+from app.services.orid_writing_store import ensure_orid_writing_obj, upsert_feedback_into_stage
+from app.services.control_check import check_control_stage, check_control_synthesis
+from app.services.action_pass import cap_synthesis_action_level, experimental_action_override
 from app.content.week_plan import (
     STAGE_KEYS,
     TOTAL_WEEKS,
@@ -308,6 +312,11 @@ def get_required_pass(stage: str) -> int:
 
 def _user_role(user: User) -> str:
     return str(getattr(user, "role", "student") or "student").strip().lower()
+
+
+def _reject_student_flow_for_teacher(user: User) -> None:
+    if _user_role(user) == "teacher":
+        raise HTTPException(status_code=403, detail="教師帳號請使用教師儀表板。")
 
 
 def _is_teacher_or_admin(user: User) -> bool:
@@ -512,6 +521,13 @@ BOOK_PACK_BY_WEEK: dict[int, dict[str, Any]] = {
             "I": "意義：提出一個提醒/道理，並用故事中的一個轉折當理由。",
             "D": "行動：寫一個可執行的小步驟（下次我會…在…先…再…）。",
         },
+        "d_action_scope": (
+            "行動本身要直接用在分享或一起使用東西上，例如把東西分給別人、借給同學、和大家一起用。"
+            "只有個人練習、自我進步，或和別人無關的努力，但沒有實際連到分享或一起使用，不算符合本書 D 行動主題。"
+        ),
+        "d_action_student_theme": "把東西和別人一起分享",
+        "d_action_question": "讀完《阿松爺爺的柿子樹》，你可以和誰分享什麼？",
+        "d_action_markers": ["分享", "分給", "一起", "借"],
         "writing_rubric": WEEK1_ORID_RUBRIC,
         "sel_rubric": WEEK1_SEL_RUBRIC,
     },
@@ -532,6 +548,7 @@ BOOK_PACK_BY_WEEK: dict[int, dict[str, Any]] = {
         ),
         "d_action_student_theme": "一起分擔家事、體諒家人",
         "d_action_question": "讀完《朱家故事》，你可以為家人主動做哪一件事？",
+        "d_action_markers": ["家人", "家事", "洗碗", "碗", "鋪", "燙", "洗衣", "衣服", "掃", "收", "床", "煮", "飯", "感謝", "謝謝", "幫忙"],
         "characters": [
             {"name": "朱先生", "role": "父親，一開始習慣叫朱太太準備餐點與做家事，朱太太離開後才發現自己必須自己照顧自己，之後改變態度幫忙洗碗和燙衣服"},
             {"name": "朱太太", "role": "母親，平常負責清洗碗盤、鋪床、清掃、洗衣、燙衣、準備飯菜，還要出門上班；被家人催促卻不被感謝，最後留下紙條離開家，回來後看到家人願意改變才決定留下"},
@@ -706,6 +723,13 @@ _BOOK3_PACK: dict[str, Any] = {
         "I": "請想一想故事想告訴我們什麼，也可以連結自己的生活經驗。",
         "D": "請寫出讀完故事後，你以後可以做的一個具體行動。",
     },
+    "d_action_scope": (
+        "行動本身要直接用在把自己的想法說清楚，或開始學習表達上，例如先說出自己的意思、請別人聽完再補充、自己試著寫或認字。"
+        "只有和表達、溝通、學習說清楚無關的個人努力，不算符合本書 D 行動主題。"
+    ),
+    "d_action_student_theme": "把自己的想法說清楚",
+    "d_action_question": "讀完《不會寫字的獅子》，你可以怎麼把想說的話說清楚？",
+    "d_action_markers": ["說", "寫", "講", "告訴", "聽", "認字"],
     "writing_rubric": WEEK5_ORID_RUBRIC,
     "sel_rubric": WEEK5_SEL_RUBRIC,
     "grounding_facts": {
@@ -991,6 +1015,7 @@ def resolve_book_pack(pack: Optional[dict[str, Any]]) -> Optional[dict[str, Any]
         "d_action_scope",
         "d_action_student_theme",
         "d_action_question",
+        "d_action_markers",
     ):
         if default.get(policy_key) is not None:
             merged[policy_key] = default[policy_key]
@@ -2585,6 +2610,7 @@ async def create_session(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
+    _reject_student_flow_for_teacher(user)
     r = await db.execute(select(Reading).filter(Reading.id == data.reading_id))
     reading = r.scalars().first()
     if not reading:
@@ -2625,6 +2651,7 @@ async def ensure_session(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
+    _reject_student_flow_for_teacher(user)
     title = DEFAULT_READING_TITLE_TEMPLATE.format(week=week)
     bu = book_unit_from_week(week)
     user_email = getattr(user, "email", None)
@@ -2760,9 +2787,11 @@ async def record_prompt_usage(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
-    """Control group: record that user viewed a writing prompt.
+    _reject_student_flow_for_teacher(user)
+    """Control group: count a guide use (insert a card, or open a prompt).
 
-    Returns current badge state and any newly earned badges.
+    Page flips are not sent here. This does not check quality and does not
+    award badges — badges come from POST /orid/control-check.
     """
     r = await db.execute(select(OridSession).filter(OridSession.id == data.session_id))
     session = r.scalars().first()
@@ -2770,10 +2799,6 @@ async def record_prompt_usage(
         raise HTTPException(status_code=404, detail="Session not found")
 
     week = data.week
-    stage = (data.stage or "O").strip().upper()
-    word_count = data.word_count
-
-    # Count how many prompt views already exist for this session
     existing_stmt = select(func.coalesce(func.sum(OridBadgeEvent.prompt_view_count), 0)).where(
         OridBadgeEvent.user_id == user.id,
         OridBadgeEvent.session_id == session.id,
@@ -2783,42 +2808,154 @@ async def record_prompt_usage(
     existing_prompt_views = int(existing_count_res.scalar() or 0)
     new_prompt_total = existing_prompt_views + data.prompt_view_count
 
-    # Badge evaluation (control: stage progress by saved content)
-    has_content = bool(word_count and word_count > 0)
-    synthesis_week = is_synthesis_week(week)
-    stages_passed: set[str] = set()
-    current_badges: list[str] = []
-    if synthesis_week:
-        # The fixed-prompt control path has no rubric assessor. Do not award
-        # quality badges from writing length or prompt views alone.
-        current_badges = []
+    prev_badges = await get_earned_badges_from_db(db, user_id=user.id, session_id=session.id, week=week)
+    await bump_guide_use(db, user_id=user.id, week=week, session_id=session.id, amount=data.prompt_view_count)
+    await db.commit()
+
+    return PromptUsageResponse(
+        prompt_view_count=new_prompt_total,
+        earnedBadges=prev_badges,
+        newlyEarnedBadges=[],
+    )
+
+
+async def _persist_control_check_writing(
+    db: AsyncSession,
+    *,
+    user: User,
+    session: OridSession,
+    week: int,
+    stage: str,
+    text: str,
+    ok: bool,
+    levels: dict[str, int] | None,
+) -> dict[str, Any]:
+    """Store the check result on this week's writing without counting a save."""
+    raw = await _fetch_latest_writing_content_for_week(db, user.id, session.id, week)
+    obj = ensure_orid_writing_obj(
+        raw_content=raw,
+        week=week,
+        empty_factory=_ensure_orid_writing_v1,
+    )
+    if stage == "ALL":
+        obj["synthesis_draft"] = text
+        obj["week2_flow"] = "synthesis"
+        if levels:
+            obj["synthesis_rubric_levels"] = levels
     else:
-        try:
-            writings: dict[int, dict[str, Any] | None] = await _load_reference_writing_objs(
-                db, user.id, session.id, week
+        upsert_feedback_into_stage(
+            obj=obj,
+            stage=stage,
+            draft="d1",
+            text=text,
+            ok=ok,
+            missing=[],
+            suggestions=[],
+            example=None,
+            improved=None,
+            empty_factory=_ensure_orid_writing_v1,
+        )
+    if session.reading_id is None:
+        return obj
+    content_str = json.dumps(obj, ensure_ascii=False)
+    ins = pg_insert(OridWeekSubmission).values(
+        id=uuid4(),
+        user_id=user.id,
+        reading_id=session.reading_id,
+        session_id=session.id,
+        week=week,
+        content=content_str,
+    )
+    ins = ins.on_conflict_do_update(
+        constraint="uq_orid_week_submissions_user_session_week",
+        set_={
+            "content": ins.excluded.content,
+            "updated_at": func.now(),
+        },
+    )
+    await db.execute(ins)
+    return obj
+
+
+@router.post("/control-check", response_model=ControlCheckResponse)
+async def control_check(
+    data: ControlCheckRequest,
+    db: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_active_user),
+):
+    _reject_student_flow_for_teacher(user)
+    """Control group: fixed-rule check. No model call, no guide-use increment."""
+    r = await db.execute(select(OridSession).filter(OridSession.id == data.session_id))
+    session = r.scalars().first()
+    if not session or session.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not is_control_condition(session.condition, default=DEFAULT_ORID_CONDITION):
+        raise HTTPException(status_code=403, detail="這個檢查只給控制組使用。")
+
+    week = data.week
+    if not is_valid_week(week):
+        raise HTTPException(status_code=400, detail=f"week must be between 1 and {TOTAL_WEEKS}")
+
+    stage = (data.stage or "O").strip().upper()
+    text = (data.student_text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="請先寫一些內容再檢查。")
+
+    if is_synthesis_week(week):
+        if stage != "ALL":
+            raise HTTPException(status_code=400, detail="整合寫作請檢查整篇。")
+        result = check_control_synthesis(text=text, book_pack=canonical_book_pack_for_week(week))
+    else:
+        if stage not in writable_stages(week):
+            raise HTTPException(status_code=400, detail="這一週不能檢查這一段。")
+        prior = await _load_reference_writing_objs(db, user.id, session.id, week)
+        saved_raw = await _fetch_latest_writing_content_for_week(db, user.id, session.id, week)
+        prior[week] = (
+            ensure_orid_writing_obj(
+                raw_content=saved_raw,
+                week=week,
+                empty_factory=_ensure_orid_writing_v1,
             )
-            writing_raw = await _fetch_latest_writing_content_for_week(
-                db, user.id, session.id, week
-            )
-            writings[week] = (
-                ensure_orid_writing_obj(
-                    raw_content=writing_raw,
-                    week=week,
-                    empty_factory=_ensure_orid_writing_v1,
-                )
-                if writing_raw
-                else None
-            )
-            stages_passed = _stages_passed_across_weeks(writings, mode="content")
-        except Exception:
-            logger.warning("prompt-usage stage progress lookup failed", exc_info=True)
-        if has_content and stage in writable_stages(week):
-            stages_passed.add(stage)
+            if saved_raw
+            else None
+        )
+        already = _stages_passed_across_weeks(prior, mode="ok")
+        already.discard(stage)
+        result = check_control_stage(
+            stage=stage,
+            text=text,
+            week=week,
+            stages_already_passed=already,
+            book_pack=canonical_book_pack_for_week(week),
+        )
+
+    obj = await _persist_control_check_writing(
+        db,
+        user=user,
+        session=session,
+        week=week,
+        stage=stage,
+        text=text,
+        ok=result.ok,
+        levels=result.levels,
+    )
+
+    if is_synthesis_week(week):
+        current_badges = [
+            b
+            for b in calculate_earned_synthesis_badges(rubric_levels=result.levels)
+            if b in badge_ids_available_for_week(week)
+        ]
+    else:
+        writings = await _load_reference_writing_objs(db, user.id, session.id, week)
+        writings[week] = obj
+        stages_passed = _stages_passed_across_weeks(writings, mode="ok")
+        observation_passed = "O" in stages_passed
         current_badges = [
             b
             for b in calculate_earned_badges(
-                has_writing_content=has_content,
-                has_used_feedback_or_prompt=True,
+                has_writing_content=observation_passed,
+                has_used_feedback_or_prompt=observation_passed,
                 stages_passed=stages_passed,
             )
             if b in badge_ids_available_for_week(week)
@@ -2836,22 +2973,27 @@ async def record_prompt_usage(
             task_type=task_type_for_week(week),
             condition=session.condition,
             new_badge_ids=new_badges,
-            word_count=word_count,
-            feedback_count=0,
-            prompt_view_count=new_prompt_total,
+            word_count=len(text),
+            feedback_count=1,
+            prompt_view_count=0,
             used_feedback_or_prompt=True,
         )
-
-    all_earned = list(set(prev_badges + current_badges))
-    # Control group: viewing a fixed prompt/hint counts as one "guide use" per call.
-    await bump_guide_use(db, user_id=user.id, week=week, session_id=session.id, amount=data.prompt_view_count)
-    await sync_badges(db, user_id=user.id, week=week, session_id=session.id, badge_count=len(all_earned))
+    await sync_badges(
+        db,
+        user_id=user.id,
+        week=week,
+        session_id=session.id,
+        badge_count=len(set(prev_badges + current_badges)),
+    )
     await db.commit()
 
-    return PromptUsageResponse(
-        prompt_view_count=new_prompt_total,
-        earnedBadges=all_earned,
+    return ControlCheckResponse(
+        ok=result.ok,
+        reply=result.reply,
+        stage=stage,
+        earnedBadges=list(set(prev_badges + current_badges)),
         newlyEarnedBadges=new_badges,
+        synthesis_rubric_levels=result.levels,
     )
 
 
@@ -2861,6 +3003,7 @@ async def writing_coach_chat(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
+    _reject_student_flow_for_teacher(user)
     request_started = time.perf_counter()
     timings_ms: dict[str, int] = {}
 
@@ -3043,6 +3186,17 @@ async def writing_coach_chat(
             assessment_required=bool(genai_path and client is not None),
             keep_model_sentences=bool(genai_path),
         )
+        if genai_path:
+            fb_ok, fb_missing, fb_sug, fb_rubric = experimental_action_override(
+                stage=stage_ctx,
+                student_text=body,
+                book_pack=book_pack,
+                ok=bool(fb_ok),
+                missing=fb_missing,
+                suggestions=fb_sug,
+                rubric_meta=fb_rubric,
+                keep_model_sentences=True,
+            )
 
         coach_meta["interaction_intent"] = str(
             fb_rubric.get("interaction_intent") or "draft_attempt"
@@ -3234,8 +3388,10 @@ async def writing_coach_chat(
                 ),
             )
             parsed_synthesis = extract_json_object(raw_synthesis)
-            synthesis_levels = normalize_synthesis_levels(
-                parsed_synthesis.get("rubric_levels")
+            synthesis_levels = cap_synthesis_action_level(
+                normalize_synthesis_levels(parsed_synthesis.get("rubric_levels")),
+                body,
+                book_pack,
             )
             ai_reply = str(parsed_synthesis.get("reply") or "").strip()
             if len(synthesis_levels) == len(SYNTHESIS_CRITERIA_ORDER):
@@ -3388,14 +3544,14 @@ async def writing_coach_chat(
                 writings_by_week[week_num] = saved_obj
                 stages_passed = _stages_passed_across_weeks(
                     writings_by_week,
-                    mode="content" if is_control else "ok",
+                    mode="ok",
                 )
             except Exception:
                 logger.warning("stages_passed_from_writing_obj failed", exc_info=True)
 
             this_week_stages = set(writable_stages(week_num))
             if is_control:
-                if has_content and stage_u in this_week_stages:
+                if fb_ok and stage_u in this_week_stages:
                     stages_passed.add(stage_u)
             else:
                 stages_passed |= stages_passed_from_orid_levels(orid_levels) & this_week_stages
@@ -3549,6 +3705,7 @@ async def writing_assist(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
+    _reject_student_flow_for_teacher(user)
     r = await db.execute(select(OridSession).filter(OridSession.id == data.session_id))
     session = r.scalars().first()
     if not session or session.user_id != user.id:
@@ -3585,6 +3742,7 @@ async def writing_feedback(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
+    _reject_student_flow_for_teacher(user)
     r = await db.execute(select(OridSession).filter(OridSession.id == data.session_id))
     session = r.scalars().first()
     if not session or session.user_id != user.id:
@@ -3667,6 +3825,17 @@ async def writing_feedback(
         assessment_required=bool(genai_path and client is not None),
         keep_model_sentences=bool(genai_path),
     )
+    if genai_path:
+        ok, missing, suggestions, rubric_snap = experimental_action_override(
+            stage=data.stage,
+            student_text=text,
+            book_pack=book_pack,
+            ok=bool(ok),
+            missing=missing,
+            suggestions=suggestions,
+            rubric_meta=rubric_snap,
+            keep_model_sentences=True,
+        )
     wf_meta: dict[str, Any] = {
         "condition": condition,
         "feedback_strength": feedback_strength,
@@ -3759,6 +3928,7 @@ async def create_writing(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
+    _reject_student_flow_for_teacher(user)
     r = await db.execute(select(OridSession).filter(OridSession.id == data.session_id))
     session = r.scalars().first()
     if not session or session.user_id != user.id:
@@ -3861,6 +4031,7 @@ async def update_writing(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
+    _reject_student_flow_for_teacher(user)
     r = await db.execute(
         select(OridWeekSubmission).filter(
             OridWeekSubmission.id == writing_id,

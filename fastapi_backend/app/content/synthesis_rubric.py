@@ -235,6 +235,13 @@ def ensure_synthesis_mismatch_reply(model_reply: str | None, quote: str) -> str:
     )
 
 
+def _looks_like_pass_card(text: str) -> bool:
+    """A completion card still has a gap when the shared action gate lowers a level."""
+    if "再想一想" in (text or ""):
+        return False
+    return "本階段完成" in (text or "")
+
+
 def synthesis_visible_reply(model_reply: str | None, focus: str | None) -> str:
     """Show the model's own sentences. A passed piece is affirmed instead of questioned."""
     text = (model_reply or "").strip()
@@ -242,7 +249,7 @@ def synthesis_visible_reply(model_reply: str | None, focus: str | None) -> str:
         if not text:
             text = synthesis_fallback_reply(None)
         return format_synthesis_pass_reply(text)
-    if text:
+    if text and not _looks_like_pass_card(text):
         return text
     return synthesis_fallback_reply(focus)
 

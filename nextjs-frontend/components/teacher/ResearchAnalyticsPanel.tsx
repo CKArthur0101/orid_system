@@ -117,6 +117,15 @@ function numOrZero(v: number | null | undefined): number {
   return typeof v === "number" ? v : 0;
 }
 
+function classGroupLabel(cards: ResearchSummaryCards | undefined): string {
+  const experimental = cards?.experimental_count ?? 0;
+  const control = cards?.control_count ?? 0;
+  if (experimental > 0 && control === 0) return "實驗組";
+  if (control > 0 && experimental === 0) return "控制組";
+  if (experimental > 0 && control > 0) return "實驗組、控制組";
+  return "—";
+}
+
 function formatChartValue(v: unknown): string {
   const n = typeof v === "number" ? v : Number(v);
   if (!Number.isFinite(n)) return String(v ?? "");
@@ -262,8 +271,8 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
         <StatCard
           icon={<FlaskConical className="h-5 w-5 text-[#3d7eb0]" />}
           iconBg="bg-[#eef6fc]"
-          label="實驗組 / 控制組人數"
-          value={`${cards?.experimental_count ?? 0} / ${cards?.control_count ?? 0}`}
+          label="班級組別"
+          value={classGroupLabel(cards)}
           sub={`全班 ${cards?.total_students ?? 0} 人`}
         />
         <StatCard

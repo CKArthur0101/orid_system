@@ -8,8 +8,11 @@ import { useAuthenticatedUser } from "@/lib/use-authenticated-user";
 
 export default function TeacherLayout({ children }: { children: React.ReactNode }) {
   const auth = useAuthenticatedUser("teacher");
-  const greeting = auth.status === "ready"
+  const rawName = auth.status === "ready"
     ? String(auth.user.display_name ?? "").trim() || String(auth.user.email ?? "").trim()
+    : "";
+  const greeting = rawName
+    ? (rawName.endsWith("老師") ? rawName : `${rawName} 老師`)
     : null;
 
   if (auth.status === "checking") {

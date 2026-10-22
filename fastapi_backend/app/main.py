@@ -8,6 +8,7 @@ from app.routes.items import router as items_router
 from app.routes.orid import router as orid_router
 from app.routes.teacher import router as teacher_router
 from app.routes.admin import router as admin_router
+from app.routes.auth_login import router as auth_login_router
 from app.config import settings
 
 app = FastAPI(
@@ -24,7 +25,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include authentication and user management routes
+# Include authentication and user management routes.
+# The locked login route is registered first so it handles /auth/jwt/login.
+app.include_router(
+    auth_login_router,
+    prefix=f"/{AUTH_URL_PATH}/jwt",
+    tags=["auth"],
+)
 app.include_router(
     fastapi_users.get_auth_router(auth_backend),
     prefix=f"/{AUTH_URL_PATH}/jwt",

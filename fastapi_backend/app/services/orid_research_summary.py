@@ -244,8 +244,9 @@ async def bump_guide_use(
     session_id: UUID,
     amount: int = 1,
 ) -> None:
-    """Call once per successful guiding-resource use: experimental group AI
-    feedback (stage or synthesis), or control group prompt/hint view."""
+    """Call once per guiding-resource use: experimental 「取得回饋」, or a
+    control-group card insert / explicit prompt open. Page flips do not count.
+    The control check button is a pass/fail gate and is not a guide use."""
     if amount <= 0:
         return
     try:

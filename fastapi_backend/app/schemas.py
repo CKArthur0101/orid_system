@@ -93,10 +93,16 @@ class AdminClassSummary(BaseModel):
     name: str
     year: int
     external_code: str | None = None
+    study_condition: str | None = None
+    archived_at: datetime | None = None
     student_count: int = 0
     teacher_count: int = 0
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_serializer("archived_at")
+    def _ser_archived_at(self, value: datetime | None) -> str | None:
+        return json_dt_utc_z(value)
 
 
 class AdminClassCreate(BaseModel):
@@ -384,6 +390,22 @@ class PromptUsageResponse(BaseModel):
     newlyEarnedBadges: list[str] = []
 
 
+class ControlCheckRequest(BaseModel):
+    session_id: UUID
+    week: int = Field(..., ge=1, le=7)
+    stage: str = Field(..., pattern="^(O|R|I|D|ALL)$")
+    student_text: str = ""
+
+
+class ControlCheckResponse(BaseModel):
+    ok: bool
+    reply: str
+    stage: str
+    earnedBadges: list[str] = []
+    newlyEarnedBadges: list[str] = []
+    synthesis_rubric_levels: dict[str, int] | None = None
+
+
 class OridProgressRead(BaseModel):
     earnedBadges: list[str] = []
 
@@ -450,6 +472,7 @@ class TeacherStudentRow(BaseModel):
     student_id: UUID
     student_email: str
     student_display_name: str
+    seat_no: int | None = None
     current_stage: str
     interaction_count: int = Field(
         description="對話輪數：該週 session 內 min(學生訊息則數, AI 訊息則數)。",
@@ -494,6 +517,7 @@ class TeacherStudentSummary(BaseModel):
     )
     writing_completed_stages: int
     stages_with_draft: list[str] = []
+    stage_texts: dict[str, str] = Field(default_factory=dict)
     last_activity_at: datetime | None = None
     feedback_click_count: int = 0
     feedback_ok_count: int = 0

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import re
 import uuid
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi_users.password import PasswordHelper
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,16 +54,10 @@ async def require_admin(user: User = Depends(current_active_user)) -> User:
     return user
 
 
-def validate_admin_password(password: str) -> None:
-    errors: list[str] = []
-    if len(password) < 6:
-        errors.append("Password should be at least 6 characters.")
-    if not re.search(r"[A-Za-z]", password):
-        errors.append("Password should contain at least one letter.")
-    if not re.search(r"[0-9]", password):
-        errors.append("Password should contain at least one number.")
-    if not re.fullmatch(r"[A-Za-z0-9]+", password):
-        errors.append("Password should contain only letters and numbers.")
+def validate_admin_password(password: str, *, cohort: bool = False) -> None:
+    from app.services.experiment_cohort import cohort_password_errors, strict_password_errors
+
+    errors = cohort_password_errors(password) if cohort else strict_password_errors(password)
     if errors:
         raise HTTPException(status_code=400, detail={"password": errors})
 
@@ -241,7 +234,14 @@ async def admin_create_user(
     db: AsyncSession = Depends(get_async_session),
     _admin: User = Depends(require_admin),
 ):
-    validate_admin_password(data.password)
+    cohort = False
+    if data.class_ids and data.role in {"student", "teacher"}:
+        from app.services.experiment_cohort import EXPERIMENT_CLASS_CODES
+
+        class_rows = await db.execute(select(ClassRoom).where(ClassRoom.id.in_(data.class_ids)))
+        codes = {row.external_code for row in class_rows.scalars().all() if row.external_code}
+        cohort = bool(codes) and codes <= set(EXPERIMENT_CLASS_CODES)
+    validate_admin_password(data.password, cohort=cohort)
     existing = await db.execute(select(User.id).where(User.email == data.email))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Login id already exists")
@@ -299,7 +299,12 @@ async def admin_update_user(
         user.orid_condition = data.orid_condition
         user.orid_condition_updated_at = datetime.now(tz=timezone.utc)
     if data.new_password:
-        validate_admin_password(data.new_password)
+        from app.services.experiment_import import user_is_experiment_cohort
+
+        validate_admin_password(
+            data.new_password,
+            cohort=await user_is_experiment_cohort(db, user),
+        )
         user.hashed_password = _password_helper.hash(data.new_password)
         password_once = data.new_password
     role = _user_role(user)
@@ -330,10 +335,14 @@ async def admin_delete_user(
 
 @router.get("/classes", response_model=list[AdminClassSummary])
 async def admin_list_classes(
+    include_archived: bool = Query(False),
     db: AsyncSession = Depends(get_async_session),
     _admin: User = Depends(require_admin),
 ):
-    classes = (await db.execute(select(ClassRoom).order_by(ClassRoom.name.asc()))).scalars().all()
+    stmt = select(ClassRoom).order_by(ClassRoom.name.asc())
+    if not include_archived:
+        stmt = stmt.where(ClassRoom.archived_at.is_(None))
+    classes = (await db.execute(stmt)).scalars().all()
     out: list[AdminClassSummary] = []
     for cls in classes:
         sc = await db.scalar(
@@ -352,6 +361,8 @@ async def admin_list_classes(
                 name=cls.name,
                 year=cls.year,
                 external_code=cls.external_code,
+                study_condition=cls.study_condition,
+                archived_at=cls.archived_at,
                 student_count=int(sc or 0),
                 teacher_count=int(tc or 0),
             )
@@ -379,6 +390,8 @@ async def admin_create_class(
         name=cls.name,
         year=cls.year,
         external_code=cls.external_code,
+        study_condition=cls.study_condition,
+        archived_at=cls.archived_at,
         student_count=0,
         teacher_count=0,
     )
@@ -417,6 +430,8 @@ async def admin_update_class(
         name=cls.name,
         year=cls.year,
         external_code=cls.external_code,
+        study_condition=cls.study_condition,
+        archived_at=cls.archived_at,
         student_count=int(sc or 0),
         teacher_count=int(tc or 0),
     )
@@ -445,3 +460,104 @@ async def admin_delete_class(
         raise HTTPException(status_code=400, detail="Class has members; remove assignments first")
     await db.delete(cls)
     await db.commit()
+
+
+@router.post("/classes/{class_id}/archive", response_model=AdminClassSummary)
+async def admin_archive_class(
+    class_id: UUID,
+    db: AsyncSession = Depends(get_async_session),
+    _admin: User = Depends(require_admin),
+):
+    from datetime import datetime, timezone
+
+    cls = await db.get(ClassRoom, class_id)
+    if not cls:
+        raise HTTPException(status_code=404, detail="Class not found")
+    cls.archived_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(cls)
+    return AdminClassSummary(
+        id=cls.id,
+        name=cls.name,
+        year=cls.year,
+        external_code=cls.external_code,
+        study_condition=cls.study_condition,
+        archived_at=cls.archived_at,
+    )
+
+
+@router.post("/experiment/archive-legacy")
+async def admin_archive_legacy_classes(
+    db: AsyncSession = Depends(get_async_session),
+    _admin: User = Depends(require_admin),
+):
+    from app.services.experiment_import import archive_legacy_classes
+
+    names = await archive_legacy_classes(db)
+    await db.commit()
+    return {"archived": names}
+
+
+def _roster_report(plan) -> dict:
+    from app.services.experiment_cohort import EXPERIMENT_CLASS_CODES, study_condition_for_code
+
+    return {
+        "students_to_create": plan.students_to_create,
+        "teachers_to_create": plan.teachers_to_create,
+        "skipped_507": plan.skipped_507,
+        "skipped_existing": plan.skipped_existing,
+        "conflicts": len(plan.conflicts),
+        "errors": len(plan.errors),
+        "conflict_logins": [item.login for item in plan.conflicts if item.login],
+        "error_reasons": [item.reason for item in plan.errors],
+        "error_logins": [item.login for item in plan.errors if item.login],
+        "classes": [
+            {
+                "code": code,
+                "study_condition": study_condition_for_code(code),
+                "students": int(plan.class_student_counts.get(code, 0)),
+            }
+            for code in EXPERIMENT_CLASS_CODES
+        ],
+        "ok": plan.ok,
+    }
+
+
+@router.post("/experiment/dry-run")
+async def admin_experiment_dry_run(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_async_session),
+    _admin: User = Depends(require_admin),
+):
+    from app.services.experiment_import import build_roster_plan, parse_roster_xlsx
+
+    payload = await file.read()
+    try:
+        rows = parse_roster_xlsx(payload)
+    except Exception:
+        raise HTTPException(status_code=400, detail="無法讀取名冊")
+    plan = await build_roster_plan(db, rows)
+    return _roster_report(plan)
+
+
+@router.post("/experiment/import")
+async def admin_experiment_import(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_async_session),
+    admin: User = Depends(require_admin),
+):
+    from app.services.experiment_import import commit_roster_import, parse_roster_xlsx
+
+    payload = await file.read()
+    try:
+        rows = parse_roster_xlsx(payload)
+    except Exception:
+        raise HTTPException(status_code=400, detail="無法讀取名冊")
+    plan, created = await commit_roster_import(db, rows, created_by=admin.id)
+    if not plan.ok:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=_roster_report(plan))
+    await db.commit()
+    report = _roster_report(plan)
+    report["created_logins"] = created
+    return report

@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, Text, func, String, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, Text, func, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy.orm import DeclarativeBase
@@ -134,11 +134,22 @@ class OridWeekSubmission(Base):
 
 class ClassRoom(Base):
     __tablename__ = "classes"
+    __table_args__ = (
+        Index(
+            "uq_classes_year_external_code",
+            "year",
+            "external_code",
+            unique=True,
+            postgresql_where=text("external_code IS NOT NULL"),
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     name = Column(String, nullable=False)
     year = Column(Integer, nullable=False, default=datetime.utcnow().year)
     external_code = Column(String, nullable=True)
+    study_condition = Column(String(16), nullable=True)
+    archived_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
@@ -147,11 +158,19 @@ class StudentClassMembership(Base):
     __table_args__ = (
         UniqueConstraint("student_id", "class_id", name="uq_student_class_membership"),
         Index("ix_student_class_memberships_class_student", "class_id", "student_id"),
+        Index(
+            "uq_student_class_memberships_class_seat",
+            "class_id",
+            "seat_no",
+            unique=True,
+            postgresql_where=text("seat_no IS NOT NULL"),
+        ),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     student_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
     class_id = Column(UUID(as_uuid=True), ForeignKey("classes.id"), nullable=False)
+    seat_no = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
@@ -163,6 +182,29 @@ class TeacherClassAssignment(Base):
     teacher_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
     class_id = Column(UUID(as_uuid=True), ForeignKey("classes.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class LoginLock(Base):
+    """Per-login failure counter. Does not store the password."""
+
+    __tablename__ = "login_locks"
+
+    login_id = Column(String(128), primary_key=True)
+    fail_count = Column(Integer, nullable=False, default=0)
+    locked_until = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ExperimentImportBatch(Base):
+    """Ids created by one confirmed roster import. Passwords are not stored."""
+
+    __tablename__ = "experiment_import_batches"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
+    status = Column(String(16), nullable=False, default="committed")
+    created_login_ids = Column(Text, nullable=False, default="[]")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class OridStageAttempt(Base):
