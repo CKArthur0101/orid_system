@@ -1,10 +1,35 @@
-"""Control-group check: fixed card, same pass bar, no draft quotation."""
+"""Control-group check: checklist ticks, same pass bar, no draft quotation."""
 from app.services.action_pass import experimental_action_override
 from app.services.control_check import (
     check_control_stage,
     check_control_synthesis,
     is_unfilled_scaffold,
+    silent_stage_checks,
+    silent_synthesis_checks,
 )
+
+
+def test_silent_stage_check_is_one_line_for_the_whole_stage():
+    failed = silent_stage_checks("R", False)
+    assert len(failed) == 1
+    assert failed[0].passed is False
+    assert "因為" not in failed[0].label
+
+    passed = silent_stage_checks("R", True)
+    assert passed[0].passed is True
+    assert passed[0].label == failed[0].label
+
+
+def test_silent_synthesis_checks_follow_level_three():
+    checks = silent_synthesis_checks(
+        {
+            "content_integration": 3,
+            "coherence": 2,
+            "reflection_depth": 4,
+            "action_application": 1,
+        }
+    )
+    assert [item.passed for item in checks] == [True, False, True, False]
 
 
 def test_unfilled_sentence_frame_is_not_student_writing():
@@ -12,8 +37,10 @@ def test_unfilled_sentence_frame_is_not_student_writing():
     assert is_unfilled_scaffold(text)
     result = check_control_stage(stage="R", text=text, week=1, stages_already_passed=set())
     assert result.ok is False
-    assert "空格" in result.reply
-    assert "我覺得＿＿" not in result.reply.split("再想一想：", 1)[-1]
+    assert result.reply == ""
+    assert result.checks
+    assert not any(item.passed for item in result.checks)
+    assert "我覺得＿＿" not in result.reply
 
 
 def test_observation_needs_an_event_not_only_a_feeling():
@@ -24,7 +51,8 @@ def test_observation_needs_an_event_not_only_a_feeling():
         stages_already_passed=set(),
     )
     assert result.ok is False
-    assert "本階段完成" not in result.reply
+    assert result.reply == ""
+    assert result.checks[0].passed is False
     assert "？" not in result.reply
 
 
@@ -32,8 +60,8 @@ def test_observation_passes_without_quoting_the_draft():
     draft = "一開始阿松爺爺把柿子藏起來，後來沒有分給松鼠一起吃。"
     result = check_control_stage(stage="O", text=draft, week=1, stages_already_passed=set())
     assert result.ok is True
-    assert "本階段完成" in result.reply
-    assert "可以接著寫感受" in result.reply
+    assert result.reply == "這段可以了。"
+    assert all(item.passed for item in result.checks)
     assert "藍籃子" not in result.reply
     assert "柿子" not in result.reply
     assert "？" not in result.reply
@@ -42,7 +70,8 @@ def test_observation_passes_without_quoting_the_draft():
 def test_feeling_needs_a_reason():
     missing = check_control_stage(stage="R", text="我覺得很難過。", week=1, stages_already_passed={"O"})
     assert missing.ok is False
-    assert "因為" in missing.reply
+    assert missing.checks[0].passed is True
+    assert missing.checks[1].passed is False
 
     passed = check_control_stage(
         stage="R",
@@ -51,7 +80,7 @@ def test_feeling_needs_a_reason():
         stages_already_passed={"O"},
     )
     assert passed.ok is True
-    assert "可以按「儲存」" in passed.reply
+    assert passed.reply == "這段可以了。"
 
 
 def test_insight_and_action_use_the_same_bar():
@@ -62,7 +91,7 @@ def test_insight_and_action_use_the_same_bar():
         stages_already_passed={"O", "R"},
     )
     assert insight.ok is True
-    assert "可以接著寫行動" in insight.reply
+    assert insight.reply == "這段可以了。"
 
     wish = check_control_stage(stage="D", text="我要變成更好的人。", week=2, stages_already_passed=set())
     assert wish.ok is False
@@ -74,7 +103,7 @@ def test_insight_and_action_use_the_same_bar():
         stages_already_passed={"O", "R", "I"},
     )
     assert action.ok is True
-    assert "可以按「儲存」" in action.reply
+    assert action.reply == "這段可以了。"
 
 
 def test_vague_action_does_not_pass_even_with_a_person():
@@ -86,7 +115,8 @@ def test_vague_action_does_not_pass_even_with_a_person():
         book_pack={"d_action_markers": ["家人", "家事", "碗"]},
     )
     assert result.ok is False
-    assert "那一步" in result.reply
+    assert result.checks[0].label == "我有寫我要做的那一步"
+    assert result.checks[0].passed is False
     assert "？" not in result.reply
 
 
@@ -99,7 +129,7 @@ def test_concrete_family_action_passes_without_a_fixed_sentence():
         book_pack={"d_action_markers": ["家人", "家事", "碗", "收"]},
     )
     assert result.ok is True
-    assert "可以按「儲存」" in result.reply
+    assert result.reply == "這段可以了。"
     assert "？" not in result.reply
 
 
@@ -112,7 +142,8 @@ def test_off_book_action_does_not_pass():
         book_pack={"d_action_markers": ["家人", "家事", "碗"]},
     )
     assert result.ok is False
-    assert "這本書" in result.reply
+    assert result.checks[-1].label == "我有連到這本書的事情"
+    assert result.checks[-1].passed is False
     assert "？" not in result.reply
 
 
@@ -127,6 +158,8 @@ def test_synthesis_passes_only_when_four_parts_are_present():
     assert result.ok is True
     assert result.levels is not None
     assert all(level >= 3 for level in result.levels.values())
+    assert result.reply == "這篇可以了。"
+    assert all(item.passed for item in result.checks)
     assert "柿子" not in result.reply
     assert "？" not in result.reply
 
@@ -160,5 +193,7 @@ def test_synthesis_shows_one_gap_and_scores_each_part():
     assert result.levels is not None
     assert result.levels["content_integration"] >= 3
     assert result.levels["action_application"] < 3
-    assert result.reply.count("再想一想") == 1
+    assert result.reply == ""
+    assert result.checks[0].passed is True
+    assert any(not item.passed for item in result.checks)
     assert "？" not in result.reply

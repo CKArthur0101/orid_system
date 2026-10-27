@@ -31,14 +31,11 @@ import {
   type SynthesisCriterionId,
   calculateEarnedBadges,
   getNewlyEarnedBadges,
-  stagesPassedFromWritingContent,
   stagesPassedFromWritingOk,
 } from "@/lib/orid/badgeRules";
 import {
   DRAFT_SAVE_ENCOURAGEMENT,
   STAGE_MISSION_META,
-  SUBMIT_ALL_DONE_ENCOURAGEMENT,
-  SUBMIT_PARTIAL_ENCOURAGEMENT,
 } from "@/lib/orid-mission-copy";
 import { ORID_UNLOCKED_WEEKS } from "@/lib/orid-week-access";
 import { ORID_STAGE_THEME } from "@/lib/orid-stage-theme";
@@ -598,9 +595,12 @@ export default function WeekBookPage() {
   const [focusStage, setFocusStage] = useState<StageKey>(() => writableStages(weekNum)[0] ?? "O");
   const [fbLoading, setFbLoading] = useState(false);
   const [fbError, setFbError] = useState<string | null>(null);
-  const [controlCheckReply, setControlCheckReply] = useState<string | null>(null);
+  const [controlChecks, setControlChecks] = useState<{ label: string; passed: boolean }[] | null>(null);
+  const [controlCheckTarget, setControlCheckTarget] = useState<StageKey | "ALL" | null>(null);
+  const [controlCheckToken, setControlCheckToken] = useState(0);
   useEffect(() => {
-    setControlCheckReply(null);
+    setControlChecks(null);
+    setControlCheckTarget(null);
   }, [weekNum]);
   /** Even-week synthesis: hide left ORID review panel to widen writing + partner. */
   const [oridPanelCollapsed, setOridPanelCollapsed] = useState(false);
@@ -991,15 +991,6 @@ export default function WeekBookPage() {
     [missionProgress],
   );
   const thisWeekStages = useMemo(() => writableStages(weekNum), [weekNum]);
-  const allStagesWritten = useMemo(
-    () =>
-      thisWeekStages.length > 0 &&
-      thisWeekStages.every((key) => String(writingData.stages[key].d1 ?? "").trim().length > 0),
-    [writingData, thisWeekStages],
-  );
-  const canSubmitWriting = synthesisWeek
-    ? String(writingData.synthesis_draft ?? "").trim().length > 0
-    : allStagesWritten;
   const autosaveStatusText =
     autosaveStatus === "saving"
       ? "儲存中…"
@@ -1039,12 +1030,8 @@ export default function WeekBookPage() {
     : "kid-shell order-3 flex min-h-[32vh] w-full min-w-0 flex-col overflow-hidden lg:order-2 lg:col-start-2 lg:h-full lg:min-h-0 lg:row-start-1";
 
   const isControl = isControlConditionValue(condition);
-  const controlCheckParsed = controlCheckReply ? parseFeedbackNarration(controlCheckReply) : null;
-  const controlCheckCard = controlCheckParsed ? (
-    <div className="max-h-[42%] shrink-0 overflow-y-auto border-b border-amber-100 p-2">
-      <FeedbackGuideCard parsed={controlCheckParsed} week={weekNum} />
-    </div>
-  ) : null;
+  const stageSystemChecks = controlCheckTarget === focusStage ? controlChecks : null;
+  const synthesisSystemChecks = controlCheckTarget === "ALL" ? controlChecks : null;
 
   const activeStageDef = STAGES.find((s) => s.key === focusStage) ?? STAGES[0];
   const activeStage = activeStageDef.key;
@@ -1528,9 +1515,7 @@ export default function WeekBookPage() {
             combined.stages[key] = referenceDisplay.stages[key];
           }
         }
-        const stagesPassed = isControlConditionValue(normalizedCondition)
-          ? stagesPassedFromWritingContent(combined)
-          : stagesPassedFromWritingOk(combined);
+        const stagesPassed = stagesPassedFromWritingOk(combined);
         const allowed = new Set<BadgeId>(badgeIdsForWeek(weekNum));
         mergedBadges = calculateEarnedBadges({
           hasWritingContent: text.length > 0,
@@ -1756,7 +1741,8 @@ export default function WeekBookPage() {
         : String(writingData.stages[target]?.d1 ?? "").trim();
     if (!text) {
       setFbError("請先寫一些內容再檢查。");
-      setControlCheckReply(null);
+      setControlChecks(null);
+      setControlCheckTarget(target);
       return;
     }
 
@@ -1778,8 +1764,17 @@ export default function WeekBookPage() {
       const raw = await r.text();
       if (!r.ok) throw new Error(formatApiError(r.status, raw, "檢查失敗"));
       const data = raw ? JSON.parse(raw) : {};
-      const reply = String(data?.reply ?? "").trim();
-      setControlCheckReply(reply || null);
+      const checks = Array.isArray(data?.checks)
+        ? data.checks
+            .map((item: { label?: unknown; passed?: unknown }) => ({
+              label: String(item?.label ?? "").trim(),
+              passed: !!item?.passed,
+            }))
+            .filter((item: { label: string }) => item.label)
+        : [];
+      setControlChecks(checks);
+      setControlCheckTarget(target);
+      setControlCheckToken((n) => n + 1);
 
       let nextWriting: OridWritingV1 = writingData;
       if (target === "ALL") {
@@ -1896,13 +1891,7 @@ export default function WeekBookPage() {
         stageAutosaveSnapshot(newestPayload, earnedBadgesRef.current);
         void flushAutosave();
       }
-      setSaveMsg(
-        label === "draft"
-          ? DRAFT_SAVE_ENCOURAGEMENT
-          : allStagesWritten
-            ? SUBMIT_ALL_DONE_ENCOURAGEMENT
-            : SUBMIT_PARTIAL_ENCOURAGEMENT,
-      );
+      setSaveMsg(label === "draft" ? DRAFT_SAVE_ENCOURAGEMENT : "已儲存");
     } catch (e: any) {
       setWritingError(e?.message ?? "儲存失敗");
     } finally {
@@ -2079,15 +2068,6 @@ export default function WeekBookPage() {
                           onClick={() => saveWriting("draft")}
                         >
                           {writingSubmitting ? "儲存中…" : "儲存"}
-                        </button>
-                        <button
-                          type="button"
-                          className="kid-btn-3d-secondary shrink-0"
-                          disabled={!sessionId || !readingId || writingSubmitting || !canSubmitWriting}
-                          onClick={() => saveWriting("submit")}
-                          title={thisWeekStages.length === 4 ? "四段完成後正式提交" : "這週的段落完成後正式提交"}
-                        >
-                          提交
                         </button>
                       </>
                     ) : null}
@@ -2274,15 +2254,6 @@ export default function WeekBookPage() {
                 <button
                   type="button"
                   className="kid-btn-3d-secondary shrink-0 !min-h-[32px] !px-3 !py-1 !text-xs"
-                  disabled={!sessionId || !readingId || writingSubmitting || !canSubmitWriting}
-                  onClick={() => saveWriting("submit")}
-                  title="完成整合寫作後正式提交"
-                >
-                  提交
-                </button>
-                <button
-                  type="button"
-                  className="kid-btn-3d-secondary shrink-0 !min-h-[32px] !px-3 !py-1 !text-xs"
                   onClick={() => setOridPanelCollapsedPersist(!oridPanelCollapsed)}
                 >
                   <span aria-hidden>{oridPanelCollapsed ? "→" : "←"}</span>
@@ -2428,7 +2399,6 @@ export default function WeekBookPage() {
 
                 {isControl ? (
                   <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                    {controlCheckCard}
                     <WritingPromptHelper
                       focusStage={focusStage}
                       onPromptViewed={() => void runPromptUsage()}
@@ -2436,6 +2406,8 @@ export default function WeekBookPage() {
                       synthesisMode
                       openingText={synthesisOpeningText}
                       week={weekNum}
+                      systemChecks={synthesisSystemChecks}
+                      revealCheckToken={controlCheckTarget === "ALL" ? controlCheckToken : 0}
                     />
                   </div>
                 ) : (
@@ -2598,12 +2570,13 @@ export default function WeekBookPage() {
 
               {isControl ? (
                 <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                  {controlCheckCard}
                   <WritingPromptHelper
                     focusStage={focusStage}
                     onPromptViewed={() => void runPromptUsage()}
                     onInsertText={insertControlGuideText}
                     week={weekNum}
+                    systemChecks={stageSystemChecks}
+                    revealCheckToken={controlCheckTarget === focusStage ? controlCheckToken : 0}
                   />
                 </div>
               ) : (

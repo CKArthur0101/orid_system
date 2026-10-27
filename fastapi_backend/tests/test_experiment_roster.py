@@ -22,8 +22,11 @@ from app.services.experiment_cohort import (
     EXPERIMENTAL_CODES,
     classify_roster_rows,
     cohort_password_errors,
+    one_time_password_errors,
+    teacher_student_password,
     strict_password_errors,
     study_condition_for_code,
+    demo_accounts,
     student_login,
 )
 from app.services.experiment_import import _hash_initial_password
@@ -182,6 +185,41 @@ def test_teacher_class_ids_come_only_from_assignments():
         assert raised.value.status_code == 403
 
     asyncio.run(_check())
+
+
+def test_demo_accounts_follow_each_class_and_stay_out_of_seat_logins():
+    accounts = demo_accounts()
+    assert [item["login"] for item in accounts] == [
+        "501demo",
+        "502demo",
+        "503demo",
+        "504demo",
+        "505demo",
+        "506demo",
+        "508demo",
+        "509demo",
+    ]
+    by_login = {item["login"]: item["orid_condition"] for item in accounts}
+    assert by_login["501demo"] == "experimental"
+    assert by_login["502demo"] == "control"
+    assert by_login["509demo"] == "control"
+    assert "507demo" not in by_login
+    seat_logins = {student_login(code, seat) for code in EXPERIMENT_CLASS_CODES for seat in range(1, 40)}
+    assert seat_logins.isdisjoint(by_login)
+
+
+def test_one_time_password_accepts_any_non_blank_value():
+    assert one_time_password_errors("1234") == []
+    assert one_time_password_errors("柿子") == []
+    assert one_time_password_errors("  ") == ["請輸入密碼。"]
+    assert one_time_password_errors("x" * 129) == ["密碼太長。"]
+
+
+def test_teacher_sees_login_until_student_sets_a_visible_password():
+    unchanged = SimpleNamespace(email="50101", password_visible=None, password_change_used=False)
+    changed = SimpleNamespace(email="50101", password_visible="柿子", password_change_used=True)
+    assert teacher_student_password(unchanged) == "50101"
+    assert teacher_student_password(changed) == "柿子"
 
 
 def test_teacher_cannot_enter_student_writing_flow():

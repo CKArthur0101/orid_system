@@ -9,6 +9,7 @@ from app.routes.orid import router as orid_router
 from app.routes.teacher import router as teacher_router
 from app.routes.admin import router as admin_router
 from app.routes.auth_login import router as auth_login_router
+from app.routes.student_password import router as student_password_router
 from app.config import settings
 
 app = FastAPI(
@@ -53,6 +54,7 @@ app.include_router(
     prefix=f"/{AUTH_URL_PATH}",
     tags=["auth"],
 )
+app.include_router(student_password_router, prefix="/users", tags=["users"])
 app.include_router(
     fastapi_users.get_users_router(UserRead, UserUpdate),
     prefix="/users",

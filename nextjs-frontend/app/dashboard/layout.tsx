@@ -7,11 +7,13 @@ import { Home, LogOut } from "lucide-react";
 import { BadgeDisplay } from "@/components/orid/BadgeDisplay";
 import { DilabLogo } from "@/components/orid/DilabLogo";
 import { StudentAvatarPicker } from "@/components/orid/StudentAvatarPicker";
+import { StudentPasswordButton } from "@/components/orid/StudentPasswordButton";
 import { studentAvatarKey } from "@/lib/orid/student-avatars";
 import { LeaveWritingConfirmModal } from "@/components/orid/LeaveWritingConfirmModal";
 import { BADGE_ORDER, type BadgeId } from "@/lib/orid/badgeRules";
 import { logoutToLogin } from "@/lib/logout";
 import { STUDENT_HOME, isStudentWeekWritingPath } from "@/lib/student-routes";
+import { studentHeaderName } from "@/lib/student-display-name";
 import { useAuthenticatedUser } from "@/lib/use-authenticated-user";
 
 const SHELL_CLASS = "mx-auto w-full max-w-[min(100vw-1.5rem,1920px)]";
@@ -33,9 +35,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [leaveIntent, setLeaveIntent] = useState<LeaveIntent | null>(null);
   const [topBarBadges, setTopBarBadges] = useState<TopBarBadges | null>(null);
 
-  const greeting = auth.status === "ready"
-    ? `${String(auth.user.display_name ?? "").trim() || String(auth.user.email ?? "").trim()} 同學`
-    : null;
+  const greeting = auth.status === "ready" ? studentHeaderName(auth.user) : null;
 
   useEffect(() => {
     if (!lockWeekWritingLayout) {
@@ -177,6 +177,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 ) : null}
               </div>
             ) : null}
+            {auth.status === "ready" ? <StudentPasswordButton /> : null}
             <button
               type="button"
               onClick={() => requestLeave("logout")}

@@ -255,6 +255,7 @@ async def admin_create_user(
         role=data.role,
         display_name=data.display_name,
         orid_condition=data.orid_condition,
+        password_visible=data.password if cohort and data.role == "student" else None,
     )
     db.add(user)
     await db.flush()
@@ -307,6 +308,8 @@ async def admin_update_user(
         )
         user.hashed_password = _password_helper.hash(data.new_password)
         password_once = data.new_password
+        if _user_role(user) == "student" and await user_is_experiment_cohort(db, user):
+            user.password_visible = data.new_password
     role = _user_role(user)
     if data.class_ids is not None:
         await _sync_user_classes(db, user, role, data.class_ids)

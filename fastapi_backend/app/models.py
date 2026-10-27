@@ -18,6 +18,8 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     # experimental / control; defaults to experimental to preserve existing AI sessions
     orid_condition = Column(String(16), nullable=False, default="experimental", server_default="experimental")
     orid_condition_updated_at = Column(DateTime(timezone=True), nullable=True)
+    password_change_used = Column(Boolean, nullable=False, default=False, server_default="false")
+    password_visible = Column(Text, nullable=True)
     items = relationship("Item", back_populates="user", cascade="all, delete-orphan")
 
 

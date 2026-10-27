@@ -39,6 +39,7 @@ type StudentRow = {
   /** 後端 TeacherStudentRow.student_display_name；無則用 student_email */
   student_display_name?: string | null;
   seat_no?: number | null;
+  login_password?: string;
   current_stage: string;
   interaction_count: number;
   writing_completed_stages: number;
@@ -455,9 +456,30 @@ export default function TeacherDashboardPage() {
           <TeacherDashboardHeaderDecor />
         </div>
         <div className="flex items-center gap-3">
-          <div className={`flex h-10 w-[200px] items-center px-3 text-sm ${TEACHER_SELECT}`}>
-            {className || "班級"}
-          </div>
+          {classes.length > 1 ? (
+            <Select
+              value={classId}
+              onValueChange={(id) => {
+                setClassId(id);
+                setSelectedStudentId("");
+                setStudentDetail(null);
+                setDetailError(null);
+              }}
+            >
+              <SelectTrigger className={`w-[200px] ${TEACHER_SELECT}`}>
+                <SelectValue placeholder="選擇班級" />
+              </SelectTrigger>
+              <SelectContent>
+                {classes.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <div className={`flex h-10 w-[200px] items-center px-3 text-sm ${TEACHER_SELECT}`}>
+              {className || "班級"}
+            </div>
+          )}
           <Select value={String(week)} onValueChange={(v) => setWeek(Number(v))}>
             <SelectTrigger className={`w-[100px] ${TEACHER_SELECT}`}>
               <SelectValue />
@@ -593,10 +615,12 @@ export default function TeacherDashboardPage() {
                 </CardHeader>
                 <CardContent className="p-0">
                   <div className="max-h-[360px] overflow-auto">
-                    <table className="w-full min-w-[560px] text-base">
+                    <table className="w-full min-w-[760px] text-base">
                       <thead className="sticky top-0 bg-amber-50/95">
                         <tr className="text-left text-amber-800/60">
                           <th className="whitespace-nowrap px-4 py-2.5">學生</th>
+                          <th className="whitespace-nowrap px-4 py-2.5">帳號</th>
+                          <th className="whitespace-nowrap px-4 py-2.5">密碼</th>
                           <th className="px-4 py-2.5">階段</th>
                           <th className="px-4 py-2.5 text-center">寫作</th>
                           <th className="px-4 py-2.5 text-center">回饋 ok</th>
@@ -628,6 +652,12 @@ export default function TeacherDashboardPage() {
                                   </span>
                                 )}
                               </td>
+                              <td className="whitespace-nowrap px-4 py-2.5 tabular-nums text-amber-950">
+                                {row.student_email}
+                              </td>
+                              <td className="whitespace-nowrap px-4 py-2.5 text-amber-950">
+                                {row.login_password || row.student_email}
+                              </td>
                               <td className="px-4 py-2.5">
                                 <span
                                   className="inline-block rounded-full px-2 py-0.5 text-base font-semibold text-white"
@@ -650,7 +680,7 @@ export default function TeacherDashboardPage() {
                         })}
                         {!(overview?.students?.length) && (
                           <tr>
-                            <td colSpan={5} className="p-8 text-center text-amber-800/50">
+                            <td colSpan={7} className="p-8 text-center text-amber-800/50">
                               尚無學生資料
                             </td>
                           </tr>

@@ -39,6 +39,47 @@ def teacher_login(class_code: str) -> str:
     return f"{class_code}teacher"
 
 
+DEMO_CLASS_CODE = "demo"
+DEMO_CLASS_NAME = "教師體驗"
+OBSERVER_LOGIN = "allclass"
+OBSERVER_NAME = "全班觀察"
+
+
+def demo_login(class_code: str) -> str:
+    return f"{class_code}demo"
+
+
+def demo_accounts() -> list[dict[str, str]]:
+    """Student-role experience accounts. They are not members of the real classes."""
+    return [
+        {
+            "class_code": code,
+            "login": demo_login(code),
+            "display_name": f"{name}老師體驗",
+            "orid_condition": study_condition_for_code(code),
+        }
+        for code, name, _teacher_login in EXPERIMENT_TEACHERS
+    ]
+
+
+def one_time_password_errors(password: str) -> list[str]:
+    """The single student change only rejects a blank or oversized password."""
+    text = "" if password is None else str(password).strip()
+    if not text:
+        return ["請輸入密碼。"]
+    if len(text) > 128:
+        return ["密碼太長。"]
+    return []
+
+
+def teacher_student_password(user) -> str:
+    """Password a homeroom teacher can read. Unchanged cohort accounts still match the login."""
+    visible = str(getattr(user, "password_visible", None) or "").strip()
+    if visible:
+        return visible
+    return str(getattr(user, "email", "") or "")
+
+
 def cohort_password_errors(password: str) -> list[str]:
     """Blank is rejected. Digits, letters, or both are allowed, including matching the login."""
     if password is None or not str(password):

@@ -43,6 +43,7 @@ from app.schemas import (
     ResearchCompletionDistribution,
     ResearchStudentRow,
 )
+from app.services.experiment_cohort import teacher_student_password
 from app.users import current_active_user
 from app.content.week_plan import (
     TOTAL_WEEKS,
@@ -601,6 +602,7 @@ async def teacher_class_overview(
                 student_email=student.email,
                 student_display_name=_student_ui_name(student),
                 seat_no=seat_by_student.get(student.id),
+                login_password=teacher_student_password(student),
                 current_stage=stage,
                 interaction_count=interaction_count,
                 writing_completed_stages=w_done,
@@ -1358,7 +1360,7 @@ async def export_research_csv(
     writer.writerow([
         "student_id", "student_email", "student_name", "condition", "week", "task_type",
         "word_count", "save_count", "revision_count", "guide_use_count",
-        "badge_count", "earned_badges", "is_submitted",
+        "badge_count", "earned_badges",
     ])
     for row in overview.student_rows:
         writer.writerow([
@@ -1374,7 +1376,6 @@ async def export_research_csv(
             row.guide_use_count,
             row.badge_count,
             _ordered_badges(badges_by_student_week.get((row.student_id, int(row.week)), set())),
-            _csv_bool(row.is_submitted),
         ])
 
     output.seek(0)

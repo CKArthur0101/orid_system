@@ -397,10 +397,16 @@ class ControlCheckRequest(BaseModel):
     student_text: str = ""
 
 
+class ControlCheckItemRead(BaseModel):
+    label: str
+    passed: bool
+
+
 class ControlCheckResponse(BaseModel):
     ok: bool
     reply: str
     stage: str
+    checks: list[ControlCheckItemRead] = []
     earnedBadges: list[str] = []
     newlyEarnedBadges: list[str] = []
     synthesis_rubric_levels: dict[str, int] | None = None
@@ -473,6 +479,7 @@ class TeacherStudentRow(BaseModel):
     student_email: str
     student_display_name: str
     seat_no: int | None = None
+    login_password: str = ""
     current_stage: str
     interaction_count: int = Field(
         description="對話輪數：該週 session 內 min(學生訊息則數, AI 訊息則數)。",

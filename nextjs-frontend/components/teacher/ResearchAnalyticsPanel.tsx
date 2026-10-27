@@ -9,14 +9,12 @@ import {
   Legend,
   Line,
   LineChart,
-  Pie,
-  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
-import { FlaskConical, TableProperties, TrendingUp } from "lucide-react";
+import { FlaskConical, TrendingUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { badgeIdsForWeek } from "@/lib/orid/badgeRules";
@@ -104,8 +102,6 @@ const CONDITION_COLOR: Record<string, string> = {
   experimental: "#c2691f",
   control: "#5f8f6e",
 };
-const DONUT_COLORS = ["#c2691f", "#e3d3ae"];
-
 const TEACHER_CARD =
   "rounded-2xl border-2 border-amber-400/45 bg-[#fffcf7]/95 shadow-md shadow-amber-950/5";
 const TEACHER_SELECT =
@@ -174,7 +170,6 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
   const cards = data?.summary_cards;
   const groupRows = data?.group_comparison ?? [];
   const trendRows = data?.weekly_trends ?? [];
-  const completion = data?.completion_distribution ?? { submitted: 0, not_submitted: 0 };
   const studentRows = data?.student_rows ?? [];
 
   const filteredStudentRows = useMemo(() => {
@@ -205,11 +200,6 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
     }
     return Array.from(byWeek.values()).sort((a, b) => a.week - b.week);
   }, [trendRows, metric]);
-
-  const donutData = [
-    { name: "已提交", value: completion.submitted },
-    { name: "未提交", value: completion.not_submitted },
-  ];
 
   const metricMeta = METRIC_OPTIONS.find((m) => m.key === metric) ?? METRIC_OPTIONS[0];
   const metricLabel = metricMeta.label;
@@ -242,7 +232,7 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
     <div className="space-y-6">
       <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm leading-relaxed text-amber-950/85">
         <strong className="font-semibold">指標說明：</strong>
-        本頁呈現學生寫作歷程、引導資源使用、徽章與提交情形。
+        本頁呈現學生寫作歷程、引導資源使用與徽章。
         引導資源使用：實驗組為 AI 回饋使用次數，控制組為固定提示與文本提問使用次數。
         圖表數值皆為平均值；字數單位為「字」，儲存、修改與引導資源使用單位為「次」，徽章單位為「個」。
       </div>
@@ -267,20 +257,13 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <StatCard
           icon={<FlaskConical className="h-5 w-5 text-[#3d7eb0]" />}
           iconBg="bg-[#eef6fc]"
           label="班級組別"
           value={classGroupLabel(cards)}
           sub={`全班 ${cards?.total_students ?? 0} 人`}
-        />
-        <StatCard
-          icon={<TableProperties className="h-5 w-5 text-[#3d8a63]" />}
-          iconBg="bg-[#edf7f1]"
-          label="提交率"
-          value={`${Math.round((cards?.submission_rate ?? 0) * 100)}%`}
-          sub={`${cards?.submitted_count ?? 0} 筆已提交`}
         />
         <StatCard
           icon={<TrendingUp className="h-5 w-5 text-[#b8741f]" />}
@@ -396,31 +379,7 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
         </Card>
       </div>
 
-      {/* Charts row 2: completion donut + student table */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,280px)_1fr]">
-        <Card className={TEACHER_CARD}>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base text-amber-950">完成率</CardTitle>
-            <p className="text-sm text-amber-800/60">
-              {week === "all" ? "所有週次" : `第 ${week} 週`} 提交狀況
-            </p>
-          </CardHeader>
-          <CardContent className="h-[220px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={donutData} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={2}>
-                  {donutData.map((_, idx) => (
-                    <Cell key={idx} fill={DONUT_COLORS[idx % DONUT_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip contentStyle={{ borderRadius: 12, borderColor: "#f0d9a8" }} />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-
-        <Card className={TEACHER_CARD}>
+      <Card className={TEACHER_CARD}>
           <CardHeader className="pb-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <CardTitle className="text-base text-amber-950">學生每週資料</CardTitle>
@@ -484,7 +443,6 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
                     <th className="px-3 py-2 text-center">修改</th>
                     <th className="px-3 py-2 text-center">引導資源</th>
                     <th className="px-3 py-2 text-center">徽章</th>
-                    <th className="px-3 py-2 text-center">已提交</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -514,12 +472,11 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
                       <td className="px-3 py-2 text-center">{r.revision_count}</td>
                       <td className="px-3 py-2 text-center">{r.guide_use_count}</td>
                       <td className="px-3 py-2 text-center">{r.badge_count}</td>
-                      <td className="px-3 py-2 text-center">{r.is_submitted ? "✓" : "—"}</td>
                     </tr>
                   ))}
                   {!filteredStudentRows.length && (
                     <tr>
-                      <td colSpan={10} className="p-8 text-center text-amber-800/50">
+                      <td colSpan={9} className="p-8 text-center text-amber-800/50">
                         尚無符合條件的資料
                       </td>
                     </tr>
@@ -529,7 +486,6 @@ export function ResearchAnalyticsPanel({ classId }: { classId: string }) {
             </div>
           </CardContent>
         </Card>
-      </div>
     </div>
   );
 }

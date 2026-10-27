@@ -30,21 +30,24 @@ interface WritingPromptHelperProps {
   bookId?: ControlGuideBookId | string | null;
   /** Academic week 1–7; used when bookId is omitted. */
   week?: number;
+  /** System ticks after 檢查. Null before the student presses the button. */
+  systemChecks?: { label: string; passed: boolean }[] | null;
+  /** Bumps when a new check result arrives so this panel opens on 自我檢查. */
+  revealCheckToken?: number;
 }
 
 const STAGE_CHECKLIST: Record<StageKey, string[]> = {
-  O: ["我有寫故事裡的人物", "我有寫誰做了什麼", "我有寫一個重要情節"],
-  R: ["我有寫自己的感覺", "我有寫為什麼有這種感覺", "我有連回故事裡的一幕"],
-  I: ["我有寫我學到或想到什麼", "我有連到故事", "我有想到自己的生活"],
-  D: ["我有寫以後遇到什麼情況", "我有寫對誰或跟誰有關", "我有寫我會怎麼做"],
+  O: ["我有寫出故事裡的人物和事情，也能看出大致發展"],
+  R: ["我有寫出感受，也用故事裡的事說明原因"],
+  I: ["我有寫出學到的道理，也用故事說明"],
+  D: ["我有寫出自己做得到的行動"],
 };
 
 const SYNTHESIS_CHECKLIST = [
-  "我有寫故事裡的重要事情",
-  "我有寫自己的感受和原因",
-  "我有寫學到或想到什麼",
-  "我有寫以後會怎麼做",
-  "句子有接起來，像一篇文章",
+  "我有把故事、感受、體會和行動寫進這篇",
+  "我有把前後句接起來",
+  "我有用故事說明自己的感受或學習原因",
+  "我有寫出自己做得到、而且呼應故事的行動",
 ];
 
 const TOPIC_TITLES: Record<StageKey, string[]> = {
@@ -68,6 +71,8 @@ export function WritingPromptHelper({
   openingText,
   bookId,
   week,
+  systemChecks,
+  revealCheckToken = 0,
 }: WritingPromptHelperProps) {
   const resolvedBookId =
     bookId ?? (typeof week === "number" ? controlGuideBookIdFromWeek(week) : "book1");
@@ -92,6 +97,10 @@ export function WritingPromptHelper({
   const promptTopics = promptPages.length > 0 ? promptPages : pages;
   const activePages = mode === "sentence" ? sentencePages : promptTopics;
   const checklistItems = synthesisMode ? SYNTHESIS_CHECKLIST : STAGE_CHECKLIST[focusStage];
+  const shownChecks =
+    systemChecks && systemChecks.length > 0
+      ? systemChecks
+      : checklistItems.map((label) => ({ label, passed: false }));
   const topicTitles = synthesisMode ? SYNTHESIS_TOPIC_TITLES : TOPIC_TITLES[focusStage];
   const _bookIdKey = String(resolvedBookId).trim().toLowerCase();
   const helperImageSrc =
@@ -109,8 +118,12 @@ export function WritingPromptHelper({
     setInsertMsg(null);
   }, [focusStage, synthesisMode, resolvedBookId]);
 
+  useEffect(() => {
+    if (revealCheckToken > 0) setMode("check");
+  }, [revealCheckToken]);
+
   const current = activePages[pageIndex] ?? activePages[0] ?? pages[0];
-  const total = mode === "check" ? checklistItems.length : activePages.length;
+  const total = mode === "check" ? shownChecks.length : activePages.length;
   const atStart = pageIndex <= 0;
   const atEnd = pageIndex >= total - 1;
 
@@ -217,7 +230,7 @@ export function WritingPromptHelper({
               {mode === "sentence"
                 ? "選一個固定句型，可拖到寫作格"
                 : mode === "check"
-                  ? "寫完後，逐項確認內容"
+                  ? "按檢查後，系統會幫你打勾"
                   : "先讀問題，再想清楚要寫什麼"}
             </div>
           </div>
@@ -299,16 +312,32 @@ export function WritingPromptHelper({
         >
           {mode === "check" ? (
             <div className="flex min-h-0 flex-1 flex-col justify-center gap-2">
-              <div className="mb-1 text-[11px] font-bold text-amber-900 md:text-xs">
-                ✓ 寫完前自己看一看
-              </div>
-              {checklistItems.map((item, idx) => (
+              {systemChecks && systemChecks.length > 0 && systemChecks.every((item) => item.passed) ? (
+                <div className="rounded-xl bg-emerald-600 px-3 py-2 text-center text-sm font-bold text-white">
+                  {synthesisMode ? "這篇可以了" : "這段可以了"}
+                </div>
+              ) : systemChecks && systemChecks.length > 0 ? (
+                <div className="rounded-xl bg-amber-700 px-3 py-2 text-center text-sm font-bold text-white">
+                  {synthesisMode ? "這篇還沒通過" : "這段還沒通過"}
+                </div>
+              ) : (
+                <div className="mb-1 text-[11px] font-bold text-amber-900 md:text-xs">
+                  按「檢查」後，系統會依你寫的內容打勾
+                </div>
+              )}
+              {shownChecks.map((item, idx) => (
                 <label
-                  key={`${item}-${idx}`}
+                  key={`${item.label}-${idx}`}
                   className="flex items-start gap-2 rounded-xl border border-emerald-100 bg-emerald-50/70 px-2.5 py-2 text-xs leading-relaxed text-amber-950 md:text-sm"
                 >
-                  <input type="checkbox" className="mt-1 h-4 w-4 shrink-0 accent-emerald-600" />
-                  <span>{item}</span>
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-4 w-4 shrink-0 accent-emerald-600"
+                    checked={item.passed}
+                    readOnly
+                    disabled
+                  />
+                  <span>{item.label}</span>
                 </label>
               ))}
               <div className="mt-1 flex justify-end">

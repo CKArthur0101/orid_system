@@ -132,7 +132,7 @@ from app.services.orid_condition import (
     session_condition_from_user_orid_condition,
 )
 from app.services.orid_writing_store import ensure_orid_writing_obj, upsert_feedback_into_stage
-from app.services.control_check import check_control_stage, check_control_synthesis
+from app.services.control_check import silent_stage_checks, silent_synthesis_checks
 from app.services.action_pass import cap_synthesis_action_level, experimental_action_override
 from app.content.week_plan import (
     STAGE_KEYS,
@@ -2877,6 +2877,156 @@ async def _persist_control_check_writing(
     return obj
 
 
+_CHECK_UNAVAILABLE = "檢查失敗，請再按一次。"
+
+
+async def _judge_stage_like_experimental(
+    *,
+    stage: str,
+    text: str,
+    book_pack: Optional[dict[str, Any]],
+) -> bool:
+    """Same pass rule as the experimental group. Student-facing sentences are discarded."""
+    if client is None:
+        raise HTTPException(status_code=503, detail=_CHECK_UNAVAILABLE)
+    input_bucket = classify_student_input(text)
+    grounding_check: Optional[BookGroundingCheck] = None
+    if stage in ("O", "R", "I") and not skip_book_grounding_enforcement(
+        input_bucket, student_text=text, book_pack=book_pack
+    ):
+        grounding_check = await _llm_book_grounding_check(
+            student_text=text,
+            stage=stage,
+            book_pack=book_pack,
+        )
+    ok, missing, suggestions, example, _improved, _praise, rubric = await _genai_feedback(
+        stage=stage,
+        text=text,
+        book_pack=book_pack,
+        input_bucket=input_bucket,
+        grounding_check=grounding_check,
+    )
+    if not rubric:
+        raise HTTPException(status_code=503, detail=_CHECK_UNAVAILABLE)
+    ok, missing, suggestions = await _enforce_feedback_book_grounding(
+        text,
+        book_pack,
+        stage,
+        bool(ok),
+        missing,
+        suggestions,
+        use_llm_checker=True,
+        input_bucket=input_bucket,
+        grounding_check=grounding_check,
+    )
+    rubric = _ensure_primary_rubric_level_fallback(
+        stage=stage,
+        student_text=text,
+        ok=bool(ok),
+        rubric_meta=rubric,
+    )
+    ok = _apply_orid_rubric_ok_rule(bool(ok), rubric, missing, stage=stage)
+    ok, missing, suggestions, _example, rubric = _enforce_d_theme_alignment(
+        stage=stage,
+        student_text=text,
+        book_pack=book_pack,
+        ok=bool(ok),
+        missing=missing,
+        suggestions=suggestions,
+        example=example,
+        rubric_meta=rubric,
+        assessment_required=True,
+        keep_model_sentences=True,
+    )
+    ok, _missing, _suggestions, _rubric = experimental_action_override(
+        stage=stage,
+        student_text=text,
+        book_pack=book_pack,
+        ok=bool(ok),
+        missing=missing,
+        suggestions=suggestions,
+        rubric_meta=rubric,
+        keep_model_sentences=True,
+    )
+    return bool(ok)
+
+
+async def _judge_synthesis_like_experimental(
+    db: AsyncSession,
+    *,
+    user: User,
+    session: OridSession,
+    week: int,
+    text: str,
+    book_pack: Optional[dict[str, Any]],
+) -> dict[str, int]:
+    """Same four synthesis levels as the experimental group. The written reply is discarded."""
+    if client is None:
+        raise HTTPException(status_code=503, detail=_CHECK_UNAVAILABLE)
+    prior_weeks = prior_orid_weeks_for_synthesis(week)
+    slots = await _orid_stage_slots_from_weeks(db, user.id, session.id, prior_weeks)
+    grounding_check: Optional[BookGroundingCheck] = None
+    try:
+        grounding_check = await _llm_book_grounding_check(
+            student_text=text,
+            stage="ALL",
+            book_pack=book_pack,
+        )
+    except Exception:
+        logger.warning("control synthesis grounding failed")
+    mismatch_quote = ""
+    if (
+        grounding_check is not None
+        and grounding_check.grounded is False
+        and grounding_check.status == "contradicted"
+    ):
+        mismatch_quote = align_grounding_span(text, grounding_check.unsupported_span)
+    if not mismatch_quote:
+        canonical_pack = BOOK_PACK_BY_WEEK.get(prior_weeks[-1])
+        mismatch_quote = first_concrete_mismatch_sentence(
+            text, book_pack, canonical_pack if isinstance(canonical_pack, dict) else None
+        )
+    system_prompt = build_synthesis_coach_system_prompt(
+        book_context=build_book_context_block(book_pack),
+        week1_orid_lines=slots,
+        source_weeks=prior_weeks,
+        student_display_name=(getattr(user, "display_name", None) or "").strip() or None,
+        student_login=(getattr(user, "email", None) or "").strip() or None,
+        student_text=text,
+        material_mismatch_quote=mismatch_quote,
+    )
+    try:
+        raw = await _chat_completion(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text},
+            ],
+            max_completion_tokens=max(700, OPENAI_MAX_COMPLETION_TOKENS),
+            temperature=(
+                OPENAI_TEMPERATURE
+                if OPENAI_TEMPERATURE is not None
+                else ORID_MAIN_FALLBACK_TEMPERATURE
+            ),
+            response_format={"type": "json_object"},
+        )
+        parsed = extract_json_object(raw)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.warning("control synthesis judge failed")
+        raise HTTPException(status_code=503, detail=_CHECK_UNAVAILABLE) from None
+    levels = cap_synthesis_action_level(
+        normalize_synthesis_levels(parsed.get("rubric_levels")),
+        text,
+        book_pack,
+    )
+    if len(levels) != len(SYNTHESIS_CRITERIA_ORDER):
+        raise HTTPException(status_code=503, detail=_CHECK_UNAVAILABLE)
+    if mismatch_quote:
+        levels["content_integration"] = min(int(levels.get("content_integration", 2)), 2)
+    return levels
+
+
 @router.post("/control-check", response_model=ControlCheckResponse)
 async def control_check(
     data: ControlCheckRequest,
@@ -2884,7 +3034,7 @@ async def control_check(
     user: User = Depends(current_active_user),
 ):
     _reject_student_flow_for_teacher(user)
-    """Control group: fixed-rule check. No model call, no guide-use increment."""
+    """Control group: same rubric as experimental, checklist only. No hint text."""
     r = await db.execute(select(OridSession).filter(OridSession.id == data.session_id))
     session = r.scalars().first()
     if not session or session.user_id != user.id:
@@ -2900,34 +3050,34 @@ async def control_check(
     text = (data.student_text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="請先寫一些內容再檢查。")
+    if _is_meta_or_injection_text(text):
+        raise HTTPException(status_code=400, detail="請直接寫你的作文內容。")
+
+    rr = await db.execute(select(Reading).filter(Reading.id == session.reading_id))
+    reading = rr.scalars().first()
+    book_pack = load_book_pack_from_reading(reading) or canonical_book_pack_for_week(week)
 
     if is_synthesis_week(week):
         if stage != "ALL":
             raise HTTPException(status_code=400, detail="整合寫作請檢查整篇。")
-        result = check_control_synthesis(text=text, book_pack=canonical_book_pack_for_week(week))
+        levels = await _judge_synthesis_like_experimental(
+            db,
+            user=user,
+            session=session,
+            week=week,
+            text=text,
+            book_pack=book_pack,
+        )
+        checks = silent_synthesis_checks(levels)
+        ok = all(item.passed for item in checks)
+        reply = "這篇可以了。" if ok else ""
     else:
         if stage not in writable_stages(week):
             raise HTTPException(status_code=400, detail="這一週不能檢查這一段。")
-        prior = await _load_reference_writing_objs(db, user.id, session.id, week)
-        saved_raw = await _fetch_latest_writing_content_for_week(db, user.id, session.id, week)
-        prior[week] = (
-            ensure_orid_writing_obj(
-                raw_content=saved_raw,
-                week=week,
-                empty_factory=_ensure_orid_writing_v1,
-            )
-            if saved_raw
-            else None
-        )
-        already = _stages_passed_across_weeks(prior, mode="ok")
-        already.discard(stage)
-        result = check_control_stage(
-            stage=stage,
-            text=text,
-            week=week,
-            stages_already_passed=already,
-            book_pack=canonical_book_pack_for_week(week),
-        )
+        ok = await _judge_stage_like_experimental(stage=stage, text=text, book_pack=book_pack)
+        checks = silent_stage_checks(stage, ok)
+        levels = None
+        reply = "這段可以了。" if ok else ""
 
     obj = await _persist_control_check_writing(
         db,
@@ -2936,14 +3086,14 @@ async def control_check(
         week=week,
         stage=stage,
         text=text,
-        ok=result.ok,
-        levels=result.levels,
+        ok=ok,
+        levels=levels,
     )
 
     if is_synthesis_week(week):
         current_badges = [
             b
-            for b in calculate_earned_synthesis_badges(rubric_levels=result.levels)
+            for b in calculate_earned_synthesis_badges(rubric_levels=levels)
             if b in badge_ids_available_for_week(week)
         ]
     else:
@@ -2988,12 +3138,13 @@ async def control_check(
     await db.commit()
 
     return ControlCheckResponse(
-        ok=result.ok,
-        reply=result.reply,
+        ok=ok,
+        reply=reply,
         stage=stage,
+        checks=[{"label": item.label, "passed": item.passed} for item in checks],
         earnedBadges=list(set(prev_badges + current_badges)),
         newlyEarnedBadges=new_badges,
-        synthesis_rubric_levels=result.levels,
+        synthesis_rubric_levels=levels,
     )
 
 
