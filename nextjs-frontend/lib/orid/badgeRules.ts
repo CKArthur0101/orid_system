@@ -112,6 +112,21 @@ const BOOK3_BADGE_NAMES: Partial<Record<BadgeId, { name: string; modalTitle: str
   badge_90: { name: "獅子金徽章", modalTitle: "恭喜獲得獅子金徽章！" },
 };
 
+const ENCOURAGEMENT_BOOK_NAMES: Record<BadgeBookId, Partial<Record<BadgeId, { name: string; modalTitle: string }>>> = {
+  book1: {
+    badge_30: { name: "句型柿子章", modalTitle: "恭喜獲得句型徽章！" },
+    badge_60: { name: "寫完柿子章", modalTitle: "恭喜獲得寫完徽章！" },
+  },
+  book2: {
+    badge_30: { name: "句型豬頭章", modalTitle: "恭喜獲得句型徽章！" },
+    badge_60: { name: "寫完豬頭章", modalTitle: "恭喜獲得寫完徽章！" },
+  },
+  book3: {
+    badge_30: { name: "句型獅子章", modalTitle: "恭喜獲得句型徽章！" },
+    badge_60: { name: "寫完獅子章", modalTitle: "恭喜獲得寫完徽章！" },
+  },
+};
+
 export function resolveBadgeBookId(
   bookId?: string | null,
   week?: number | null,
@@ -130,12 +145,14 @@ export function resolveBadgeBookId(
 }
 
 /**
- * Badge IDs a given week can newly earn (mirrors backend
- * `badge_ids_available_for_week`): integration weeks → four synthesis badges;
- * week 1 (O/R only) → start + bronze; week 2 (I/D only) → silver + gold;
- * full ORID weeks → all four stage badges.
+ * Experimental weeks use quality badges. Control weeks pass "encouragement".
  */
-export function badgeIdsForWeek(week: number): BadgeId[] {
+export function badgeIdsForWeek(
+  week: number,
+  mode: "quality" | "encouragement" = "quality",
+): BadgeId[] {
+  if (!Number.isFinite(week) || week < 1) return [];
+  if (mode === "encouragement") return ["badge_start", "badge_30", "badge_60"];
   if (isSynthesisWeek(week)) return SYNTHESIS_BADGE_ORDER;
   const stages = new Set(writableStages(week));
   const hasOR = stages.has("O") || stages.has("R");
@@ -173,11 +190,15 @@ export function getBadgeConfigForBook(
   badgeId: BadgeId,
   bookId?: string | null,
   week?: number | null,
+  encouragement = false,
 ): BadgeConfig {
-  const base = BADGE_CONFIG[badgeId];
+  const base = encouragement
+    ? { ...BADGE_CONFIG[badgeId], ...(ENCOURAGEMENT_COPY[badgeId] ?? {}) }
+    : BADGE_CONFIG[badgeId];
   const book = resolveBadgeBookId(bookId, week);
-  const names =
-    book === "book2"
+  const names = encouragement
+    ? ENCOURAGEMENT_BOOK_NAMES[book][badgeId]
+    : book === "book2"
       ? BOOK2_BADGE_NAMES[badgeId]
       : book === "book3"
         ? BOOK3_BADGE_NAMES[badgeId]
@@ -268,11 +289,38 @@ export const BADGE_CONFIG: Record<BadgeId, BadgeConfig> = {
 // Pure logic helpers
 // ---------------------------------------------------------------------------
 
+const ENCOURAGEMENT_COPY: Partial<
+  Record<BadgeId, Pick<BadgeConfig, "unlockHint" | "earnedHint" | "modalText">>
+> = {
+  badge_start: {
+    unlockHint: "格子裡有字，並且用過一次這一組的引導，就可以獲得。",
+    earnedHint: "已獲得：你已經開始寫，也用過引導了！",
+    modalText: "你已經開始寫，也用過這一組的引導。",
+  },
+  badge_30: {
+    unlockHint: "把一句句型放進格子一次，就可以獲得。",
+    earnedHint: "已獲得：你已經把句型放進自己的文章了！",
+    modalText: "你已經把一句句型放進格子，再用自己的話補完。",
+  },
+  badge_60: {
+    unlockHint: "這一週要寫的格子都有字，而且都自己打勾，就可以獲得。",
+    earnedHint: "已獲得：你已經把這一週要寫的格子都寫過了！",
+    modalText: "你已經把這一週要寫的地方都寫過，也自己勾過了。",
+  },
+};
+
 export interface BadgeEvalInput {
   hasWritingContent: boolean;
   hasUsedFeedbackOrPrompt: boolean;
-  /** Completed ORID stages (O/R/I/D). */
   stagesPassed?: Iterable<string> | null;
+}
+
+export interface EncouragementEvalInput {
+  hasWritingContent: boolean;
+  hasUsedFeedbackOrPrompt: boolean;
+  hasUsedSentenceFrame?: boolean;
+  selfCheckedStages?: Iterable<string> | null;
+  requiredStages?: Iterable<string> | null;
 }
 
 const STAGE_KEYS = new Set(["O", "R", "I", "D"]);
@@ -324,7 +372,7 @@ export function stagesPassedFromWritingContent(writing: {
   return passed;
 }
 
-/** Return the list of badge IDs earned given current state. */
+/** Experimental quality badges: bronze is O, silver is O+R+I, gold is all four. */
 export function calculateEarnedBadges(input: BadgeEvalInput): BadgeId[] {
   const earned: BadgeId[] = [];
   const { hasWritingContent, hasUsedFeedbackOrPrompt, stagesPassed } = input;
@@ -338,6 +386,26 @@ export function calculateEarnedBadges(input: BadgeEvalInput): BadgeId[] {
   if (passed.has("O") && passed.has("R") && passed.has("I")) earned.push("badge_60");
   if (passed.has("O") && passed.has("R") && passed.has("I") && passed.has("D")) {
     earned.push("badge_90");
+  }
+  return earned;
+}
+
+/** Control encouragement badges. They record doing the task, not writing quality. */
+export function calculateEncouragementBadges(input: EncouragementEvalInput): BadgeId[] {
+  const earned: BadgeId[] = [];
+  const { hasWritingContent, hasUsedFeedbackOrPrompt, hasUsedSentenceFrame } = input;
+
+  if (hasWritingContent && hasUsedFeedbackOrPrompt) earned.push("badge_start");
+  if (hasUsedSentenceFrame) earned.push("badge_30");
+
+  const required = new Set(
+    [...(input.requiredStages ?? [])].map((item) => String(item || "").trim().toUpperCase()).filter(Boolean),
+  );
+  const checked = new Set(
+    [...(input.selfCheckedStages ?? [])].map((item) => String(item || "").trim().toUpperCase()).filter(Boolean),
+  );
+  if (required.size > 0 && [...required].every((item) => checked.has(item))) {
+    earned.push("badge_60");
   }
   return earned;
 }

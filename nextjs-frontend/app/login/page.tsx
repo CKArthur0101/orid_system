@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { DilabLogo } from "@/components/orid/DilabLogo";
 import { LoginCornerDecorations } from "@/components/orid/LoginCornerDecorations";
+import { PasswordField } from "@/app/login/PasswordField";
 
 const showRegisterLink =
   process.env.NEXT_PUBLIC_ENABLE_PUBLIC_REGISTRATION_AND_PASSWORD_RESET !== "false";
@@ -83,14 +84,7 @@ export default async function Page({
               <label htmlFor="password" className="text-sm font-semibold text-amber-900 sm:text-base">
                 密碼
               </label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                required
-                className={INPUT_CLASS}
-              />
+              <PasswordField className={INPUT_CLASS} />
             </div>
 
             <div className="pt-1">

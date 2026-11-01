@@ -4,7 +4,9 @@ from __future__ import annotations
 from app.services.orid_badges import (
     BADGE_ORDER,
     calculate_earned_badges,
+    calculate_encouragement_badges,
     calculate_earned_synthesis_badges,
+    encouragement_badges_from_writing,
     get_new_badges,
     should_show_badge_modal,
     stages_passed_from_orid_levels,
@@ -35,6 +37,14 @@ class TestCalculateEarnedBadges:
         )
         assert "badge_start" in result
 
+    def test_o_passed_gives_bronze(self):
+        result = calculate_earned_badges(
+            has_writing_content=True,
+            has_used_feedback_or_prompt=True,
+            stages_passed=["O"],
+        )
+        assert result == ["badge_start", "badge_30"]
+
     def test_content_without_prompt_no_start(self):
         result = calculate_earned_badges(
             has_writing_content=True,
@@ -43,34 +53,65 @@ class TestCalculateEarnedBadges:
         )
         assert "badge_start" not in result
 
-    def test_o_passed_gives_bronze(self):
-        result = calculate_earned_badges(
+    def test_sentence_frame_gives_frame_badge_without_a_quality_score(self):
+        result = calculate_encouragement_badges(
             has_writing_content=True,
             has_used_feedback_or_prompt=True,
-            stages_passed=["O"],
+            has_used_sentence_frame=True,
         )
-        assert "badge_30" in result
-        assert "badge_60" not in result
+        assert result == ["badge_start", "badge_30"]
 
-    def test_ori_passed_gives_silver(self):
-        result = calculate_earned_badges(
+    def test_week_done_needs_every_required_tick(self):
+        partial = calculate_encouragement_badges(
+            has_writing_content=True,
+            has_used_feedback_or_prompt=False,
+            self_checked_stages=["O"],
+            required_stages=["O", "R"],
+        )
+        assert "badge_60" not in partial
+
+        done = calculate_encouragement_badges(
+            has_writing_content=True,
+            has_used_feedback_or_prompt=False,
+            self_checked_stages=["O", "R"],
+            required_stages=["O", "R"],
+        )
+        assert done == ["badge_60"]
+
+    def test_empty_tick_list_does_not_finish_the_week(self):
+        result = calculate_encouragement_badges(
             has_writing_content=True,
             has_used_feedback_or_prompt=True,
-            stages_passed=["O", "R", "I"],
+            self_checked_stages=[],
+            required_stages=["O", "R"],
         )
-        assert "badge_30" in result
-        assert "badge_60" in result
+        assert "badge_60" not in result
         assert "badge_90" not in result
 
-    def test_all_stages_gives_gold(self):
-        result = calculate_earned_badges(
-            has_writing_content=True,
-            has_used_feedback_or_prompt=True,
-            stages_passed=["O", "R", "I", "D"],
+
+class TestEncouragementFromWriting:
+    def test_empty_box_tick_does_not_count(self):
+        earned = encouragement_badges_from_writing(
+            {
+                "stages": {"O": {"d1": "爺爺吃柿子"}, "R": {"d1": "   "}},
+                "self_checks": {"O": True, "R": True},
+            },
+            week=1,
+            used_help=True,
         )
-        assert "badge_30" in result
-        assert "badge_60" in result
-        assert "badge_90" in result
+        assert earned == ["badge_start"]
+
+    def test_week_one_done_is_only_o_and_r(self):
+        earned = encouragement_badges_from_writing(
+            {
+                "stages": {"O": {"d1": "爺爺吃柿子"}, "R": {"d1": "我很難過"}},
+                "self_checks": {"O": True, "R": True},
+                "used_sentence_frame": True,
+            },
+            week=1,
+            used_help=False,
+        )
+        assert earned == ["badge_30", "badge_60"]
 
 
 class TestStagesPassedHelpers:

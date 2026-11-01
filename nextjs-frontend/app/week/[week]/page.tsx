@@ -30,6 +30,7 @@ import {
   type BadgeId,
   type SynthesisCriterionId,
   calculateEarnedBadges,
+  calculateEncouragementBadges,
   getNewlyEarnedBadges,
   stagesPassedFromWritingOk,
 } from "@/lib/orid/badgeRules";
@@ -84,6 +85,11 @@ type OridWritingV1 = {
   synthesis_focus?: SynthesisCriterionId | null;
   synthesis_sel_focus?: string | null;
   earnedBadges?: BadgeId[];
+  /** Student ticks for "I wrote this box". Not a quality score. */
+  self_checks?: Partial<Record<StageKey, boolean>>;
+  synthesis_self_check?: boolean;
+  /** True after a sentence-frame card is placed into the writing box. */
+  used_sentence_frame?: boolean;
 };
 
 type AutosaveStatus = "idle" | "saving" | "saved" | "error";
@@ -234,6 +240,13 @@ const STAGE_CARD_META: Record<StageKey, { title: string; question: string }> = {
   R: { title: "R 反思 (Reflective)", question: "這段故事讓我有什麼感覺？" },
   I: { title: "I 解釋 (Interpretive)", question: "這個故事想告訴我什麼？" },
   D: { title: "D 行動 (Decisional)", question: "我可以怎麼做得更好？" },
+};
+
+const SELF_CHECK_LABEL: Record<StageKey, string> = {
+  O: "我有寫觀察",
+  R: "我有寫感受",
+  I: "我有寫體會",
+  D: "我有寫行動",
 };
 
 const STAGES: { key: StageKey; label: string }[] = [
@@ -422,6 +435,9 @@ function normalizeWritingContent(raw: unknown, week: number): OridWritingV1 {
     ...(Array.isArray(o?.earnedBadges)
       ? { earnedBadges: o.earnedBadges.filter(Boolean) as BadgeId[] }
       : {}),
+    ...(o?.self_checks && typeof o.self_checks === "object" ? { self_checks: o.self_checks } : {}),
+    ...(o?.synthesis_self_check ? { synthesis_self_check: true } : {}),
+    ...(o?.used_sentence_frame ? { used_sentence_frame: true } : {}),
   };
 
   if (isSynthesisWeek(weekNum) && flow === "synthesis") {
@@ -595,13 +611,6 @@ export default function WeekBookPage() {
   const [focusStage, setFocusStage] = useState<StageKey>(() => writableStages(weekNum)[0] ?? "O");
   const [fbLoading, setFbLoading] = useState(false);
   const [fbError, setFbError] = useState<string | null>(null);
-  const [controlChecks, setControlChecks] = useState<{ label: string; passed: boolean }[] | null>(null);
-  const [controlCheckTarget, setControlCheckTarget] = useState<StageKey | "ALL" | null>(null);
-  const [controlCheckToken, setControlCheckToken] = useState(0);
-  useEffect(() => {
-    setControlChecks(null);
-    setControlCheckTarget(null);
-  }, [weekNum]);
   /** Even-week synthesis: hide left ORID review panel to widen writing + partner. */
   const [oridPanelCollapsed, setOridPanelCollapsed] = useState(false);
   const [copyFlash, setCopyFlash] = useState<string | null>(null);
@@ -1005,13 +1014,102 @@ export default function WeekBookPage() {
       ? "orid-synthesis-grid grid min-h-0 w-full flex-1 grid-cols-1 gap-2 overflow-hidden max-md:gap-2.5 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] md:gap-2 lg:gap-3"
       : "orid-synthesis-grid grid min-h-0 w-full flex-1 grid-cols-1 gap-2 overflow-hidden max-md:gap-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,1fr)] md:gap-2 lg:gap-3"
     : "grid min-h-0 w-full flex-1 grid-cols-1 gap-2.5 overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-3";
-  const visibleBadgeIds = useMemo(() => badgeIdsForWeek(weekNum), [weekNum]);
+  const badgeMode = isControlConditionValue(condition) ? "encouragement" : "quality";
+  const visibleBadgeIds = useMemo(
+    () => badgeIdsForWeek(weekNum, badgeMode),
+    [badgeMode, weekNum],
+  );
+  const manualChecks = useMemo(() => {
+    if (showSynthesisColumn) {
+      const text = String(writingData.synthesis_draft ?? "").trim();
+      return [
+        {
+          label: "我有把這篇寫完",
+          checked: Boolean(text && writingData.synthesis_self_check),
+          disabled: !text,
+        },
+      ];
+    }
+    return thisWeekStages.map((stage) => {
+      const text = String(writingData.stages[stage]?.d1 ?? "").trim();
+      return {
+        label: SELF_CHECK_LABEL[stage],
+        checked: Boolean(text && writingData.self_checks?.[stage]),
+        disabled: !text,
+      };
+    });
+  }, [showSynthesisColumn, thisWeekStages, writingData]);
+
+  const previewEncouragement = useCallback(
+    (next: OridWritingV1) => {
+      const essayMode = isSynthesisWeek(weekNum);
+      const weekStages = writableStages(weekNum);
+      const required = essayMode ? ["ESSAY"] : weekStages;
+      const checked = essayMode
+        ? String(next.synthesis_draft ?? "").trim() && next.synthesis_self_check
+          ? ["ESSAY"]
+          : []
+        : weekStages.filter((stage) => {
+            const text = `${next.stages[stage]?.d1 ?? ""}${next.stages[stage]?.d2 ?? ""}`.trim();
+            return Boolean(text && next.self_checks?.[stage]);
+          });
+      const hasText = essayMode
+        ? Boolean(String(next.synthesis_draft ?? "").trim())
+        : weekStages.some(
+            (stage) => `${next.stages[stage]?.d1 ?? ""}${next.stages[stage]?.d2 ?? ""}`.trim(),
+          );
+      const preview = calculateEncouragementBadges({
+        hasWritingContent: hasText,
+        hasUsedFeedbackOrPrompt: promptViewCount > 0 || earnedBadges.includes("badge_start"),
+        hasUsedSentenceFrame: Boolean(next.used_sentence_frame),
+        selfCheckedStages: checked,
+        requiredStages: required,
+      });
+      const allowed = new Set(badgeIdsForWeek(weekNum, "encouragement"));
+      const merged = Array.from(
+        new Set([...earnedBadges, ...preview.filter((badge) => allowed.has(badge))]),
+      ) as BadgeId[];
+      const fresh = getNewlyEarnedBadges(earnedBadges, merged);
+      if (merged.length !== earnedBadges.length) setEarnedBadges(merged);
+      if (fresh.length > 0) {
+        setBadgeModalQueue((prev) => [...prev, ...fresh.filter((badge) => !prev.includes(badge))]);
+      }
+    },
+    [earnedBadges, promptViewCount, weekNum],
+  );
+
+  function toggleStageSelfCheck(stage: StageKey) {
+    const text = `${writingData.stages[stage]?.d1 ?? ""}${writingData.stages[stage]?.d2 ?? ""}`.trim();
+    if (!text) return;
+    const checks = { ...(writingData.self_checks ?? {}) };
+    checks[stage] = !checks[stage];
+    const next = { ...writingData, self_checks: checks };
+    setWritingData(next);
+    previewEncouragement(next);
+  }
+
+  function toggleEssaySelfCheck() {
+    if (!String(writingData.synthesis_draft ?? "").trim()) return;
+    const next = { ...writingData, synthesis_self_check: !writingData.synthesis_self_check };
+    setWritingData(next);
+    previewEncouragement(next);
+  }
+
+  function toggleManualCheck(index: number) {
+    if (showSynthesisColumn) {
+      toggleEssaySelfCheck();
+      return;
+    }
+    const stage = thisWeekStages[index];
+    if (stage) toggleStageSelfCheck(stage);
+  }
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     const detail = {
       earnedBadges,
       badgeIds: visibleBadgeIds,
+      encouragement: badgeMode === "encouragement",
       week: weekNum,
       bookId: `book${bookUnitFromWeek(weekNum)}`,
     };
@@ -1021,7 +1119,7 @@ export default function WeekBookPage() {
     dispatchBadgeDisplay();
     const retryId = window.setTimeout(dispatchBadgeDisplay, 0);
     return () => window.clearTimeout(retryId);
-  }, [earnedBadges, visibleBadgeIds, weekNum]);
+  }, [badgeMode, earnedBadges, visibleBadgeIds, weekNum]);
 
   const aiPartnerShellClass = showSynthesisColumn
     ? oridPanelCollapsed
@@ -1030,8 +1128,6 @@ export default function WeekBookPage() {
     : "kid-shell order-3 flex min-h-[32vh] w-full min-w-0 flex-col overflow-hidden lg:order-2 lg:col-start-2 lg:h-full lg:min-h-0 lg:row-start-1";
 
   const isControl = isControlConditionValue(condition);
-  const stageSystemChecks = controlCheckTarget === focusStage ? controlChecks : null;
-  const synthesisSystemChecks = controlCheckTarget === "ALL" ? controlChecks : null;
 
   const activeStageDef = STAGES.find((s) => s.key === focusStage) ?? STAGES[0];
   const activeStage = activeStageDef.key;
@@ -1503,20 +1599,8 @@ export default function WeekBookPage() {
         ? (meta.earnedBadges as BadgeId[])
         : [];
       if (mergedBadges.length === 0) {
-        // Local fallback mirrors the backend: this week's writable cards plus
-        // the read-only cards carried over from reference weeks (week 2 needs
-        // week 1's O/R to reach the silver/gold badges).
-        const combined: OridWritingV1 = {
-          ...nextWriting,
-          stages: { ...nextWriting.stages },
-        };
-        for (const { key } of STAGES) {
-          if (!isStageWritable(weekNum, key) && referenceDisplay.stages[key]) {
-            combined.stages[key] = referenceDisplay.stages[key];
-          }
-        }
-        const stagesPassed = stagesPassedFromWritingOk(combined);
-        const allowed = new Set<BadgeId>(badgeIdsForWeek(weekNum));
+        const allowed = new Set<BadgeId>(badgeIdsForWeek(weekNum, "quality"));
+        const stagesPassed = stagesPassedFromWritingOk(nextWriting);
         mergedBadges = calculateEarnedBadges({
           hasWritingContent: text.length > 0,
           hasUsedFeedbackOrPrompt: true,
@@ -1578,7 +1662,7 @@ export default function WeekBookPage() {
     if (synthesisWeek && w2Phase === "synthesis") {
       const cur = String(writingData.synthesis_draft ?? "").trimEnd();
       const next = cur ? `${cur}\n${clean}` : clean;
-      nextWriting = { ...writingData, synthesis_draft: next };
+      nextWriting = { ...writingData, synthesis_draft: next, used_sentence_frame: true };
       setWritingData(nextWriting);
       setCopyFlash("已把固定句型放進整合寫作");
     } else if (!oridReadOnly) {
@@ -1586,6 +1670,7 @@ export default function WeekBookPage() {
       const next = cur ? `${cur}\n${clean}` : clean;
       nextWriting = {
         ...writingData,
+        used_sentence_frame: true,
         stages: {
           ...writingData.stages,
           [activeStage]: { ...writingData.stages[activeStage], d1: next },
@@ -1596,6 +1681,7 @@ export default function WeekBookPage() {
       setCopyFlash("已把固定句型放進寫作格");
     }
     if (nextWriting) {
+      previewEncouragement(nextWriting);
       void runPromptUsage();
     }
     window.setTimeout(() => setCopyFlash(null), 1800);
@@ -1714,109 +1800,16 @@ export default function WeekBookPage() {
       if (!r.ok) return;
       const data = await r.json();
       setPromptViewCount(data.prompt_view_count ?? 0);
+      const earned = Array.isArray(data.earnedBadges) ? (data.earnedBadges as BadgeId[]) : [];
+      const fresh = Array.isArray(data.newlyEarnedBadges) ? (data.newlyEarnedBadges as BadgeId[]) : [];
+      if (earned.length > 0) {
+        setEarnedBadges((prev) => Array.from(new Set([...prev, ...earned])) as BadgeId[]);
+      }
+      if (fresh.length > 0) {
+        setBadgeModalQueue((prev) => [...prev, ...fresh.filter((badge) => !prev.includes(badge))]);
+      }
     } catch {
       // silently ignore prompt usage logging errors
-    }
-  }
-
-  function applyControlBadges(data: { earnedBadges?: BadgeId[]; newlyEarnedBadges?: BadgeId[] }, snapshot: OridWritingV1) {
-    const merged = Array.isArray(data.earnedBadges)
-      ? (Array.from(new Set([...earnedBadges, ...data.earnedBadges])) as BadgeId[])
-      : earnedBadges;
-    const newOnes: BadgeId[] = Array.isArray(data.newlyEarnedBadges)
-      ? data.newlyEarnedBadges
-      : getNewlyEarnedBadges(earnedBadges, merged);
-    setEarnedBadges(merged);
-    if (newOnes.length > 0) {
-      setBadgeModalQueue((prev) => [...prev, ...newOnes.filter((b) => !prev.includes(b))]);
-    }
-    return persistWritingSnapshot(mergeProgressIntoWriting(snapshot, merged), merged);
-  }
-
-  async function runControlCheck(target: StageKey | "ALL") {
-    if (!sessionId || !isControl) return;
-    const text =
-      target === "ALL"
-        ? String(writingData.synthesis_draft ?? "").trim()
-        : String(writingData.stages[target]?.d1 ?? "").trim();
-    if (!text) {
-      setFbError("請先寫一些內容再檢查。");
-      setControlChecks(null);
-      setControlCheckTarget(target);
-      return;
-    }
-
-    fbInflightRef.current += 1;
-    setFbLoading(true);
-    setFbError(null);
-    try {
-      const r = await fetch("/api/orid/control-check", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          session_id: sessionId,
-          week: weekNum,
-          stage: target,
-          student_text: text,
-        }),
-      });
-      const raw = await r.text();
-      if (!r.ok) throw new Error(formatApiError(r.status, raw, "檢查失敗"));
-      const data = raw ? JSON.parse(raw) : {};
-      const checks = Array.isArray(data?.checks)
-        ? data.checks
-            .map((item: { label?: unknown; passed?: unknown }) => ({
-              label: String(item?.label ?? "").trim(),
-              passed: !!item?.passed,
-            }))
-            .filter((item: { label: string }) => item.label)
-        : [];
-      setControlChecks(checks);
-      setControlCheckTarget(target);
-      setControlCheckToken((n) => n + 1);
-
-      let nextWriting: OridWritingV1 = writingData;
-      if (target === "ALL") {
-        nextWriting = {
-          ...writingData,
-          synthesis_draft: text,
-          ...(data?.synthesis_rubric_levels && typeof data.synthesis_rubric_levels === "object"
-            ? { synthesis_rubric_levels: data.synthesis_rubric_levels }
-            : {}),
-        };
-      } else {
-        const fb: WritingFeedback = {
-          ok: !!data?.ok,
-          praise: null,
-          missing: [],
-          suggestions: [],
-          example: null,
-          improved: null,
-          meta: { student_feedback_kind: data?.ok ? "complete" : "revision" },
-        };
-        nextWriting = {
-          ...writingData,
-          stages: {
-            ...writingData.stages,
-            [target]: {
-              ...writingData.stages[target],
-              d1: text,
-              feedback: { ...(writingData.stages[target].feedback ?? {}), d1: fb },
-            },
-          },
-        };
-      }
-      setWritingData(nextWriting);
-      await applyControlBadges(data, nextWriting);
-    } catch (e: any) {
-      setFbError(e?.message ?? "檢查失敗");
-    } finally {
-      fbInflightRef.current -= 1;
-      if (fbInflightRef.current <= 0) {
-        fbInflightRef.current = 0;
-        setFbLoading(false);
-      }
     }
   }
 
@@ -2106,13 +2099,19 @@ export default function WeekBookPage() {
                         oridReadOnly
                           ? undefined
                           : (e) =>
-                              setWritingData((prev) => ({
-                                ...prev,
-                                stages: {
-                                  ...prev.stages,
-                                  [activeStage]: { ...prev.stages[activeStage], d1: e.target.value },
-                                },
-                              }))
+                              setWritingData((prev) => {
+                                const nextText = e.target.value;
+                                const checks = { ...(prev.self_checks ?? {}) };
+                                if (!nextText.trim()) delete checks[activeStage];
+                                return {
+                                  ...prev,
+                                  self_checks: checks,
+                                  stages: {
+                                    ...prev.stages,
+                                    [activeStage]: { ...prev.stages[activeStage], d1: nextText },
+                                  },
+                                };
+                              })
                       }
                     />
                     {!isControl ? (
@@ -2159,29 +2158,6 @@ export default function WeekBookPage() {
                     onClick={() => void submitWeek2PhaseToSynthesis()}
                   >
                     ⏭️ 進入整合寫作
-                  </button>
-                ) : showStageFeedbackButtons && isControl && !oridReadOnly ? (
-                  <button
-                    type="button"
-                    className="kid-btn-3d-primary kid-btn-3d-block"
-                    disabled={!sessionId || fbLoading}
-                    onClick={() => void runControlCheck(activeStage)}
-                  >
-                    {fbLoading ? (
-                      "檢查中…"
-                    ) : (
-                      <>
-                        <Image
-                          src="/images/orid/badges/feedback_btn_icon.png"
-                          alt=""
-                          width={40}
-                          height={40}
-                          className="h-8 w-8 object-contain sm:h-9 sm:w-9 md:h-10 md:w-10"
-                          aria-hidden
-                        />
-                        檢查這一段
-                      </>
-                    )}
                   </button>
                 ) : showStageFeedbackButtons && !isControl && !oridReadOnly ? (
                   <button
@@ -2298,6 +2274,7 @@ export default function WeekBookPage() {
                     return {
                       ...prev,
                       synthesis_draft: nextDraft,
+                      synthesis_self_check: nextDraft.trim() ? prev.synthesis_self_check : false,
                       ...(needsReset
                         ? {
                             synthesis_round1_completed: false,
@@ -2322,16 +2299,7 @@ export default function WeekBookPage() {
               {copyFlash && oridPanelCollapsed ? (
                 <div className="text-xs font-medium text-emerald-700">{copyFlash}</div>
               ) : null}
-              {isControl ? (
-                <button
-                  type="button"
-                  className="kid-btn-3d-primary kid-btn-3d-block shrink-0"
-                  disabled={!sessionId || fbLoading}
-                  onClick={() => void runControlCheck("ALL")}
-                >
-                  {fbLoading ? "檢查中…" : "檢查這篇"}
-                </button>
-              ) : (
+              {isControl ? null : (
                 <button
                   type="button"
                   className="kid-btn-3d-primary kid-btn-3d-block shrink-0"
@@ -2406,8 +2374,8 @@ export default function WeekBookPage() {
                       synthesisMode
                       openingText={synthesisOpeningText}
                       week={weekNum}
-                      systemChecks={synthesisSystemChecks}
-                      revealCheckToken={controlCheckTarget === "ALL" ? controlCheckToken : 0}
+                      manualChecks={manualChecks}
+                      onToggleManualCheck={toggleManualCheck}
                     />
                   </div>
                 ) : (
@@ -2575,8 +2543,8 @@ export default function WeekBookPage() {
                     onPromptViewed={() => void runPromptUsage()}
                     onInsertText={insertControlGuideText}
                     week={weekNum}
-                    systemChecks={stageSystemChecks}
-                    revealCheckToken={controlCheckTarget === focusStage ? controlCheckToken : 0}
+                    manualChecks={manualChecks}
+                    onToggleManualCheck={toggleManualCheck}
                   />
                 </div>
               ) : (
@@ -2699,6 +2667,7 @@ export default function WeekBookPage() {
         <BadgeModal
           badgeId={badgeModalQueue[0]}
           week={weekNum}
+          encouragement={badgeMode === "encouragement"}
           onClose={() => setBadgeModalQueue((prev) => prev.slice(1))}
         />
       )}

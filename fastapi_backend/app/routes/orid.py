@@ -22,7 +22,7 @@ from openai import AsyncOpenAI, BadRequestError
 
 from app.database import get_async_session, User
 from app.users import current_active_user
-from app.models import Reading, OridSession, OridChatMessage, OridWeekSubmission, OridStageAttempt, OridFeedbackEvent, OridBadgeEvent
+from app.models import Reading, OridSession, OridChatMessage, OridWeekSubmission, OridStageAttempt, OridFeedbackEvent, OridBadgeEvent, OridWeeklyResearchSummary
 from app.schemas import (
     ReadingCreate, ReadingRead,
     OridSessionCreate, OridSessionRead,
@@ -68,6 +68,7 @@ from app.services.orid_rubric_scoring import (
 from app.services.orid_badges import (
     calculate_earned_badges,
     calculate_earned_synthesis_badges,
+    encouragement_badges_from_writing,
     get_new_badges,
     get_earned_badges_from_db,
     load_session_progress,
@@ -2781,6 +2782,65 @@ async def get_orid_progress(
     return OridProgressRead(**progress)
 
 
+async def _used_help_this_week(db: AsyncSession, *, user_id: UUID, session_id: UUID, week: int) -> bool:
+    res = await db.execute(
+        select(OridWeeklyResearchSummary.guide_use_count).where(
+            OridWeeklyResearchSummary.user_id == user_id,
+            OridWeeklyResearchSummary.session_id == session_id,
+            OridWeeklyResearchSummary.week == week,
+        )
+    )
+    return int(res.scalar() or 0) > 0
+
+
+async def _record_encouragement_badges(
+    db: AsyncSession,
+    *,
+    user: User,
+    session: OridSession,
+    week: int,
+    writing_obj: dict[str, Any] | None,
+    used_help: bool,
+    live_text: str = "",
+) -> tuple[list[str], list[str]]:
+    """Award encouragement badges. Already-earned badges stay earned."""
+    current = [
+        badge_id
+        for badge_id in encouragement_badges_from_writing(
+            writing_obj,
+            week=week,
+            used_help=used_help,
+            live_text=live_text,
+        )
+        if badge_id in badge_ids_available_for_week(week, encouragement=True)
+    ]
+    prev = await get_earned_badges_from_db(db, user_id=user.id, session_id=session.id, week=week)
+    new_badges = get_new_badges(prev, current)
+    if new_badges:
+        await record_badge_events(
+            db,
+            user_id=user.id,
+            session_id=session.id,
+            reading_id=session.reading_id,
+            week=week,
+            task_type=task_type_for_week(week),
+            condition=session.condition,
+            new_badge_ids=new_badges,
+            word_count=len((live_text or "").strip()),
+            feedback_count=0,
+            prompt_view_count=0,
+            used_feedback_or_prompt=used_help,
+        )
+    await sync_badges(
+        db,
+        user_id=user.id,
+        week=week,
+        session_id=session.id,
+        badge_count=len(set(prev + current)),
+    )
+    return list(set(prev + current)), new_badges
+
+
 @router.post("/prompt-usage", response_model=PromptUsageResponse)
 async def record_prompt_usage(
     data: PromptUsageRequest,
@@ -2788,11 +2848,7 @@ async def record_prompt_usage(
     user: User = Depends(current_active_user),
 ):
     _reject_student_flow_for_teacher(user)
-    """Control group: count a guide use (insert a card, or open a prompt).
-
-    Page flips are not sent here. This does not check quality and does not
-    award badges — badges come from POST /orid/control-check.
-    """
+    """Count a guide use and award encouragement badges. No quality score."""
     r = await db.execute(select(OridSession).filter(OridSession.id == data.session_id))
     session = r.scalars().first()
     if not session or session.user_id != user.id:
@@ -2808,14 +2864,35 @@ async def record_prompt_usage(
     existing_prompt_views = int(existing_count_res.scalar() or 0)
     new_prompt_total = existing_prompt_views + data.prompt_view_count
 
-    prev_badges = await get_earned_badges_from_db(db, user_id=user.id, session_id=session.id, week=week)
     await bump_guide_use(db, user_id=user.id, week=week, session_id=session.id, amount=data.prompt_view_count)
+    raw = await _fetch_latest_writing_content_for_week(db, user.id, session.id, week)
+    writing_obj = (
+        ensure_orid_writing_obj(raw_content=raw, week=week, empty_factory=_ensure_orid_writing_v1)
+        if raw
+        else None
+    )
+    if is_control_condition(session.condition, default=DEFAULT_ORID_CONDITION):
+        earned, new_badges = await _record_encouragement_badges(
+            db,
+            user=user,
+            session=session,
+            week=week,
+            writing_obj=writing_obj,
+            used_help=await _used_help_this_week(
+                db, user_id=user.id, session_id=session.id, week=week
+            ),
+        )
+    else:
+        earned = await get_earned_badges_from_db(
+            db, user_id=user.id, session_id=session.id, week=week
+        )
+        new_badges = []
     await db.commit()
 
     return PromptUsageResponse(
         prompt_view_count=new_prompt_total,
-        earnedBadges=prev_badges,
-        newlyEarnedBadges=[],
+        earnedBadges=earned,
+        newlyEarnedBadges=new_badges,
     )
 
 
@@ -3090,50 +3167,14 @@ async def control_check(
         levels=levels,
     )
 
-    if is_synthesis_week(week):
-        current_badges = [
-            b
-            for b in calculate_earned_synthesis_badges(rubric_levels=levels)
-            if b in badge_ids_available_for_week(week)
-        ]
-    else:
-        writings = await _load_reference_writing_objs(db, user.id, session.id, week)
-        writings[week] = obj
-        stages_passed = _stages_passed_across_weeks(writings, mode="ok")
-        observation_passed = "O" in stages_passed
-        current_badges = [
-            b
-            for b in calculate_earned_badges(
-                has_writing_content=observation_passed,
-                has_used_feedback_or_prompt=observation_passed,
-                stages_passed=stages_passed,
-            )
-            if b in badge_ids_available_for_week(week)
-        ]
-
-    prev_badges = await get_earned_badges_from_db(db, user_id=user.id, session_id=session.id, week=week)
-    new_badges = get_new_badges(prev_badges, current_badges)
-    if new_badges:
-        await record_badge_events(
-            db,
-            user_id=user.id,
-            session_id=session.id,
-            reading_id=session.reading_id,
-            week=week,
-            task_type=task_type_for_week(week),
-            condition=session.condition,
-            new_badge_ids=new_badges,
-            word_count=len(text),
-            feedback_count=1,
-            prompt_view_count=0,
-            used_feedback_or_prompt=True,
-        )
-    await sync_badges(
+    earned, new_badges = await _record_encouragement_badges(
         db,
-        user_id=user.id,
+        user=user,
+        session=session,
         week=week,
-        session_id=session.id,
-        badge_count=len(set(prev_badges + current_badges)),
+        writing_obj=obj,
+        used_help=await _used_help_this_week(db, user_id=user.id, session_id=session.id, week=week),
+        live_text=text,
     )
     await db.commit()
 
@@ -3142,7 +3183,7 @@ async def control_check(
         reply=reply,
         stage=stage,
         checks=[{"label": item.label, "passed": item.passed} for item in checks],
-        earnedBadges=list(set(prev_badges + current_badges)),
+        earnedBadges=earned,
         newlyEarnedBadges=new_badges,
         synthesis_rubric_levels=levels,
     )
@@ -3681,78 +3722,89 @@ async def writing_coach_chat(
                     orid_levels=orid_levels,
                     sel_levels=sel_levels,
                 )
-            # Badge evaluation uses ORID stage progress only.
-            has_content = bool((body or "").strip())
-            stage_u = (stage_ctx or "O").strip().upper()
-            is_control = is_control_condition(condition, default=DEFAULT_ORID_CONDITION)
-            stages_passed: set[str] = set()
-            try:
-                # Week 2 (I/D) is judged together with week 1 (O/R): silver and
-                # gold need the whole book-unit's stages, not only this week's.
-                writings_by_week = await _load_reference_writing_objs(
-                    db, user.id, session.id, week_num
+            if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
+                earned, new_badges = await _record_encouragement_badges(
+                    db,
+                    user=user,
+                    session=session,
+                    week=week_num,
+                    writing_obj=saved_obj,
+                    used_help=True,
+                    live_text=body or "",
                 )
-                writings_by_week[week_num] = saved_obj
-                stages_passed = _stages_passed_across_weeks(
-                    writings_by_week,
-                    mode="ok",
-                )
-            except Exception:
-                logger.warning("stages_passed_from_writing_obj failed", exc_info=True)
-
-            this_week_stages = set(writable_stages(week_num))
-            if is_control:
-                if fb_ok and stage_u in this_week_stages:
-                    stages_passed.add(stage_u)
+                try:
+                    await db.commit()
+                except Exception:
+                    logger.exception(
+                        "badge persistence failed",
+                        extra={"session_id": str(session.id)},
+                    )
+                badge_meta = {
+                    "earnedBadges": earned,
+                    "newlyEarnedBadges": new_badges,
+                }
             else:
+                has_content = bool((body or "").strip())
+                stage_u = (stage_ctx or "O").strip().upper()
+                stages_passed: set[str] = set()
+                try:
+                    writings_by_week = await _load_reference_writing_objs(
+                        db, user.id, session.id, week_num
+                    )
+                    writings_by_week[week_num] = saved_obj
+                    stages_passed = _stages_passed_across_weeks(writings_by_week, mode="ok")
+                except Exception:
+                    logger.warning("stages_passed_from_writing_obj failed", exc_info=True)
+                this_week_stages = set(writable_stages(week_num))
                 stages_passed |= stages_passed_from_orid_levels(orid_levels) & this_week_stages
                 if fb_ok and stage_u in this_week_stages:
                     stages_passed.add(stage_u)
-
-            prev_badges = await get_earned_badges_from_db(db, user_id=user.id, session_id=session.id, week=week_num)
-            current_badges = [
-                b
-                for b in calculate_earned_badges(
-                    has_writing_content=has_content,
-                    has_used_feedback_or_prompt=True,
-                    stages_passed=stages_passed,
+                prev_badges = await get_earned_badges_from_db(
+                    db, user_id=user.id, session_id=session.id, week=week_num
                 )
-                if b in badge_ids_available_for_week(week_num)
-            ]
-            new_badges = get_new_badges(prev_badges, current_badges)
-            try:
-                if new_badges:
-                    await record_badge_events(
+                current_badges = [
+                    b
+                    for b in calculate_earned_badges(
+                        has_writing_content=has_content,
+                        has_used_feedback_or_prompt=True,
+                        stages_passed=stages_passed,
+                    )
+                    if b in badge_ids_available_for_week(week_num)
+                ]
+                new_badges = get_new_badges(prev_badges, current_badges)
+                try:
+                    if new_badges:
+                        await record_badge_events(
+                            db,
+                            user_id=user.id,
+                            session_id=session.id,
+                            reading_id=session.reading_id,
+                            week=week_num,
+                            task_type="orid_stage",
+                            condition=condition,
+                            new_badge_ids=new_badges,
+                            word_count=len(body) if body else 0,
+                            feedback_count=1,
+                            prompt_view_count=0,
+                            used_feedback_or_prompt=True,
+                        )
+                    await sync_badges(
                         db,
                         user_id=user.id,
-                        session_id=session.id,
-                        reading_id=session.reading_id,
                         week=week_num,
-                        task_type="orid_stage",
-                        condition=condition,
-                        new_badge_ids=new_badges,
-                        word_count=len(body) if body else 0,
-                        feedback_count=1,
-                        prompt_view_count=0,
-                        used_feedback_or_prompt=True,
+                        session_id=session.id,
+                        badge_count=len(set(prev_badges + current_badges)),
                     )
-                await sync_badges(
-                    db,
-                    user_id=user.id,
-                    week=week_num,
-                    session_id=session.id,
-                    badge_count=len(set(prev_badges + current_badges)),
-                )
-                await db.commit()
-            except Exception:
-                logger.exception(
-                    "badge persistence failed",
-                    extra={"session_id": str(session.id)},
-                )
-            badge_meta = {
-                "earnedBadges": list(set(prev_badges + current_badges)),
-                "newlyEarnedBadges": new_badges,
-            }
+                    await db.commit()
+                except Exception:
+                    logger.exception(
+                        "badge persistence failed",
+                        extra={"session_id": str(session.id)},
+                    )
+                badge_meta = {
+                    "earnedBadges": list(set(prev_badges + current_badges)),
+                    "newlyEarnedBadges": new_badges,
+                }
 
         except Exception:
             logger.exception(
@@ -3770,40 +3822,70 @@ async def writing_coach_chat(
             if not is_valid_week(week_num):
                 week_num = 1
 
-            prev_badges = await get_earned_badges_from_db(
-                db, user_id=user.id, session_id=session.id, week=week_num
+            saved_raw = await _fetch_latest_writing_content_for_week(
+                db, user.id, session.id, week_num
             )
-            current_synth_badges = calculate_earned_synthesis_badges(
-                rubric_levels=synthesis_levels,
+            saved_obj = (
+                ensure_orid_writing_obj(
+                    raw_content=saved_raw,
+                    week=week_num,
+                    empty_factory=_ensure_orid_writing_v1,
+                )
+                if saved_raw
+                else None
             )
-            new_synth_badges = get_new_badges(prev_badges, current_synth_badges)
-            if new_synth_badges:
-                await record_badge_events(
+            if is_control_condition(condition, default=DEFAULT_ORID_CONDITION):
+                earned, new_badges = await _record_encouragement_badges(
+                    db,
+                    user=user,
+                    session=session,
+                    week=week_num,
+                    writing_obj=saved_obj,
+                    used_help=True,
+                    live_text=body or "",
+                )
+                await db.commit()
+                badge_meta = {
+                    "earnedBadges": earned,
+                    "newlyEarnedBadges": new_badges,
+                }
+            else:
+                prev_badges = await get_earned_badges_from_db(
+                    db, user_id=user.id, session_id=session.id, week=week_num
+                )
+                current_synth_badges = [
+                    b
+                    for b in calculate_earned_synthesis_badges(rubric_levels=synthesis_levels)
+                    if b in badge_ids_available_for_week(week_num)
+                ]
+                new_synth_badges = get_new_badges(prev_badges, current_synth_badges)
+                if new_synth_badges:
+                    await record_badge_events(
+                        db,
+                        user_id=user.id,
+                        session_id=session.id,
+                        reading_id=session.reading_id,
+                        week=week_num,
+                        task_type="synthesis",
+                        condition=condition,
+                        new_badge_ids=new_synth_badges,
+                        word_count=len(body) if body else 0,
+                        feedback_count=1,
+                        prompt_view_count=0,
+                        used_feedback_or_prompt=True,
+                    )
+                await sync_badges(
                     db,
                     user_id=user.id,
-                    session_id=session.id,
-                    reading_id=session.reading_id,
                     week=week_num,
-                    task_type="synthesis",
-                    condition=condition,
-                    new_badge_ids=new_synth_badges,
-                    word_count=len(body) if body else 0,
-                    feedback_count=1,
-                    prompt_view_count=0,
-                    used_feedback_or_prompt=True,
+                    session_id=session.id,
+                    badge_count=len(set(prev_badges + current_synth_badges)),
                 )
-            await sync_badges(
-                db,
-                user_id=user.id,
-                week=week_num,
-                session_id=session.id,
-                badge_count=len(set(prev_badges + current_synth_badges)),
-            )
-            await db.commit()
-            badge_meta = {
-                "earnedBadges": list(set(prev_badges + current_synth_badges)),
-                "newlyEarnedBadges": new_synth_badges,
-            }
+                await db.commit()
+                badge_meta = {
+                    "earnedBadges": list(set(prev_badges + current_synth_badges)),
+                    "newlyEarnedBadges": new_synth_badges,
+                }
         except Exception:
             logger.exception(
                 "synthesis badge block failed; returning chat reply without badge meta",
@@ -4144,6 +4226,18 @@ async def create_writing(
         )
     if data.save_intent == "submit":
         await mark_submitted(db, user_id=user.id, week=data.week, session_id=data.session_id)
+
+    if is_control_condition(session.condition, default=DEFAULT_ORID_CONDITION):
+        await _record_encouragement_badges(
+            db,
+            user=user,
+            session=session,
+            week=data.week,
+            writing_obj=writing_obj,
+            used_help=await _used_help_this_week(
+                db, user_id=user.id, session_id=session.id, week=data.week
+            ),
+        )
 
     await db.commit()
     return w

@@ -24,6 +24,7 @@ type TopBarBadges = {
   badgeIds: BadgeId[];
   bookId?: string | null;
   week?: number | null;
+  encouragement?: boolean;
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -56,6 +57,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         badgeIds,
         bookId: detail.bookId ?? null,
         week: typeof detail.week === "number" ? detail.week : null,
+        encouragement: detail.encouragement === true,
       });
     }
 
@@ -168,6 +170,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                     badgeIds={topBarBadges.badgeIds}
                     bookId={topBarBadges.bookId}
                     week={topBarBadges.week}
+                    encouragement={topBarBadges.encouragement}
                     size={42}
                     className="hidden sm:flex"
                   />

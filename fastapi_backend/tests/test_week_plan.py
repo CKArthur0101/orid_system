@@ -71,13 +71,21 @@ def test_reference_and_source_weeks():
 def test_badges_available_per_week():
     assert badge_ids_available_for_week(1) == ("badge_start", "badge_30")
     assert badge_ids_available_for_week(2) == ("badge_60", "badge_90")
-    assert badge_ids_available_for_week(4) == ("badge_start", "badge_30", "badge_60", "badge_90")
+    assert badge_ids_available_for_week(4) == (
+        "badge_start",
+        "badge_30",
+        "badge_60",
+        "badge_90",
+    )
     assert badge_ids_available_for_week(3) == (
         "badge_synthesis_content",
         "badge_synthesis_coherence",
         "badge_synthesis_reflection",
         "badge_synthesis_action",
     )
+    encouragement = ("badge_start", "badge_30", "badge_60")
+    assert badge_ids_available_for_week(1, encouragement=True) == encouragement
+    assert badge_ids_available_for_week(3, encouragement=True) == encouragement
 
 
 def test_book_packs_follow_the_unit():

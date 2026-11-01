@@ -24,40 +24,31 @@ BADGE_CONFIG: dict[str, dict] = {
     "badge_start": {
         "id": "badge_start",
         "name": "下筆徽章",
-        "description": "先在格子裡寫一些內容，並按一次「取得回饋」或看一次寫作提示，就可以獲得。",
+        "description": "格子裡有字，並且用過一次這一組的引導，就可以獲得。",
         "earned_description": "已獲得：你已經開始寫，也用過引導了！",
         "modal_title": "恭喜獲得下筆徽章！",
-        "modal_text": "你已經開始寫下自己的想法，也使用了寫作引導。接下來把故事裡「誰做了什麼」寫清楚吧！",
+        "modal_text": "你已經開始寫，也用過這一組的引導。",
     },
     "badge_30": {
         "id": "badge_30",
-        "name": "松果銅徽章",
-        "description": (
-            "在「觀察」格把故事裡誰、做了什麼寫清楚（不要只寫感想）。"
-            "等到這格出現「✓ 已完成」或完成卡，就可以獲得。"
-        ),
+        "name": "柿子銅徽章",
+        "description": "完成「觀察」格：寫清楚故事裡的人物、事件或情節，就可以獲得。",
         "earned_description": "已獲得：你已經把故事裡的人物和事件說清楚了！",
-        "modal_title": "恭喜獲得松果銅徽章！",
-        "modal_text": "你已經把故事裡的人物和事件說清楚了。接下來可以寫寫看：你有什麼感受？為什麼？",
+        "modal_title": "恭喜獲得柿子銅徽章！",
+        "modal_text": "你已經把故事裡的人物和事件說清楚了。",
     },
     "badge_60": {
         "id": "badge_60",
-        "name": "松果銀徽章",
-        "description": (
-            "「觀察」「感受」「體會」三格都要寫到位：事件清楚、有感受與原因、有從故事學到的道理。"
-            "三格都出現「✓ 已完成」就可以獲得。"
-        ),
+        "name": "柿子銀徽章",
+        "description": "完成「觀察、感受、體會」三格，就可以獲得。",
         "earned_description": "已獲得：你已經寫出事件、感受與體會了！",
-        "modal_title": "恭喜獲得松果銀徽章！",
-        "modal_text": "你已經寫出事件、感受，也說出從故事學到的道理。接下來可以寫一個生活裡做得到的小行動。",
+        "modal_title": "恭喜獲得柿子銀徽章！",
+        "modal_text": "你已經寫出事件、感受，也說出從故事學到的道理。",
     },
     "badge_90": {
         "id": "badge_90",
         "name": "松果金徽章",
-        "description": (
-            "四格都完成：觀察（誰做了什麼）、感受（心情與原因）、體會（學到什麼）、行動（下次要怎麼做）。"
-            "都出現「✓ 已完成」就可以獲得。"
-        ),
+        "description": "完成「觀察、感受、體會、行動」四格反思，就可以獲得。",
         "earned_description": "已獲得：你已經走完一整趟反思寫作！",
         "modal_title": "恭喜獲得松果金徽章！",
         "modal_text": "太棒了！你已經把觀察、感受、體會和行動都寫完了。",
@@ -175,12 +166,11 @@ def calculate_earned_badges(
     has_used_feedback_or_prompt: bool,
     stages_passed: Optional[Iterable[str]] = None,
 ) -> list[str]:
-    """Return badge IDs earned from start action + ORID stage progress.
+    """Experimental quality badges.
 
-    Badge IDs remain badge_30/60/90 for storage/UI assets, but unlock by:
-      badge_30 (銅): O passed
-      badge_60 (銀): O+R+I passed
-      badge_90 (金): O+R+I+D passed
+    badge_30 (bronze): O passed
+    badge_60 (silver): O+R+I passed
+    badge_90 (gold): O+R+I+D passed
     """
     earned: list[str] = []
 
@@ -196,6 +186,82 @@ def calculate_earned_badges(
         earned.append("badge_90")
 
     return earned
+
+
+def calculate_encouragement_badges(
+    *,
+    has_writing_content: bool,
+    has_used_feedback_or_prompt: bool,
+    has_used_sentence_frame: bool = False,
+    self_checked_stages: Optional[Iterable[str]] = None,
+    required_stages: Optional[Iterable[str]] = None,
+) -> list[str]:
+    """Control-group encouragement badges. They do not score writing quality.
+
+    badge_start: wrote something and used this group's help once.
+    badge_30: placed a sentence frame into the writing box once.
+    badge_60: every stage required this week has text and the student ticked it.
+    """
+    earned: list[str] = []
+
+    if has_writing_content and has_used_feedback_or_prompt:
+        earned.append("badge_start")
+    if has_used_sentence_frame:
+        earned.append("badge_30")
+
+    required = {str(item).strip().upper() for item in (required_stages or []) if str(item).strip()}
+    checked = {str(item).strip().upper() for item in (self_checked_stages or []) if str(item).strip()}
+    if required and required <= checked:
+        earned.append("badge_60")
+
+    return earned
+
+
+def encouragement_badges_from_writing(
+    writing_obj: dict | None,
+    *,
+    week: int,
+    used_help: bool,
+    live_text: str = "",
+) -> list[str]:
+    """Read ticks and sentence-frame use from the saved writing JSON."""
+    from app.content.week_plan import is_synthesis_week, writable_stages
+
+    obj = writing_obj if isinstance(writing_obj, dict) else {}
+    used_frame = bool(obj.get("used_sentence_frame"))
+    live = (live_text or "").strip()
+
+    if is_synthesis_week(week):
+        text = str(obj.get("synthesis_draft") or "").strip()
+        checked = ["ESSAY"] if text and obj.get("synthesis_self_check") else []
+        earned = calculate_encouragement_badges(
+            has_writing_content=bool(text or live),
+            has_used_feedback_or_prompt=used_help,
+            has_used_sentence_frame=used_frame,
+            self_checked_stages=checked,
+            required_stages=["ESSAY"],
+        )
+        return earned
+
+    required = list(writable_stages(week))
+    stages = obj.get("stages") if isinstance(obj.get("stages"), dict) else {}
+    checks = obj.get("self_checks") if isinstance(obj.get("self_checks"), dict) else {}
+    has_text = bool(live)
+    checked: list[str] = []
+    for stage in required:
+        stage_obj = stages.get(stage) if isinstance(stages.get(stage), dict) else {}
+        text = f"{stage_obj.get('d1') or ''}{stage_obj.get('d2') or ''}".strip()
+        if text:
+            has_text = True
+            if checks.get(stage):
+                checked.append(stage)
+    return calculate_encouragement_badges(
+        has_writing_content=has_text,
+        has_used_feedback_or_prompt=used_help,
+        has_used_sentence_frame=used_frame,
+        self_checked_stages=checked,
+        required_stages=required,
+    )
 
 
 def calculate_earned_synthesis_badges(

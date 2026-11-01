@@ -103,13 +103,18 @@ def orid_source_weeks_for_synthesis(week: int) -> tuple[int, ...]:
     return reference_weeks(week) if is_synthesis_week(week) else ()
 
 
-def badge_ids_available_for_week(week: int) -> tuple[str, ...]:
-    """Stage badges a student can newly earn in this week.
+def badge_ids_available_for_week(week: int, *, encouragement: bool = False) -> tuple[str, ...]:
+    """Badges this week can show.
 
-    Week 1 (O/R only): start + bronze. Week 2 (I/D): silver + gold, judged on
-    week 1 O/R together with this week's I/D. Full ORID weeks: all four.
-    Integration weeks: the four synthesis badges.
+    Experimental (`encouragement=False`) keeps the quality set: week 1 is
+    start + bronze, week 2 is silver + gold, full ORID weeks are all four,
+    and integration weeks are the four synthesis badges.
+    Control (`encouragement=True`) shows start, sentence frame, and week done.
     """
+    if not is_valid_week(week):
+        return ()
+    if encouragement:
+        return ("badge_start", "badge_30", "badge_60")
     if is_synthesis_week(week):
         return (
             "badge_synthesis_content",

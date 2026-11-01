@@ -9,6 +9,7 @@ import { WEEK_PLAN } from "@/lib/orid/week-flow";
 
 interface WeekProgress {
   earnedBadges: string[];
+  encouragement?: boolean;
 }
 
 async function fetchWeekProgress(week: number): Promise<WeekProgress | null> {
@@ -21,12 +22,17 @@ async function fetchWeekProgress(week: number): Promise<WeekProgress | null> {
     const session = await sessionRes.json();
     const sessionId: string | undefined = session?.id;
     if (!sessionId) return null;
+    const condition = String(session?.condition ?? "").trim().toLowerCase();
 
     const r = await fetch(`/api/orid/progress?session_id=${sessionId}&week=${week}`, {
       cache: "no-store",
     });
     if (!r.ok) return null;
-    return await r.json();
+    const progress = await r.json();
+    return {
+      ...progress,
+      encouragement: condition === "control" || condition === "template",
+    };
   } catch {
     return null;
   }
@@ -99,6 +105,7 @@ export function DashboardWeekGrid() {
                       coverThumb={coverThumb}
                       locked={locked}
                       earnedBadges={progress?.earnedBadges}
+                      encouragement={progress?.encouragement}
                     />
                   </li>
                 );

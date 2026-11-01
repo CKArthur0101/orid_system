@@ -14,6 +14,8 @@ interface BadgeDisplayProps {
   bookId?: string | null;
   /** Academic week; used when bookId omitted */
   week?: number | null;
+  /** Control group uses encouragement names for the same badge images. */
+  encouragement?: boolean;
   size?: number;
   className?: string;
 }
@@ -40,6 +42,7 @@ export function BadgeDisplay({
   badgeIds = BADGE_ORDER,
   bookId,
   week,
+  encouragement = false,
   size = 32,
   className,
 }: BadgeDisplayProps) {
@@ -91,7 +94,7 @@ export function BadgeDisplay({
       aria-label="反思徽章"
     >
       {badgeIds.map((id) => {
-        const config = getBadgeConfigForBook(id, bookId, week);
+        const config = getBadgeConfigForBook(id, bookId, week, encouragement);
         const earned = earnedSet.has(id);
         const isOpen = openTooltip === id;
         const imgBroken = brokenIds.has(id);

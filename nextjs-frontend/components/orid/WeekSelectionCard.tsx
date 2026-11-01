@@ -15,6 +15,8 @@ interface WeekSelectionCardProps {
   locked?: boolean;
   earnedBadges?: string[];
   stageStates?: Partial<Record<OridStageKey, StageState>>;
+  /** Control students count the encouragement badges, not the quality set. */
+  encouragement?: boolean;
 }
 
 function CardBody({
@@ -25,9 +27,10 @@ function CardBody({
   locked,
   earnedBadges,
   stageStates,
+  encouragement = false,
 }: WeekSelectionCardProps) {
   const thumbSrc = coverThumb ?? SYSTEM_ILLUSTRATIONS.reading;
-  const expectedBadgeIds = badgeIdsForWeek(week);
+  const expectedBadgeIds = badgeIdsForWeek(week, encouragement ? "encouragement" : "quality");
   const earnedBadgeSet = new Set(earnedBadges ?? []);
   const earnedBadgeCount = expectedBadgeIds.filter((id) => earnedBadgeSet.has(id)).length;
   const hasBadges = earnedBadgeCount > 0;

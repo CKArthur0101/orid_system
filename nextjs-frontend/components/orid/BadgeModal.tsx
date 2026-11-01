@@ -7,11 +7,12 @@ interface BadgeModalProps {
   badgeId: BadgeId;
   bookId?: string | null;
   week?: number | null;
+  encouragement?: boolean;
   onClose: () => void;
 }
 
-export function BadgeModal({ badgeId, bookId, week, onClose }: BadgeModalProps) {
-  const config = getBadgeConfigForBook(badgeId, bookId, week);
+export function BadgeModal({ badgeId, bookId, week, encouragement = false, onClose }: BadgeModalProps) {
+  const config = getBadgeConfigForBook(badgeId, bookId, week, encouragement);
   const [imgBroken, setImgBroken] = useState(false);
   if (!config) return null;
 
