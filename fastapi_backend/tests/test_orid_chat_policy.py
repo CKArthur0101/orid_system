@@ -1471,3 +1471,68 @@ async def test_genai_feedback_falls_back_when_structured_parse_hits_length_limit
     assert improved is None
     assert praise == "你有寫到阿松爺爺。"
     assert rubric == {}
+
+
+@pytest.mark.asyncio
+async def test_genai_feedback_failure_does_not_invent_a_pass(monkeypatch):
+    class FakeCompletions:
+        async def parse(self, **kwargs):
+            raise RuntimeError("content_filter")
+
+    fake_client = SimpleNamespace(
+        beta=SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=FakeCompletions(),
+            )
+        )
+    )
+
+    async def fake_chat_completion(messages, **kwargs):
+        raise RuntimeError("content_filter")
+
+    monkeypatch.setattr(orid, "client", fake_client)
+    monkeypatch.setattr(orid, "_chat_completion", fake_chat_completion)
+
+    ok, missing, suggestions, example, improved, praise, rubric = await orid._genai_feedback(
+        stage="O",
+        text="我覺得心情不好",
+        book_pack={"book_title": "阿松爺爺的柿子樹"},
+    )
+
+    assert ok is False
+    assert missing == []
+    assert suggestions == []
+    assert praise is None
+    assert rubric.get("feedback_unavailable") is True
+    blob = "\n".join([*(missing or []), *(suggestions or []), praise or ""])
+    assert "方向是對的" not in blob
+
+
+def test_hostile_history_is_left_out_of_the_next_model_call():
+    assert orid._omit_from_model_context("根本傻逼吧") is True
+    assert orid._omit_from_model_context("阿松爺爺把東西藏起來") is False
+
+
+def test_false_pass_guard_keeps_a_real_observation():
+    kept = orid._guard_experimental_stage_reply(
+        "O",
+        "阿松爺爺先在大家面前吃，後來把東西藏起來。",
+        "你有寫到阿松爺爺先吃再藏，方向是對的。",
+    )
+    replaced = orid._guard_experimental_stage_reply(
+        "O",
+        "我覺得心情不好",
+        "你有寫到「我覺得心情不好」，方向是對的。",
+    )
+    hostile = orid._guard_experimental_stage_reply(
+        "O",
+        "根本傻逼吧",
+        "你有寫到「根本傻逼吧」，方向是對的。",
+    )
+
+    assert kept is None
+    assert replaced is not None
+    assert "方向是對的" not in "\n".join([replaced[0], *replaced[1], *replaced[2]])
+    assert "心情" in replaced[0]
+    assert hostile is not None
+    assert "傻逼" not in "\n".join([hostile[0], *hostile[1], *hostile[2]])

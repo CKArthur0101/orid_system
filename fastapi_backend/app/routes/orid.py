@@ -1758,6 +1758,42 @@ def _has_feedback_book_grounding_issue(missing: list[str]) -> bool:
 
 
 
+_HOSTILE_CONTEXT_TOKENS = ("傻逼", "煞筆", "沙雕", "操你", "幹你", "去死", "廢物", "白痴", "白癡")
+
+
+def _omit_from_model_context(text: str) -> bool:
+    """Drop hostile lines so the next model call is not blocked with them."""
+    compact = re.sub(r"[\s，。！？、,.!?\-—_「」\"']", "", text or "")
+    return any(token in compact for token in _HOSTILE_CONTEXT_TOKENS)
+
+
+def _guard_experimental_stage_reply(
+    stage: str,
+    student_text: str,
+    visible: str,
+) -> Optional[tuple[str, list[str], list[str]]]:
+    """Replace a false pass. A normal model reply is left unchanged."""
+    text = student_text or ""
+    blob = visible or ""
+    false_pass = ("方向是對的" in blob) or ("方向對了" in blob)
+    if _omit_from_model_context(text) and (false_pass or _omit_from_model_context(blob)):
+        return (
+            "你有把想法寫出來，可是這個詞不太好。",
+            ["我們先換成比較溫和的講法。"],
+            ["故事裡是誰做了什麼？"],
+        )
+    stage_u = (stage or "").strip().upper()
+    feeling = any(word in text for word in ("覺得", "心情", "難過", "開心", "生氣", "害怕"))
+    story = any(word in text for word in ("爺爺", "阿松", "同學", "樹", "藏", "砍", "吃", "跑", "說", "他", "她"))
+    if stage_u == "O" and false_pass and feeling and not story:
+        return (
+            "你寫到的是心情。",
+            ["觀察段要寫故事裡的人做了什麼。"],
+            ["是誰做了什麼事？"],
+        )
+    return None
+
+
 def _draft_praise_line(text: str, stage: str) -> str:
     """稱讚要看得出有讀到原文（人／事／感受／行動片語），避免空泛句。"""
     raw = (text or "").strip()
@@ -2147,7 +2183,7 @@ def _feedback_from_obj(
         missing = [f"我還看不出{stage_name}這一段的兩個核心意思是否都已經說清楚。"]
         suggestions = ["請用自己的話再說清楚一個最重要的地方。"]
     if not praise:
-        praise = _draft_praise_line(text, stage)
+        praise = None
 
     if improved and len(improved) > 120:
         improved = None
@@ -2316,8 +2352,7 @@ async def _genai_feedback(
     )
 
     if client is None:
-        ok2, miss2, sug2, ex2, pr2 = _control_feedback(stage, text)
-        return ok2, miss2, sug2, ex2, None, pr2, {}
+        return False, [], [], None, None, None, {"feedback_unavailable": True}
 
     kwargs = _openai_call_kwargs(
         messages=[
@@ -2409,8 +2444,8 @@ async def _genai_feedback(
     except Exception:
         logger.warning("writing feedback manual json parse failed")
 
-    ok2, miss2, sug2, ex2, pr2 = _control_feedback(stage, text)
-    return ok2, miss2, sug2, ex2, None, pr2, {}
+    # The model did not return a usable reply. Do not invent a quality card.
+    return False, [], [], None, None, None, {"feedback_unavailable": True}
 
 
 def _ensure_orid_writing_v1(week: int) -> dict[str, Any]:
@@ -3283,6 +3318,7 @@ async def writing_coach_chat(
         f"{str(getattr(message, 'text', '') or '').strip()[:500]}"
         for message in msgs[:-1][-4:]
         if str(getattr(message, "text", "") or "").strip()
+        and not _omit_from_model_context(str(getattr(message, "text", "") or ""))
     )
 
     coach_turn_seed = f"{user.id}:{session.id}:{len(msgs)}"
@@ -3343,8 +3379,10 @@ async def writing_coach_chat(
             )
             mark_timing("feedback_evaluation", evaluation_started)
 
-        fb_ok, fb_missing, fb_sug = await _enforce_feedback_book_grounding(
-            body,
+        feedback_unavailable = bool((fb_rubric or {}).get("feedback_unavailable"))
+        if not feedback_unavailable:
+            fb_ok, fb_missing, fb_sug = await _enforce_feedback_book_grounding(
+                body,
             book_pack,
             stage_ctx,
             bool(fb_ok),
@@ -3393,11 +3431,25 @@ async def writing_coach_chat(
         coach_meta["interaction_intent"] = str(
             fb_rubric.get("interaction_intent") or "draft_attempt"
         )
+        if genai_path and not feedback_unavailable:
+            guarded = _guard_experimental_stage_reply(
+                stage_ctx,
+                body,
+                "\n".join([str(fb_praise or ""), *[str(item) for item in fb_missing], *[str(item) for item in fb_sug]]),
+            )
+            if guarded is not None:
+                fb_ok = False
+                fb_praise, fb_missing, fb_sug = guarded
 
         # ── Experimental-group completion path (genai, fb_ok=True) ──────────
         # Hard constraint: only runs when genai_path is True.
         # Control-group paths MUST NOT enter here.
-        if genai_path and fb_ok:
+        if feedback_unavailable:
+            fb_ok = False
+            ai_reply = "我這次沒有看完，請再按一次取得回饋。"
+            coach_meta["feedback_unavailable"] = True
+            coach_meta["student_feedback_kind"] = "retry"
+        elif genai_path and fb_ok:
             # 1) Persist full research snapshot BEFORE clearing student-facing fields
             research_snapshot: dict[str, Any] = {
                 "missing": list(fb_missing),
@@ -3712,6 +3764,8 @@ async def writing_coach_chat(
 
             rubric_level_estimate = (fb_rubric or {}).get("rubric_level_estimate")
             rubric_focus = (fb_rubric or {}).get("rubric_focus")
+            if (fb_rubric or {}).get("feedback_unavailable"):
+                rubric_level_estimate = None
             if rubric_level_estimate is not None and (
                 isinstance(rubric_level_estimate, dict) or str(rubric_level_estimate).strip()
             ):

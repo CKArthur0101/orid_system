@@ -147,8 +147,8 @@ def test_genai_feedback_builder_changes_contract_by_stage():
     assert "帶台灣國小五年級寫作的方式說話" in o_system
     assert "不要出現「老師」" in o_system
     assert "不必刻意縮短" in o_system
-    assert "多給一點肯定" in o_system
-    assert "不可藉鼓勵把主題帶往別的方向" in o_system
+    assert "只評這一輪學生原文" in o_system
+    assert "不要說「方向是對的」" in o_system
     assert "寫作評量員" not in o_system
     assert "寫作教練" not in o_system
     assert "唯一通過標準" in o_system

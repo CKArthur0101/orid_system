@@ -1,4 +1,6 @@
-FROM node:20-bookworm
+# Node 20 is end-of-life and missed the 2026-10-21 security release.
+# 22.23.4 is the patched 22 line. Python and Postgres are unchanged.
+FROM node:22.23.4-bookworm
 
 # Set the working directory
 WORKDIR /app
