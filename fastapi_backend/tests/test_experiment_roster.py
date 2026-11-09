@@ -13,15 +13,17 @@ from fastapi_users.exceptions import InvalidPasswordException
 
 from app.routes.admin import validate_admin_password
 from app.routes.orid import _reject_student_flow_for_teacher
-from app.routes.teacher import _get_allowed_class_ids
+from app.routes.teacher import _get_allowed_class_ids, _require_research_observer
 from app.schemas import UserCreate
 from app.services.experiment_cohort import (
     CONTROL_CODES,
     EXPERIMENT_CLASS_CODES,
     EXPERIMENT_TEACHERS,
     EXPERIMENTAL_CODES,
+    OBSERVER_LOGIN,
     classify_roster_rows,
     cohort_password_errors,
+    is_research_observer,
     one_time_password_errors,
     teacher_student_password,
     strict_password_errors,
@@ -53,6 +55,22 @@ def _roster() -> list[tuple[str, str, str, str]]:
         for seat in range(1, count + 1):
             rows.append((f"學生{class_no}-{seat}", "5", class_no, str(seat)))
     return rows
+
+
+def test_research_observer_is_only_allclass_login():
+    assert OBSERVER_LOGIN == "allclass"
+    assert is_research_observer(SimpleNamespace(email="allclass")) is True
+    assert is_research_observer(SimpleNamespace(email="AllClass")) is True
+    assert is_research_observer(SimpleNamespace(email="501teacher")) is False
+    assert is_research_observer(SimpleNamespace(email="admin")) is False
+    assert is_research_observer(SimpleNamespace(email=None)) is False
+
+
+def test_require_research_observer_blocks_homeroom_teachers():
+    _require_research_observer(SimpleNamespace(email="allclass"))
+    with pytest.raises(HTTPException) as exc:
+        _require_research_observer(SimpleNamespace(email="501teacher"))
+    assert exc.value.status_code == 403
 
 
 def test_roster_creates_246_students_skips_507_and_adds_8_teachers():

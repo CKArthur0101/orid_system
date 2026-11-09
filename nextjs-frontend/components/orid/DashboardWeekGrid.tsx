@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { WeekSelectionCard } from "@/components/orid/WeekSelectionCard";
-import { ORID_UNLOCKED_WEEKS } from "@/lib/orid-week-access";
+import { oridWeekIsAccessible } from "@/lib/orid-week-access";
 import { getWeekBookMeta } from "@/lib/orid-system-art";
 import { getBookWeekArt } from "@/lib/orid-book-art";
 import { WEEK_PLAN } from "@/lib/orid/week-flow";
@@ -42,7 +42,7 @@ const BOOK_UNITS = [1, 2, 3] as const;
 
 function weeksInBook(bookUnit: number): number[] {
   return Object.values(WEEK_PLAN)
-    .filter((plan) => plan.bookUnit === bookUnit)
+    .filter((plan) => plan.bookUnit === bookUnit && !plan.isDemo)
     .map((plan) => plan.week)
     .sort((a, b) => a - b);
 }
@@ -60,7 +60,7 @@ export function DashboardWeekGrid() {
   const [progressMap, setProgressMap] = useState<Record<number, WeekProgress>>({});
 
   useEffect(() => {
-    const accessible = weeks.filter((w) => w <= ORID_UNLOCKED_WEEKS);
+    const accessible = weeks.filter((w) => oridWeekIsAccessible(w));
     for (const w of accessible) {
       fetchWeekProgress(w).then((data) => {
         if (data) {
@@ -89,7 +89,7 @@ export function DashboardWeekGrid() {
             </h3>
             <ul className={weekGridClass(bookWeeks.length)}>
               {bookWeeks.map((w) => {
-                const locked = w > ORID_UNLOCKED_WEEKS;
+                const locked = !oridWeekIsAccessible(w);
                 const bookArt = getBookWeekArt(w);
                 const bookMeta = getWeekBookMeta(w);
                 const title = bookArt?.title ?? bookMeta?.title;

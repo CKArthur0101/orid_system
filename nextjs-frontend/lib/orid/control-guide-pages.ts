@@ -1,4 +1,4 @@
-import { getWeekPlan } from "@/lib/orid/week-flow";
+import { contentBookUnitFromWeek, getWeekPlan } from "@/lib/orid/week-flow";
 
 type StageKey = "O" | "R" | "I" | "D";
 
@@ -126,12 +126,12 @@ function interleavePages(orid: string[][], sel: string[][], stage: StageKey): Co
   return pages;
 }
 
-/** Weeks 1-3 -> book1; 4-5 -> book2; 6-7 -> book3 (see week-flow WEEK_PLAN). */
+/** Weeks 0/1-3 -> book1; 4-5 -> book2; 6-7 -> book3 (see week-flow WEEK_PLAN). */
 export function controlGuideBookIdFromWeek(week: number): ControlGuideBookId {
-  if (!Number.isFinite(week) || week < 1) return "generic";
+  if (!Number.isFinite(week) || week < 0) return "generic";
   const plan = getWeekPlan(week);
   if (!plan) return "generic";
-  const unit = plan.bookUnit;
+  const unit = contentBookUnitFromWeek(week);
   if (unit === 1) return "book1";
   if (unit === 2) return "book2";
   if (unit === 3) return "book3";

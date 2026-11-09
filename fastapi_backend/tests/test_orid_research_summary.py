@@ -21,6 +21,7 @@ from app.models import (
     User,
 )
 from app.services.orid_research_summary import (
+    clear_revision_debounce_state,
     compute_content_fingerprint,
     compute_word_count,
     normalize_writing_text,
@@ -127,12 +128,19 @@ class TestComputeContentFingerprint:
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_autosave_service_only_refreshes_word_count(monkeypatch):
+async def test_autosave_service_counts_content_change_as_revision(monkeypatch):
+    from app.services.orid_research_summary import (
+        clear_revision_debounce_state,
+        compute_content_fingerprint,
+    )
+
+    clear_revision_debounce_state()
+    baseline = compute_content_fingerprint(json.loads(_writing_v1(1, "舊內容")), week=1)
     summary = SimpleNamespace(
         word_count=3,
         save_count=4,
         revision_count=2,
-        content_fingerprint="explicit-save-baseline",
+        content_fingerprint=baseline,
         is_submitted=False,
         guide_use_count=5,
     )
@@ -152,21 +160,94 @@ async def test_autosave_service_only_refreshes_word_count(monkeypatch):
         AsyncMock(return_value=summary),
     )
     writing_obj = json.loads(_writing_v1(1, "自動儲存的新內容"))
+    user_id = uuid.uuid4()
+    session_id = uuid.uuid4()
 
     await sync_autosave_word_count(
         db,
-        user_id=uuid.uuid4(),
+        user_id=user_id,
         week=1,
-        session_id=uuid.uuid4(),
+        session_id=session_id,
         writing_obj=writing_obj,
     )
 
     assert summary.word_count == len("自動儲存的新內容")
     assert summary.save_count == 4
-    assert summary.revision_count == 2
-    assert summary.content_fingerprint == "explicit-save-baseline"
+    assert summary.revision_count == 3
+    assert summary.content_fingerprint == compute_content_fingerprint(writing_obj, week=1)
     assert summary.is_submitted is False
     assert summary.guide_use_count == 5
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_autosave_revision_is_debounced_within_15_seconds(monkeypatch):
+    from app.services.orid_research_summary import (
+        clear_revision_debounce_state,
+        compute_content_fingerprint,
+    )
+
+    clear_revision_debounce_state()
+    summary = SimpleNamespace(
+        word_count=0,
+        save_count=0,
+        revision_count=0,
+        content_fingerprint=None,
+        is_submitted=False,
+        guide_use_count=0,
+    )
+
+    class NestedTransaction:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    db = MagicMock()
+    db.begin_nested.return_value = NestedTransaction()
+    db.flush = AsyncMock()
+    monkeypatch.setattr(
+        "app.services.orid_research_summary.get_or_create_summary",
+        AsyncMock(return_value=summary),
+    )
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(
+        "app.services.orid_research_summary.time.monotonic",
+        lambda: clock["t"],
+    )
+    user_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+
+    async def autosave(text: str) -> None:
+        await sync_autosave_word_count(
+            db,
+            user_id=user_id,
+            week=1,
+            session_id=session_id,
+            writing_obj=json.loads(_writing_v1(1, text)),
+        )
+
+    await autosave("版本一")  # baseline, no revision
+    assert summary.revision_count == 0
+    assert summary.content_fingerprint == compute_content_fingerprint(
+        json.loads(_writing_v1(1, "版本一")), week=1
+    )
+
+    clock["t"] = 1001.0
+    await autosave("版本二")
+    assert summary.revision_count == 1
+
+    clock["t"] = 1005.0
+    await autosave("版本三")  # within 15s debounce
+    assert summary.revision_count == 1
+    assert summary.content_fingerprint == compute_content_fingerprint(
+        json.loads(_writing_v1(1, "版本三")), week=1
+    )
+
+    clock["t"] = 1017.0
+    await autosave("版本四")  # outside debounce window
+    assert summary.revision_count == 2
 
 # ---------------------------------------------------------------------------
 # API tests — save_intent → is_submitted / save_count / revision_count
@@ -200,9 +281,16 @@ async def _fetch_summary(db_session, *, user_id, week, session_id) -> OridWeekly
 
 @pytest.mark.asyncio(loop_scope="function")
 @pytest.mark.parametrize("condition", ["experimental", "control"])
-async def test_autosave_is_shared_and_does_not_pollute_research_actions(
-    condition, test_client, db_session, authenticated_user
+async def test_autosave_counts_revisions_without_bumping_save_count(
+    condition, test_client, db_session, authenticated_user, monkeypatch
 ):
+    clear_revision_debounce_state()
+    clock = {"t": 5000.0}
+    monkeypatch.setattr(
+        "app.services.orid_research_summary.time.monotonic",
+        lambda: clock["t"],
+    )
+
     user = authenticated_user["user"]
     user.orid_condition = condition
     reading = Reading(title=f"自動儲存測試-{condition}", content="{}")
@@ -229,37 +317,42 @@ async def test_autosave_is_shared_and_does_not_pollute_research_actions(
         )
         assert response.status_code == 200, response.text
 
-    await save("自動版本一", "autosave")
-    await save("自動版本二", "autosave")
+    await save("自動版本一", "autosave")  # baseline
+    await save("自動版本二", "autosave")  # first content change → revision 1
     summary = await _fetch_summary(db_session, user_id=user.id, week=1, session_id=session.id)
     assert summary is not None
     assert summary.word_count == len("自動版本二")
     assert summary.save_count == 0
-    assert summary.revision_count == 0
-    assert summary.content_fingerprint is None
+    assert summary.revision_count == 1
+    assert summary.content_fingerprint == compute_content_fingerprint(
+        json.loads(_writing_v1(1, "自動版本二")), week=1
+    )
     assert summary.is_submitted is False
     assert summary.guide_use_count == 0
 
-    # The first explicit action establishes the research baseline.
+    # Explicit save of the same text: save_count only.
     await save("自動版本二", "draft")
-    baseline = compute_content_fingerprint(
-        json.loads(_writing_v1(1, "自動版本二")), week=1
-    )
     assert summary.save_count == 1
-    assert summary.revision_count == 0
-    assert summary.content_fingerprint == baseline
+    assert summary.revision_count == 1
 
-    # A newer autosave updates protected content and word_count only.
+    # Autosave change inside debounce window: fingerprint moves, no extra revision.
+    clock["t"] = 5005.0
     await save("學生主動修改後", "autosave")
     assert summary.word_count == len("學生主動修改後")
     assert summary.save_count == 1
-    assert summary.revision_count == 0
-    assert summary.content_fingerprint == baseline
+    assert summary.revision_count == 1
 
+    # Same text via draft: save_count only.
     await save("學生主動修改後", "draft")
     assert summary.save_count == 2
     assert summary.revision_count == 1
     assert summary.is_submitted is False
+
+    # Outside debounce, another autosave change counts again.
+    clock["t"] = 5021.0
+    await save("再改一次", "autosave")
+    assert summary.revision_count == 2
+    assert summary.save_count == 2
 
 
 @pytest.mark.asyncio(loop_scope="function")
@@ -444,13 +537,13 @@ async def test_research_overview_groups_by_condition(test_client, db_session):
     ph = PasswordHelper()
     teacher = User(
         id=uuid.uuid4(),
-        email="research_teacher@test.local",
+        email="allclass",
         hashed_password=ph.hash("TeacherPass1"),
         is_active=True,
         is_superuser=False,
         is_verified=True,
         role="teacher",
-        display_name="研究教師",
+        display_name="全班觀察",
     )
     exp_student = User(
         id=uuid.uuid4(),

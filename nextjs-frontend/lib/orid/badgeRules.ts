@@ -3,7 +3,7 @@
  * Tooltip and modal copy is centralised here.
  */
 
-import { bookUnitFromWeek, isSynthesisWeek, writableStages } from "@/lib/orid/week-flow";
+import { contentBookUnitFromWeek, isSynthesisWeek, writableStages } from "@/lib/orid/week-flow";
 
 export type BadgeId =
   | "badge_start"
@@ -135,8 +135,8 @@ export function resolveBadgeBookId(
   if (key === "book1" || key === "1") return "book1";
   if (key === "book2" || key === "2") return "book2";
   if (key === "book3" || key === "3") return "book3";
-  if (typeof week === "number" && Number.isFinite(week) && week >= 1) {
-    const unit = bookUnitFromWeek(week);
+  if (typeof week === "number" && Number.isFinite(week) && week >= 0) {
+    const unit = contentBookUnitFromWeek(week);
     if (unit === 1) return "book1";
     if (unit === 2) return "book2";
     if (unit === 3) return "book3";
@@ -151,7 +151,7 @@ export function badgeIdsForWeek(
   week: number,
   mode: "quality" | "encouragement" = "quality",
 ): BadgeId[] {
-  if (!Number.isFinite(week) || week < 1) return [];
+  if (!Number.isFinite(week) || week < 0) return [];
   if (mode === "encouragement") return ["badge_start", "badge_30", "badge_60"];
   if (isSynthesisWeek(week)) return SYNTHESIS_BADGE_ORDER;
   const stages = new Set(writableStages(week));

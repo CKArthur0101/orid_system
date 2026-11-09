@@ -67,10 +67,12 @@ export async function POST(request: Request) {
 
     const authPayload = await authResponse.json().catch(() => null);
     if (!authResponse.ok) {
-      return loginRedirect(
-        "auth",
-        backendErrorDetail(authPayload) ?? "帳號或密碼不正確，請再試一次。",
-      );
+      const detail = backendErrorDetail(authPayload)?.trim() || "";
+      const message =
+        detail.includes("登入暫停") || authResponse.status === 429
+          ? "登入暫停，請稍後再試。"
+          : "帳號或密碼不正確，請再試一次。";
+      return loginRedirect("auth", message);
     }
 
     const accessToken = String(authPayload?.access_token ?? "").trim();

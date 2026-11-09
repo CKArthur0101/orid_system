@@ -1,9 +1,11 @@
 /**
- * Seven-week intervention plan (student-facing week numbers 1–7).
+ * Seven-week intervention plan (student-facing week numbers 1–7),
+ * plus practice week 0 for briefing / system walkthrough.
  *
  * Book 1 is split into three weeks: O/R, then I/D, then the integrated piece.
  * Books 2 and 3 keep one ORID week followed by one integration week.
  *
+ *   0  系統練習（阿松爺爺的柿子樹） O・R・I・D  — not research
  *   1  阿松爺爺的柿子樹            O・R
  *   2  阿松爺爺的柿子樹            I・D   (reads week 1 O/R)
  *   3  阿松爺爺的柿子樹（整合寫作）       (reads week 1 O/R + week 2 I/D)
@@ -21,7 +23,10 @@ export type WeekKind = "orid" | "synthesis";
 export interface WeekPlan {
   week: number;
   kind: WeekKind;
-  /** 1-based book unit: 1 柿子樹, 2 朱家, 3 獅子. */
+  /**
+   * Session book unit. Formal: 1 柿子樹, 2 朱家, 3 獅子.
+   * Practice week uses 0 so its session never merges with weeks 1–3.
+   */
   bookUnit: number;
   /** Stages the student writes this week (empty for integration weeks). */
   stages: OridStageKey[];
@@ -29,13 +34,25 @@ export interface WeekPlan {
   referenceWeeks: number[];
   /** Home-card subtitle for split weeks. */
   subtitle?: string;
+  /** Practice / briefing sandbox (excluded from research weeks). */
+  isDemo?: boolean;
 }
 
 export const ORID_TOTAL_WEEKS = 7;
+export const DEMO_WEEK = 0;
 
 const ALL_STAGES: OridStageKey[] = ["O", "R", "I", "D"];
 
 export const WEEK_PLAN: Record<number, WeekPlan> = {
+  [DEMO_WEEK]: {
+    week: DEMO_WEEK,
+    kind: "orid",
+    bookUnit: 0,
+    stages: ALL_STAGES,
+    referenceWeeks: [],
+    subtitle: "O・R・I・D 系統練習",
+    isDemo: true,
+  },
   1: { week: 1, kind: "orid", bookUnit: 1, stages: ["O", "R"], referenceWeeks: [], subtitle: "O・R 觀察與感受" },
   2: { week: 2, kind: "orid", bookUnit: 1, stages: ["I", "D"], referenceWeeks: [1], subtitle: "I・D 詮釋與決定" },
   3: { week: 3, kind: "synthesis", bookUnit: 1, stages: [], referenceWeeks: [1, 2] },
@@ -44,6 +61,17 @@ export const WEEK_PLAN: Record<number, WeekPlan> = {
   6: { week: 6, kind: "orid", bookUnit: 3, stages: ALL_STAGES, referenceWeeks: [] },
   7: { week: 7, kind: "synthesis", bookUnit: 3, stages: [], referenceWeeks: [6] },
 };
+
+export function isDemoWeek(week: number): boolean {
+  return week === DEMO_WEEK;
+}
+
+/** Materials / art book unit (1–3). Practice reuses book 1 without sharing sessions. */
+export function contentBookUnitFromWeek(week: number): number {
+  const unit = WEEK_PLAN[week]?.bookUnit;
+  if (unit === 0) return 1;
+  return unit ?? 1;
+}
 
 export function getWeekPlan(week: number): WeekPlan | undefined {
   return WEEK_PLAN[week];
@@ -81,7 +109,7 @@ export function stageSourceWeek(w: number, stage: OridStageKey): number | null {
   return null;
 }
 
-/** 1-based book unit: weeks 1–3 → 1, 4–5 → 2, 6–7 → 3. */
+/** Session book unit (practice week → 0; formal weeks → 1–3). */
 export function bookUnitFromWeek(w: number): number {
   return WEEK_PLAN[w]?.bookUnit ?? 1;
 }

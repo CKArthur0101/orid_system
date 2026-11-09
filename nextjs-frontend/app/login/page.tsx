@@ -10,10 +10,17 @@ const showRegisterLink =
 const INPUT_CLASS =
   "h-11 w-full rounded-xl border border-amber-200 bg-amber-50/50 px-3 text-base text-amber-950 placeholder:text-amber-400 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-400/30";
 
+const AUTH_FAIL_MESSAGE = "帳號或密碼不正確，請再試一次。";
+const LOGIN_PAUSED_MESSAGE = "登入暫停，請稍後再試。";
+
 function loginErrorMessage(error: string | undefined, detail: string | undefined): string | null {
   if (!error) return null;
   if (error === "validation") return "請確認帳號與密碼格式是否正確。";
-  if (error === "auth") return detail?.trim() || "帳號或密碼不正確，請再試一次。";
+  if (error === "auth") {
+    const text = detail?.trim() || "";
+    if (text === LOGIN_PAUSED_MESSAGE || text.includes("登入暫停")) return LOGIN_PAUSED_MESSAGE;
+    return AUTH_FAIL_MESSAGE;
+  }
   if (error === "session") return "登入狀態已失效，請重新登入。";
   if (error === "server") return "系統暫時無法登入，請稍後再試。";
   return null;

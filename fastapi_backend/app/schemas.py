@@ -332,7 +332,7 @@ class WritingCoachChatRequest(BaseModel):
     stage: str = Field(..., pattern="^(O|R|I|D|ALL)$")
     draft: str = Field("d1", pattern="^(d1|d2)$")
     source: str = Field(..., pattern="^(free_text|feedback_button|synthesis_feedback)$")
-    week: int = Field(1, ge=1, le=7)
+    week: int = Field(1, ge=0, le=7)
     save_feedback: bool = True
     # Week-2 synthesis_feedback only (optional; omitted = legacy behavior)
     synthesis_phase: str | None = None
@@ -392,7 +392,7 @@ class PromptUsageResponse(BaseModel):
 
 class ControlCheckRequest(BaseModel):
     session_id: UUID
-    week: int = Field(..., ge=1, le=7)
+    week: int = Field(..., ge=0, le=7)
     stage: str = Field(..., pattern="^(O|R|I|D|ALL)$")
     student_text: str = ""
 

@@ -17,13 +17,17 @@ type StageProgress = {
 const STAGE_SHORT: Record<MissionStageKey, string> = { O: "觀察", R: "感受", I: "意義", D: "行動" };
 const CN_COUNT = ["零", "一", "兩", "三", "四"];
 
+function weekLabel(weekNum: number): string {
+  return weekNum === 0 ? "系統練習" : `第 ${weekNum} 週`;
+}
+
 function oridWeekSubtitle(weekNum: number): string {
   const stages = writableStages(weekNum);
   if (stages.length === 4 || stages.length === 0) {
-    return `第 ${weekNum} 週｜完成四個反思小任務`;
+    return `${weekLabel(weekNum)}｜完成四個反思小任務`;
   }
   const names = stages.map((s) => STAGE_SHORT[s]).join("、");
-  return `第 ${weekNum} 週｜完成${CN_COUNT[stages.length] ?? stages.length}個反思小任務（${names}）`;
+  return `${weekLabel(weekNum)}｜完成${CN_COUNT[stages.length] ?? stages.length}個反思小任務（${names}）`;
 }
 
 export function OridWeekHero({
@@ -59,7 +63,7 @@ export function OridWeekHero({
   const focusTheme = ORID_STAGE_THEME[focusStage];
   const subtitle = isOridWeek(weekNum)
     ? oridWeekSubtitle(weekNum)
-    : `第 ${weekNum} 週｜先寫作（左）→ 回饋夥伴（右）`;
+    : `${weekLabel(weekNum)}｜先寫作（左）→ 回饋夥伴（右）`;
   const hasBookArt = !!getBookWeekArt(weekNum);
 
   return (
@@ -128,7 +132,7 @@ export function OridWeekHero({
               ) : null}
             </div>
           </div>
-          {isOridWeek(weekNum) || !compact ? (
+          {progress.length > 0 ? (
             <div
                 className={[
                 "mt-1 min-w-0 overflow-x-auto rounded-xl border border-amber-100 bg-white/85 xl:mt-1.5",

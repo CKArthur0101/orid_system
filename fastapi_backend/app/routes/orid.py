@@ -136,11 +136,13 @@ from app.services.orid_writing_store import ensure_orid_writing_obj, upsert_feed
 from app.services.control_check import silent_stage_checks, silent_synthesis_checks
 from app.services.action_pass import cap_synthesis_action_level, experimental_action_override
 from app.content.week_plan import (
+    DEMO_WEEK,
     STAGE_KEYS,
     TOTAL_WEEKS,
     WEEK_PLAN,
     badge_ids_available_for_week,
     book_unit_for_week,
+    content_book_unit_for_week,
     is_synthesis_week,
     is_valid_week,
     orid_source_weeks_for_synthesis,
@@ -148,6 +150,7 @@ from app.content.week_plan import (
     task_type_for_week,
     writable_stages,
 )
+from app.content.week_access import is_week_open_for_students
 # ----------------------------
 # OpenAI settings (from env)
 # ----------------------------
@@ -759,7 +762,7 @@ _BOOK1_PACK: dict[str, Any] = BOOK_PACK_BY_WEEK[1]
 _BOOK2_PACK: dict[str, Any] = BOOK_PACK_BY_WEEK[3]
 _BOOK_PACK_BY_UNIT: dict[int, dict[str, Any]] = {1: _BOOK1_PACK, 2: _BOOK2_PACK, 3: _BOOK3_PACK}
 BOOK_PACK_BY_WEEK = {
-    week: _BOOK_PACK_BY_UNIT[plan.book_unit] for week, plan in WEEK_PLAN.items()
+    week: _BOOK_PACK_BY_UNIT[content_book_unit_for_week(week)] for week in WEEK_PLAN
 }
 
 
@@ -785,11 +788,19 @@ DEFAULT_READING_CONTENT_BY_WEEK = {
 }
 DEFAULT_ORID_CONDITION = os.getenv("ORID_DEFAULT_CONDITION", "genai")
 
-_WEEK_RANGE_DETAIL = f"week must be 1..{TOTAL_WEEKS}"
+_WEEK_RANGE_DETAIL = f"week must be {DEMO_WEEK} (practice) or 1..{TOTAL_WEEKS}"
+_WEEK_LOCKED_DETAIL = "此週次尚未開放"
+
+
+def _assert_student_week_allowed(week: int) -> None:
+    if not is_valid_week(week):
+        raise HTTPException(status_code=400, detail=_WEEK_RANGE_DETAIL)
+    if not is_week_open_for_students(week):
+        raise HTTPException(status_code=403, detail=_WEEK_LOCKED_DETAIL)
 
 
 def book_unit_from_week(week: int) -> int:
-    """週 1–3 → 1，4–5 → 2，6–7 → 3（同一本書共用一個 session）。"""
+    """週 0（練習）→ 獨立單元；1–3 → 1，4–5 → 2，6–7 → 3。"""
     if not is_valid_week(week):
         raise HTTPException(status_code=400, detail=_WEEK_RANGE_DETAIL)
     return book_unit_for_week(week)
@@ -1354,7 +1365,7 @@ async def _load_recent_session_messages(
 # ----------------------------
 class WritingAssistRequest(BaseModel):
     session_id: UUID
-    week: int = Field(..., ge=1, le=TOTAL_WEEKS)
+    week: int = Field(..., ge=0, le=TOTAL_WEEKS)
     stage: str = Field(..., pattern="^(O|R|I|D)$")
     draft: str = Field("d1", pattern="^(d1|d2)$")
     base_text: Optional[str] = None
@@ -1420,7 +1431,7 @@ async def llm_generate_writing(
 # ----------------------------
 class WritingFeedbackRequest(BaseModel):
     session_id: UUID
-    week: int = Field(..., ge=1, le=TOTAL_WEEKS)
+    week: int = Field(..., ge=0, le=TOTAL_WEEKS)
     stage: str = Field(..., pattern="^(O|R|I|D)$")
     draft: str = Field("d1", pattern="^(d1|d2)$")
     text: Optional[str] = None
@@ -2681,13 +2692,14 @@ async def create_session(
 
 @router.post("/sessions/ensure", response_model=OridSessionRead)
 async def ensure_session(
-    week: int = Query(..., ge=1, le=TOTAL_WEEKS),
+    week: int = Query(..., ge=0, le=TOTAL_WEEKS),
     condition: Optional[str] = Query(default=None),
     force_new: bool = Query(False, description="true 時強制建立新 session；false 取最近一次（同書單元）。"),
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
     _reject_student_flow_for_teacher(user)
+    _assert_student_week_allowed(week)
     title = DEFAULT_READING_TITLE_TEMPLATE.format(week=week)
     bu = book_unit_from_week(week)
     user_email = getattr(user, "email", None)
@@ -2793,11 +2805,12 @@ async def ensure_session(
 @router.get("/progress", response_model=OridProgressRead)
 async def get_orid_progress(
     session_id: UUID = Query(...),
-    week: int = Query(..., ge=1, le=TOTAL_WEEKS),
+    week: int = Query(..., ge=0, le=TOTAL_WEEKS),
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
     """Return persisted badges for the student's session/week."""
+    _assert_student_week_allowed(week)
     r = await db.execute(select(OridSession).filter(OridSession.id == session_id))
     session = r.scalars().first()
     if not session or session.user_id != user.id:
@@ -2884,12 +2897,13 @@ async def record_prompt_usage(
 ):
     _reject_student_flow_for_teacher(user)
     """Count a guide use and award encouragement badges. No quality score."""
+    week = int(data.week)
+    _assert_student_week_allowed(week)
     r = await db.execute(select(OridSession).filter(OridSession.id == data.session_id))
     session = r.scalars().first()
     if not session or session.user_id != user.id:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    week = data.week
     existing_stmt = select(func.coalesce(func.sum(OridBadgeEvent.prompt_view_count), 0)).where(
         OridBadgeEvent.user_id == user.id,
         OridBadgeEvent.session_id == session.id,
@@ -3155,8 +3169,7 @@ async def control_check(
         raise HTTPException(status_code=403, detail="這個檢查只給控制組使用。")
 
     week = data.week
-    if not is_valid_week(week):
-        raise HTTPException(status_code=400, detail=f"week must be between 1 and {TOTAL_WEEKS}")
+    _assert_student_week_allowed(week)
 
     stage = (data.stage or "O").strip().upper()
     text = (data.student_text or "").strip()
@@ -3231,6 +3244,7 @@ async def writing_coach_chat(
     user: User = Depends(current_active_user),
 ):
     _reject_student_flow_for_teacher(user)
+    _assert_student_week_allowed(int(data.week))
     request_started = time.perf_counter()
     timings_ms: dict[str, int] = {}
 
@@ -3993,6 +4007,7 @@ async def writing_assist(
     user: User = Depends(current_active_user),
 ):
     _reject_student_flow_for_teacher(user)
+    _assert_student_week_allowed(int(data.week))
     r = await db.execute(select(OridSession).filter(OridSession.id == data.session_id))
     session = r.scalars().first()
     if not session or session.user_id != user.id:
@@ -4030,6 +4045,7 @@ async def writing_feedback(
     user: User = Depends(current_active_user),
 ):
     _reject_student_flow_for_teacher(user)
+    _assert_student_week_allowed(int(data.week))
     r = await db.execute(select(OridSession).filter(OridSession.id == data.session_id))
     session = r.scalars().first()
     if not session or session.user_id != user.id:
@@ -4229,8 +4245,7 @@ async def create_writing(
     if session.reading_id != data.reading_id:
         raise HTTPException(status_code=400, detail="reading_id does not match session.reading_id")
 
-    if not is_valid_week(data.week):
-        raise HTTPException(status_code=400, detail=f"week must be between 1 and {TOTAL_WEEKS}")
+    _assert_student_week_allowed(int(data.week))
 
     if not data.content.strip():
         raise HTTPException(status_code=400, detail="content is empty")

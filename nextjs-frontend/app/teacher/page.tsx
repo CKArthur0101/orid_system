@@ -23,7 +23,9 @@ import {
 } from "@/components/ui/select";
 import { TeacherDashboardHeaderDecor } from "@/components/orid/TeacherDashboardDecor";
 import { ResearchAnalyticsPanel } from "@/components/teacher/ResearchAnalyticsPanel";
+import { isResearchObserverLogin } from "@/lib/orid/research-observer";
 import { ORID_TOTAL_WEEKS } from "@/lib/orid/week-flow";
+import { useAuthenticatedUser } from "@/lib/use-authenticated-user";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 type ClassInfo = {
@@ -194,6 +196,8 @@ function studentLabel(s: { student_display_name?: string | null; student_email: 
 
 // ── Main page ──────────────────────────────────────────────────────────────────
 export default function TeacherDashboardPage() {
+  const auth = useAuthenticatedUser("teacher");
+  const canViewResearch = auth.status === "ready" && isResearchObserverLogin(auth.user.email);
   const [classes, setClasses] = useState<ClassInfo[]>([]);
   const [classId, setClassId] = useState("");
   const [week, setWeek] = useState(1);
@@ -213,6 +217,12 @@ export default function TeacherDashboardPage() {
   const [chatMessages, setChatMessages] = useState<OridChatLogRow[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!canViewResearch && mainTab === "research") {
+      setMainTab("overview");
+    }
+  }, [canViewResearch, mainTab]);
 
   // On mount: fetch classes then immediately fetch overview with the first class
   useEffect(() => {
@@ -501,7 +511,11 @@ export default function TeacherDashboardPage() {
           onValueChange={(v) => setMainTab(v as "overview" | "tracking" | "research")}
           className="relative z-10 space-y-6"
         >
-          <TabsList className="grid w-full max-w-lg grid-cols-3 border border-amber-200/80 bg-amber-100/70 p-1">
+          <TabsList
+            className={`grid w-full max-w-lg border border-amber-200/80 bg-amber-100/70 p-1 ${
+              canViewResearch ? "grid-cols-3" : "grid-cols-2"
+            }`}
+          >
             <TabsTrigger
               value="overview"
               className="rounded-lg data-[state=active]:bg-gradient-to-r data-[state=active]:from-amber-800 data-[state=active]:to-orange-900 data-[state=active]:text-amber-50 data-[state=active]:shadow-sm"
@@ -514,12 +528,14 @@ export default function TeacherDashboardPage() {
             >
               個人追蹤
             </TabsTrigger>
-            <TabsTrigger
-              value="research"
-              className="rounded-lg data-[state=active]:bg-gradient-to-r data-[state=active]:from-amber-800 data-[state=active]:to-orange-900 data-[state=active]:text-amber-50 data-[state=active]:shadow-sm"
-            >
-              研究分析
-            </TabsTrigger>
+            {canViewResearch ? (
+              <TabsTrigger
+                value="research"
+                className="rounded-lg data-[state=active]:bg-gradient-to-r data-[state=active]:from-amber-800 data-[state=active]:to-orange-900 data-[state=active]:text-amber-50 data-[state=active]:shadow-sm"
+              >
+                研究分析
+              </TabsTrigger>
+            ) : null}
           </TabsList>
 
           {/* ===== TAB: 班級概覽 ===== */}
@@ -1075,16 +1091,18 @@ export default function TeacherDashboardPage() {
             )}
           </TabsContent>
 
-          {/* ===== TAB: 研究分析 ===== */}
-          <TabsContent value="research" className="space-y-6">
-            {classId ? (
-              <ResearchAnalyticsPanel classId={classId} />
-            ) : (
-              <div className="flex h-48 items-center justify-center text-amber-800/60">
-                請先選擇班級
-              </div>
-            )}
-          </TabsContent>
+          {/* ===== TAB: 研究分析（僅 allclass 觀察帳） ===== */}
+          {canViewResearch ? (
+            <TabsContent value="research" className="space-y-6">
+              {classId ? (
+                <ResearchAnalyticsPanel classId={classId} />
+              ) : (
+                <div className="flex h-48 items-center justify-center text-amber-800/60">
+                  請先選擇班級
+                </div>
+              )}
+            </TabsContent>
+          ) : null}
         </Tabs>
       )}
     </div>

@@ -43,7 +43,7 @@ from app.schemas import (
     ResearchCompletionDistribution,
     ResearchStudentRow,
 )
-from app.services.experiment_cohort import teacher_student_password
+from app.services.experiment_cohort import is_research_observer, teacher_student_password
 from app.users import current_active_user
 from app.content.week_plan import (
     TOTAL_WEEKS,
@@ -254,6 +254,12 @@ async def _get_allowed_class_ids(db: AsyncSession, user: User) -> set[UUID]:
         select(TeacherClassAssignment.class_id).where(TeacherClassAssignment.teacher_id == user.id)
     )
     return set(q.scalars().all())
+
+
+def _require_research_observer(user: User) -> None:
+    """研究分析 is only for the allclass observer account."""
+    if not is_research_observer(user):
+        raise HTTPException(status_code=403, detail="Research analysis requires observer access")
 
 
 def _count_completed_stages(content: str | None) -> int:
@@ -1160,6 +1166,7 @@ async def teacher_research_overview(
     db: AsyncSession,
     user: User,
 ) -> TeacherResearchOverview:
+    _require_research_observer(user)
     class_ids = await _get_allowed_class_ids(db, user)
     if class_id not in class_ids:
         raise HTTPException(status_code=403, detail="Class not assigned")
@@ -1323,6 +1330,7 @@ async def export_research_csv(
 ):
     """Download a research CSV (one row per student × week) for the
     "研究分析" tab. Separate from /classes/{class_id}/export (monitoring)."""
+    _require_research_observer(user)
     class_ids = await _get_allowed_class_ids(db, user)
     if class_id not in class_ids:
         raise HTTPException(status_code=403, detail="Class not assigned")

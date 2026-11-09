@@ -151,8 +151,8 @@
 | 欄位 | 意義 |
 |------|------|
 | `word_count` | 寫作投入（字數／字元規則以實作為準） |
-| `save_count` | 草稿儲存歷程 |
-| `revision_count` | 內容修正行為 |
+| `save_count` | 明確草稿／繳交儲存次數（不含 autosave） |
+| `revision_count` | 內容修正行為（含 autosave；內容指紋變更後計一次；autosave 約 15 秒去噪） |
 | `guide_use_count` | 引導資源使用（實驗組：AI 回饋次數等；控制組：固定提示瀏覽等） |
 | `badge_count` | 階段性完成／參與 |
 | `is_submitted` | 任務完成率 |

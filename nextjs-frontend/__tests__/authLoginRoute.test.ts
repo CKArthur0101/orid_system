@@ -56,7 +56,10 @@ describe("POST /api/auth/login", () => {
     const response = await POST(loginRequest());
 
     expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toContain("/login?error=auth");
+    const location = response.headers.get("location") ?? "";
+    expect(location).toContain("/login?error=auth");
+    expect(decodeURIComponent(location)).toContain("帳號或密碼不正確，請再試一次。");
+    expect(location).not.toContain("LOGIN_BAD_CREDENTIALS");
     expect(response.headers.get("set-cookie")).toBeNull();
   });
 

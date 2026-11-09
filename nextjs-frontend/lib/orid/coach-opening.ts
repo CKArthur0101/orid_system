@@ -1,5 +1,5 @@
 import { partnerVoice } from "@/lib/orid-book-art";
-import { bookUnitFromWeek } from "@/lib/orid/week-flow";
+import { contentBookUnitFromWeek } from "@/lib/orid/week-flow";
 
 /**
  * Coach opening message for odd-week ORID writing sessions.
@@ -34,7 +34,7 @@ export function buildCoachOpeningMessage(bookPack: BookPackForOpening | null, we
   const title = (bookPack?.book_title ?? "").trim();
   const book = title ? `《${title}》` : "這本書";
   const voice = partnerVoice(week);
-  const isBook1 = bookUnitFromWeek(week) === 1;
+  const isBook1 = contentBookUnitFromWeek(week) === 1;
 
   // Story hook: prefer first key_event, fall back to first core_theme
   const events = bookPack?.key_events ?? [];

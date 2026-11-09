@@ -16,7 +16,7 @@ import { getBookWeekArt, partnerVoice } from "@/lib/orid-book-art";
 import { buildCoachOpeningMessage } from "@/lib/orid/coach-opening";
 import { buildSynthesisOpeningMessage } from "@/lib/orid/synthesis-opening";
 import {
-  bookUnitFromWeek,
+  contentBookUnitFromWeek,
   isOridWeek,
   isStageWritable,
   isSynthesisWeek,
@@ -38,7 +38,7 @@ import {
   DRAFT_SAVE_ENCOURAGEMENT,
   STAGE_MISSION_META,
 } from "@/lib/orid-mission-copy";
-import { ORID_UNLOCKED_WEEKS } from "@/lib/orid-week-access";
+import { oridWeekIsAccessible } from "@/lib/orid-week-access";
 import { ORID_STAGE_THEME } from "@/lib/orid-stage-theme";
 import { parseFeedbackNarration } from "@/lib/parse-feedback-narration";
 
@@ -529,7 +529,7 @@ function refreshLegacyCoachWelcome(prev: ChatMsg[], bookPack: BookPackV1 | null,
 }
 
 function displayPartnerText(text: string, week: number): string {
-  if (bookUnitFromWeek(week) === 1) return text;
+  if (contentBookUnitFromWeek(week) === 1) return text;
   const name = partnerVoice(week).name;
   return text
     .replace(/我是你的松果小夥伴\s*🌰?/g, `我是${name}`)
@@ -566,7 +566,7 @@ export default function WeekBookPage() {
   const weekNum = Number(weekStr);
 
   if (!weekStr || Number.isNaN(weekNum)) return <div className="p-6 text-lg">週次格式不正確</div>;
-  if (weekNum < 1 || weekNum > ORID_UNLOCKED_WEEKS)
+  if (!oridWeekIsAccessible(weekNum))
     return <div className="p-6 text-lg">此週次尚未開放</div>;
 
   const [loading, setLoading] = useState(false);
@@ -955,7 +955,9 @@ export default function WeekBookPage() {
   }, [synthesisWeek, referenceDisplay, refWeeks.length, writingData, weekNum]);
   const showStageFeedbackButtons = oridWeek;
   const showSynthesisColumn = synthesisWeek && w2Phase === "synthesis";
-  const showOridLeftPanel = !showSynthesisColumn || !oridPanelCollapsed;
+  // Synthesis weeks always keep the left panel so prior O/R/I/D stay selectable.
+  // "收起四段" only switches that panel to a compact four-card list.
+  const showSynthesisStageList = showSynthesisColumn && oridPanelCollapsed;
 
   useEffect(() => {
     if (!showSynthesisColumn) {
@@ -1011,7 +1013,7 @@ export default function WeekBookPage() {
 
   const mainGridClass = showSynthesisColumn
     ? oridPanelCollapsed
-      ? "orid-synthesis-grid grid min-h-0 w-full flex-1 grid-cols-1 gap-2 overflow-hidden max-md:gap-2.5 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] md:gap-2 lg:gap-3"
+      ? "orid-synthesis-grid grid min-h-0 w-full flex-1 grid-cols-1 gap-2 overflow-hidden max-md:gap-2.5 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.15fr)_minmax(0,1fr)] md:gap-2 lg:gap-3"
       : "orid-synthesis-grid grid min-h-0 w-full flex-1 grid-cols-1 gap-2 overflow-hidden max-md:gap-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,1fr)] md:gap-2 lg:gap-3"
     : "grid min-h-0 w-full flex-1 grid-cols-1 gap-2.5 overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-3";
   const badgeMode = isControlConditionValue(condition) ? "encouragement" : "quality";
@@ -1111,7 +1113,7 @@ export default function WeekBookPage() {
       badgeIds: visibleBadgeIds,
       encouragement: badgeMode === "encouragement",
       week: weekNum,
-      bookId: `book${bookUnitFromWeek(weekNum)}`,
+      bookId: `book${contentBookUnitFromWeek(weekNum)}`,
     };
     const dispatchBadgeDisplay = () => {
       window.dispatchEvent(new CustomEvent("orid:badge-display", { detail }));
@@ -1122,9 +1124,7 @@ export default function WeekBookPage() {
   }, [badgeMode, earnedBadges, visibleBadgeIds, weekNum]);
 
   const aiPartnerShellClass = showSynthesisColumn
-    ? oridPanelCollapsed
-      ? "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[50vh] md:order-2 md:col-start-2 md:row-start-1 md:h-full"
-      : "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[50vh] md:order-3 md:col-start-3 md:row-start-1 md:h-full"
+    ? "kid-shell order-3 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[50vh] md:order-3 md:col-start-3 md:row-start-1 md:h-full"
     : "kid-shell order-3 flex min-h-[32vh] w-full min-w-0 flex-col overflow-hidden lg:order-2 lg:col-start-2 lg:h-full lg:min-h-0 lg:row-start-1";
 
   const isControl = isControlConditionValue(condition);
@@ -1965,8 +1965,8 @@ export default function WeekBookPage() {
   return (
     <div className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden">
       <div className={mainGridClass}>
-        {showOridLeftPanel ? (
         <div className="order-1 flex min-h-0 w-full min-w-0 flex-col gap-2.5 overflow-hidden md:gap-1 lg:gap-2.5 md:h-full md:min-h-0">
+          {showSynthesisStageList ? null : (
           <OridWeekHero
             className="w-full"
             weekNum={weekNum}
@@ -1982,6 +1982,7 @@ export default function WeekBookPage() {
             restartDisabled={loading}
             compact={showSynthesisColumn}
           />
+          )}
 
           <div className="kid-shell flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden max-md:min-h-[40vh]">
             {synthesisWeek ? (
@@ -1995,10 +1996,10 @@ export default function WeekBookPage() {
                   <button
                     type="button"
                     className="kid-btn-3d-secondary !min-h-[30px] !px-3 !py-1 !text-xs"
-                    onClick={() => setOridPanelCollapsedPersist(true)}
+                    onClick={() => setOridPanelCollapsedPersist(!oridPanelCollapsed)}
                   >
-                    <span aria-hidden>←</span>
-                    收起四段
+                    <span aria-hidden>{oridPanelCollapsed ? "→" : "←"}</span>
+                    {oridPanelCollapsed ? "展開單段" : "收起為清單"}
                   </button>
                 ) : null}
               </div>
@@ -2013,6 +2014,41 @@ export default function WeekBookPage() {
             ) : null}
 
             <div className="flex min-h-0 w-full flex-1 flex-col p-2 md:p-1.5 lg:p-2">
+              {showSynthesisStageList ? (
+                <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-0.5">
+                  <p className="shrink-0 text-[11px] leading-snug text-amber-900/70">
+                    這裡是前面寫好的四段。可直接複製接到右邊整合寫作。
+                  </p>
+                  {(["O", "R", "I", "D"] as StageKey[]).map((sk) => {
+                    const theme = ORID_STAGE_THEME[sk];
+                    const text = String(oridDisplay.stages[sk]?.d1 ?? "").trim();
+                    return (
+                      <div
+                        key={sk}
+                        className={[
+                          "flex shrink-0 flex-col gap-1.5 rounded-xl border-2 border-t-4 bg-white p-2 shadow-sm",
+                          theme.topBorder,
+                        ].join(" ")}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className={`text-sm font-bold ${theme.titleColor}`}>{STAGE_TITLES[sk]}</div>
+                          <button
+                            type="button"
+                            className="kid-btn-3d-secondary shrink-0 !min-h-[30px] !px-2.5 !py-0.5 !text-[11px]"
+                            title={`把${STAGE_TITLES[sk]}接到整合寫作後面`}
+                            onClick={() => appendStageToSynthesis(sk)}
+                          >
+                            {STAGE_COPY_LABELS[sk]}
+                          </button>
+                        </div>
+                        <div className="max-h-28 overflow-y-auto whitespace-pre-wrap rounded-lg bg-[#fffcf7] px-2 py-1.5 text-[13px] leading-snug text-amber-950/90">
+                          {text || "（這段還沒有寫作內容）"}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
               <div
                 className={[
                   "relative flex min-h-0 w-full flex-1 flex-col rounded-2xl border-2 border-t-4 bg-white shadow-sm transition-all",
@@ -2146,6 +2182,7 @@ export default function WeekBookPage() {
                   </div>
                 </div>
               </div>
+              )}
             </div>
 
             <div className="shrink-0 border-t border-amber-100 px-3 pb-2 pt-2 md:px-2 md:pb-1.5 md:pt-1.5 lg:px-3 lg:pb-2.5">
@@ -2207,15 +2244,9 @@ export default function WeekBookPage() {
             </div>
           </div>
         </div>
-        ) : null}
 
         {showSynthesisColumn ? (
-          <div
-            className={[
-              "kid-shell order-2 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[30vh] md:order-2 md:col-span-1 md:row-start-1 md:h-full",
-              oridPanelCollapsed ? "md:col-start-1" : "md:col-start-2",
-            ].join(" ")}
-          >
+          <div className="kid-shell order-2 flex min-h-0 w-full min-w-0 flex-col overflow-hidden max-md:min-h-[30vh] md:order-2 md:col-span-1 md:col-start-2 md:row-start-1 md:h-full">
             <div className="kid-section-header-partner flex items-center justify-between gap-2 px-2 py-2 md:px-2.5 md:py-2 lg:px-4 lg:py-3">
               <span className="text-xs font-bold text-amber-950 md:text-sm">整合寫作</span>
               <div className="flex items-center gap-1.5">
@@ -2227,32 +2258,8 @@ export default function WeekBookPage() {
                 >
                   {writingSubmitting ? "儲存中…" : "儲存"}
                 </button>
-                <button
-                  type="button"
-                  className="kid-btn-3d-secondary shrink-0 !min-h-[32px] !px-3 !py-1 !text-xs"
-                  onClick={() => setOridPanelCollapsedPersist(!oridPanelCollapsed)}
-                >
-                  <span aria-hidden>{oridPanelCollapsed ? "→" : "←"}</span>
-                  {oridPanelCollapsed ? "展開四段" : "收起四段"}
-                </button>
               </div>
             </div>
-            {oridPanelCollapsed ? (
-              <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-amber-100 px-2 py-1.5">
-                <span className="text-[10px] text-amber-900/65 sm:text-xs">接到後面：</span>
-                {(["O", "R", "I", "D"] as StageKey[]).map((sk) => (
-                  <button
-                    key={sk}
-                    type="button"
-                    className="rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 text-[11px] font-bold text-amber-950 hover:bg-amber-100"
-                    title={`把${STAGE_TITLES[sk]}段落接到整合寫作後面`}
-                    onClick={() => appendStageToSynthesis(sk)}
-                  >
-                    {STAGE_COPY_LABELS[sk]}
-                  </button>
-                ))}
-              </div>
-            ) : null}
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2">
               <textarea
                 className="min-h-0 w-full flex-1 resize-none rounded-xl border border-amber-100 bg-[#fffcf7] p-2.5 text-base leading-relaxed outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-300/30 md:p-3 md:text-sm lg:text-base"
@@ -2295,9 +2302,6 @@ export default function WeekBookPage() {
                 >
                   {autosaveStatusText}
                 </div>
-              ) : null}
-              {copyFlash && oridPanelCollapsed ? (
-                <div className="text-xs font-medium text-emerald-700">{copyFlash}</div>
               ) : null}
               {isControl ? null : (
                 <button

@@ -20,15 +20,17 @@ from app.routes import orid
 def test_total_weeks_and_validity():
     assert TOTAL_WEEKS == 7
     assert all(is_valid_week(w) for w in range(1, 8))
-    assert not is_valid_week(0)
+    assert is_valid_week(0)  # practice / briefing sandbox
     assert not is_valid_week(8)
 
 
 def test_book_units():
     assert [book_unit_for_week(w) for w in range(1, 8)] == [1, 1, 1, 2, 2, 3, 3]
+    assert book_unit_for_week(0) == 0
     assert list(weeks_in_book_unit(1)) == [1, 2, 3]
     assert list(weeks_in_book_unit(2)) == [4, 5]
     assert list(weeks_in_book_unit(3)) == [6, 7]
+    assert list(weeks_in_book_unit(0)) == [0]
 
 
 def test_week_kinds():
@@ -93,9 +95,20 @@ def test_book_packs_follow_the_unit():
     assert titles[1] == titles[2] == titles[3] == "阿松爺爺的柿子樹"
     assert titles[4] == titles[5] == "朱家故事"
     assert titles[6] == titles[7] == "不會寫字的獅子"
+    assert orid.BOOK_PACK_BY_WEEK[0]["book_title"] == "阿松爺爺的柿子樹"
     assert orid.prior_orid_weeks_for_synthesis(3) == (1, 2)
     assert orid.prior_orid_week_for_synthesis(3) == 2
     assert orid.prior_orid_weeks_for_synthesis(5) == (4,)
+
+
+def test_demo_week_is_full_orid_practice():
+    from app.content.week_access import is_week_open_for_students
+    from app.content.week_plan import content_book_unit_for_week, writable_stages
+
+    assert writable_stages(0) == ("O", "R", "I", "D")
+    assert content_book_unit_for_week(0) == 1
+    assert is_week_open_for_students(0) is True
+    assert is_week_open_for_students(1) is False
 
 
 def test_stored_reading_with_old_week_numbering_is_remapped():

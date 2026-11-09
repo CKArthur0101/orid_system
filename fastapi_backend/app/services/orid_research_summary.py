@@ -14,6 +14,8 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import threading
+import time
 from typing import Any, Optional
 from uuid import UUID
 
@@ -29,6 +31,69 @@ from app.models import OridWeeklyResearchSummary, StudentClassMembership, User
 logger = logging.getLogger(__name__)
 
 _STAGE_KEYS = ("O", "R", "I", "D")
+
+# Autosave can fire many times while a student types. Count at most one
+# revision_count bump per key inside this window (monotonic seconds).
+REVISION_DEBOUNCE_SECONDS = 15.0
+_revision_debounce_lock = threading.Lock()
+_last_revision_mono: dict[tuple[str, int, str], float] = {}
+
+
+def _revision_debounce_key(user_id: UUID, week: int, session_id: UUID) -> tuple[str, int, str]:
+    return (str(user_id), int(week), str(session_id))
+
+
+def clear_revision_debounce_state() -> None:
+    """Test helper: reset in-process debounce timestamps."""
+    with _revision_debounce_lock:
+        _last_revision_mono.clear()
+
+
+def _revision_debounce_allows(user_id: UUID, week: int, session_id: UUID, *, now: float | None = None) -> bool:
+    key = _revision_debounce_key(user_id, week, session_id)
+    moment = time.monotonic() if now is None else now
+    with _revision_debounce_lock:
+        last = _last_revision_mono.get(key)
+        if last is None:
+            return True
+        return (moment - last) >= REVISION_DEBOUNCE_SECONDS
+
+
+def _mark_revision_counted(user_id: UUID, week: int, session_id: UUID, *, now: float | None = None) -> None:
+    key = _revision_debounce_key(user_id, week, session_id)
+    moment = time.monotonic() if now is None else now
+    with _revision_debounce_lock:
+        _last_revision_mono[key] = moment
+
+
+def _apply_content_change_revision(
+    summary: OridWeeklyResearchSummary,
+    *,
+    user_id: UUID,
+    week: int,
+    session_id: UUID,
+    writing_obj: dict[str, Any] | None,
+    debounce: bool,
+) -> None:
+    """Update fingerprint; bump revision_count when content changed.
+
+    First non-empty baseline sets the fingerprint without counting. Later
+    changes bump revision_count. When ``debounce`` is True (autosave), bumps
+    are limited to once per REVISION_DEBOUNCE_SECONDS per user/week/session.
+    Explicit draft/submit skips debounce so intentional saves still count.
+    """
+    fingerprint = compute_content_fingerprint(writing_obj, week)
+    previous = summary.content_fingerprint
+    if previous is None:
+        summary.content_fingerprint = fingerprint
+        return
+    if fingerprint == previous:
+        return
+    summary.content_fingerprint = fingerprint
+    if debounce and not _revision_debounce_allows(user_id, week, session_id):
+        return
+    summary.revision_count = (summary.revision_count or 0) + 1
+    _mark_revision_counted(user_id, week, session_id)
 
 
 def normalize_writing_text(text: Optional[str]) -> str:
@@ -82,7 +147,7 @@ def compute_word_count(writing_obj: dict | None, week: int) -> int:
 
 def compute_content_fingerprint(writing_obj: dict | None, week: int) -> str:
     """Hash of the concatenated normalized text, used only to detect whether
-    the student's saved content changed since the last save (revision_count).
+    content changed since the last counted baseline (revision_count).
     Never exposed via API/CSV."""
     if is_synthesis_week(week):
         parts = [
@@ -166,24 +231,25 @@ async def bump_save_and_maybe_revision(
     session_id: UUID,
     writing_obj: dict[str, Any] | None,
 ) -> None:
-    """Call on every writing save (draft or submit).
+    """Call on every explicit writing save (draft or submit).
 
     Always bumps `save_count` and refreshes `word_count`. Bumps
-    `revision_count` only when the normalized full text differs from the
-    fingerprint saved last time (no semantic diffing, just changed/unchanged).
+    `revision_count` when the normalized full text differs from the last
+    fingerprint (no semantic diffing). Explicit saves are not debounced.
     """
     try:
         async with db.begin_nested():
             summary = await get_or_create_summary(
                 db, user_id=user_id, week=week, session_id=session_id
             )
-            fingerprint = compute_content_fingerprint(writing_obj, week)
-            if (
-                summary.content_fingerprint is not None
-                and fingerprint != summary.content_fingerprint
-            ):
-                summary.revision_count = (summary.revision_count or 0) + 1
-            summary.content_fingerprint = fingerprint
+            _apply_content_change_revision(
+                summary,
+                user_id=user_id,
+                week=week,
+                session_id=session_id,
+                writing_obj=writing_obj,
+                debounce=False,
+            )
             summary.word_count = compute_word_count(writing_obj, week)
             summary.save_count = (summary.save_count or 0) + 1
             await db.flush()
@@ -201,15 +267,26 @@ async def sync_autosave_word_count(
     session_id: UUID,
     writing_obj: dict[str, Any] | None,
 ) -> None:
-    """Refresh the latest word count without recording a student action.
+    """Autosave: refresh word_count and count content changes as revisions.
 
-    Autosave must not touch save/revision counters or the research fingerprint.
-    The fingerprint remains the baseline from the last explicit draft/submit.
+    Because students rarely press explicit save when autosave is on,
+    ``revision_count`` follows the same change definition as draft/submit.
+    Bumps are debounced to at most once per REVISION_DEBOUNCE_SECONDS so
+    continuous typing does not inflate the counter. ``save_count`` is not
+    touched by autosave.
     """
     try:
         async with db.begin_nested():
             summary = await get_or_create_summary(
                 db, user_id=user_id, week=week, session_id=session_id
+            )
+            _apply_content_change_revision(
+                summary,
+                user_id=user_id,
+                week=week,
+                session_id=session_id,
+                writing_obj=writing_obj,
+                debounce=True,
             )
             summary.word_count = compute_word_count(writing_obj, week)
             await db.flush()

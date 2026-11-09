@@ -45,6 +45,12 @@ OBSERVER_LOGIN = "allclass"
 OBSERVER_NAME = "全班觀察"
 
 
+def is_research_observer(user) -> bool:
+    """True for the cross-class observer login that may open 研究分析."""
+    login = str(getattr(user, "email", None) or "").strip().lower()
+    return login == OBSERVER_LOGIN.lower()
+
+
 def demo_login(class_code: str) -> str:
     return f"{class_code}demo"
 

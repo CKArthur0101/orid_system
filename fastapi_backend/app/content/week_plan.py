@@ -18,6 +18,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 TOTAL_WEEKS = 7
+# Practice / briefing sandbox. Uses book-1 materials but its own book_unit so
+# sessions never merge with formal weeks 1–3.
+DEMO_WEEK = 0
+DEMO_BOOK_UNIT = 0
 STAGE_KEYS: tuple[str, ...] = ("O", "R", "I", "D")
 
 
@@ -31,6 +35,7 @@ class WeekPlan:
 
 
 WEEK_PLAN: dict[int, WeekPlan] = {
+    DEMO_WEEK: WeekPlan(DEMO_WEEK, "orid", DEMO_BOOK_UNIT, STAGE_KEYS, ()),
     1: WeekPlan(1, "orid", 1, ("O", "R"), ()),
     2: WeekPlan(2, "orid", 1, ("I", "D"), (1,)),
     3: WeekPlan(3, "synthesis", 1, (), (1, 2)),
@@ -39,6 +44,20 @@ WEEK_PLAN: dict[int, WeekPlan] = {
     6: WeekPlan(6, "orid", 3, STAGE_KEYS, ()),
     7: WeekPlan(7, "synthesis", 3, (), (6,)),
 }
+
+
+def is_demo_week(week: int | None) -> bool:
+    return isinstance(week, int) and week == DEMO_WEEK
+
+
+def content_book_unit_for_week(week: int) -> int:
+    """Book materials unit (1–3). Demo reuses book 1 art/text without sharing sessions."""
+    plan = WEEK_PLAN.get(week)
+    if plan is None:
+        return 1
+    if plan.book_unit == DEMO_BOOK_UNIT:
+        return 1
+    return plan.book_unit
 
 
 def is_valid_week(week: int | None) -> bool:
@@ -128,3 +147,8 @@ def badge_ids_available_for_week(week: int, *, encouragement: bool = False) -> t
     if stages == {"I", "D"}:
         return ("badge_60", "badge_90")
     return ("badge_start", "badge_30", "badge_60", "badge_90")
+
+
+def formal_weeks() -> list[int]:
+    """Research weeks only (excludes the practice sandbox)."""
+    return [w for w in range(1, TOTAL_WEEKS + 1) if w in WEEK_PLAN]

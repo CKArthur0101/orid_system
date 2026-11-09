@@ -1,4 +1,4 @@
-import { bookUnitFromWeek, getWeekPlan } from "@/lib/orid/week-flow";
+import { contentBookUnitFromWeek, getWeekPlan, isDemoWeek } from "@/lib/orid/week-flow";
 
 type BookWeekArt = {
   scene: string;
@@ -46,7 +46,7 @@ const BOOK_ART: Record<number, BookArtSet> = {
 function buildWeekArt(week: number): BookWeekArt | undefined {
   const plan = getWeekPlan(week);
   if (!plan) return undefined;
-  const art = BOOK_ART[plan.bookUnit];
+  const art = BOOK_ART[contentBookUnitFromWeek(week)];
   if (!art) return undefined;
   const synthesis = plan.kind === "synthesis";
   const scene =
@@ -55,22 +55,27 @@ function buildWeekArt(week: number): BookWeekArt | undefined {
       : synthesis
         ? art.synthesisScene
         : art.oridScene;
+  const title = isDemoWeek(week)
+    ? `${art.title}（系統練習）`
+    : synthesis
+      ? `${art.title}（整合寫作）`
+      : art.title;
   return {
     scene,
     helper: art.helper,
     persimmonBullet: art.bullet,
     coverThumb: scene,
-    title: synthesis ? `${art.title}（整合寫作）` : art.title,
+    title,
     alt: week === 2 ? "阿松爺爺捧著一籃柿子" : synthesis ? `${art.title}整合寫作插圖` : `${art.title}故事插圖`,
   };
 }
 
 export const BOOK_WEEK_ART: Record<number, BookWeekArt | undefined> = Object.fromEntries(
-  [1, 2, 3, 4, 5, 6, 7].map((w) => [w, buildWeekArt(w)]),
+  [0, 1, 2, 3, 4, 5, 6, 7].map((w) => [w, buildWeekArt(w)]),
 );
 
 export function partnerVoice(week: number): { name: string; hello: string; thinking: string } {
-  const unit = bookUnitFromWeek(week);
+  const unit = contentBookUnitFromWeek(week);
   if (unit === 3) {
     return { name: "小獅子", hello: "你好！我是小獅子", thinking: "小獅子正在想…" };
   }

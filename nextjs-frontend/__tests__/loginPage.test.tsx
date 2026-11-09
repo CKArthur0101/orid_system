@@ -39,9 +39,10 @@ describe("Login Page", () => {
     expect(screen.getByText("登入狀態已失效，請重新登入。")).toBeInTheDocument();
   });
 
-  it("shows the backend authentication detail", async () => {
+  it("shows a Chinese message when credentials are wrong", async () => {
     await renderLoginPage({ error: "auth", detail: "LOGIN_BAD_CREDENTIALS" });
 
-    expect(screen.getByText("LOGIN_BAD_CREDENTIALS")).toBeInTheDocument();
+    expect(screen.getByText("帳號或密碼不正確，請再試一次。")).toBeInTheDocument();
+    expect(screen.queryByText("LOGIN_BAD_CREDENTIALS")).not.toBeInTheDocument();
   });
 });

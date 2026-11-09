@@ -1,4 +1,4 @@
-import { getWeekPlan } from "@/lib/orid/week-flow";
+import { contentBookUnitFromWeek, getWeekPlan, isDemoWeek } from "@/lib/orid/week-flow";
 
 /** System-level illustration paths (forest reflection journey theme). */
 export const SYSTEM_ILLUSTRATIONS = {
@@ -46,12 +46,16 @@ export type WeekBookMeta = { title?: string; coverThumb?: string; accentColor?: 
 /** Per-week book metadata derived from the week plan. Weeks without a plan show a placeholder. */
 export function getWeekBookMeta(week: number): WeekBookMeta {
   const plan = getWeekPlan(week);
-  const book = plan ? BOOK_META[plan.bookUnit] : undefined;
+  const book = plan ? BOOK_META[contentBookUnitFromWeek(week)] : undefined;
   if (!plan || !book) return {};
   const synthesis = plan.kind === "synthesis";
   const week2Scene = "/images/orid/week1/week2-id-scene.png";
   return {
-    title: synthesis ? `${book.title}（整合寫作）` : book.title,
+    title: isDemoWeek(week)
+      ? `${book.title}（系統練習）`
+      : synthesis
+        ? `${book.title}（整合寫作）`
+        : book.title,
     coverThumb: week === 2 ? week2Scene : synthesis ? book.synthesisThumb : book.oridThumb,
     accentColor: book.accentColor,
     subtitle: plan.subtitle,
