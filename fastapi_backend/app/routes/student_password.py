@@ -6,7 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_async_session
 from app.models import User
-from app.services.experiment_cohort import one_time_password_errors
+from app.services.experiment_cohort import (
+    is_password_ui_test_account,
+    one_time_password_errors,
+)
 from app.services.experiment_import import user_is_experiment_cohort
 from app.users import current_active_user
 from fastapi_users.password import PasswordHelper
@@ -31,6 +34,8 @@ def _role(user: User) -> str:
 async def _eligible(db: AsyncSession, user: User) -> bool:
     if _role(user) != "student":
         return False
+    if is_password_ui_test_account(user):
+        return True
     return await user_is_experiment_cohort(db, user)
 
 

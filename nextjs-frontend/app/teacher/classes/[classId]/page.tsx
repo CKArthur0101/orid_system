@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { use, useEffect, useMemo, useState } from "react";
-import { ORID_TOTAL_WEEKS } from "@/lib/orid/week-flow";
+import { DEMO_WEEK, ORID_TOTAL_WEEKS } from "@/lib/orid/week-flow";
 
 type OverviewRow = {
   student_id: string;
@@ -55,9 +55,9 @@ export default function TeacherClassOverviewPage({ params }: { params: Promise<{
             onChange={(e) => setWeek(Number(e.target.value))}
             className="rounded border bg-white px-2 py-1 text-sm"
           >
-            {Array.from({ length: ORID_TOTAL_WEEKS }, (_, i) => i + 1).map((w) => (
+            {[DEMO_WEEK, ...Array.from({ length: ORID_TOTAL_WEEKS }, (_, i) => i + 1)].map((w) => (
               <option key={w} value={w}>
-                {w}
+                {w === DEMO_WEEK ? "系統練習（0）" : w}
               </option>
             ))}
           </select>

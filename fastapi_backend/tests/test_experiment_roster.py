@@ -228,7 +228,9 @@ def test_demo_accounts_follow_each_class_and_stay_out_of_seat_logins():
 
 def test_one_time_password_accepts_any_non_blank_value():
     assert one_time_password_errors("1234") == []
-    assert one_time_password_errors("柿子") == []
+    assert one_time_password_errors("Abc12") == []
+    assert one_time_password_errors("柿子") == ["請只用英文字母和數字喔"]
+    assert one_time_password_errors("pass word") == ["請只用英文字母和數字喔"]
     assert one_time_password_errors("  ") == ["請輸入密碼。"]
     assert one_time_password_errors("x" * 129) == ["密碼太長。"]
 

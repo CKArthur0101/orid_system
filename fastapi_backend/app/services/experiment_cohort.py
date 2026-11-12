@@ -43,12 +43,21 @@ DEMO_CLASS_CODE = "demo"
 DEMO_CLASS_NAME = "教師體驗"
 OBSERVER_LOGIN = "allclass"
 OBSERVER_NAME = "全班觀察"
+# UI-only test student: may use one-time password change without joining a class.
+PASSWORD_UI_TEST_LOGIN = "pwtest"
+PASSWORD_UI_TEST_NAME = "修改密碼測試"
 
 
 def is_research_observer(user) -> bool:
     """True for the cross-class observer login that may open 研究分析."""
     login = str(getattr(user, "email", None) or "").strip().lower()
     return login == OBSERVER_LOGIN.lower()
+
+
+def is_password_ui_test_account(user) -> bool:
+    """True for the dedicated password-change UI test login (not an experiment roster seat)."""
+    login = str(getattr(user, "email", None) or "").strip().lower()
+    return login == PASSWORD_UI_TEST_LOGIN.lower()
 
 
 def demo_login(class_code: str) -> str:
@@ -69,12 +78,14 @@ def demo_accounts() -> list[dict[str, str]]:
 
 
 def one_time_password_errors(password: str) -> list[str]:
-    """The single student change only rejects a blank or oversized password."""
+    """Student one-time change: non-empty, length-limited, letters/digits only."""
     text = "" if password is None else str(password).strip()
     if not text:
         return ["請輸入密碼。"]
     if len(text) > 128:
         return ["密碼太長。"]
+    if not re.fullmatch(r"[A-Za-z0-9]+", text):
+        return ["請只用英文字母和數字喔"]
     return []
 
 

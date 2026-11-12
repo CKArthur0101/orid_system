@@ -24,7 +24,7 @@ import {
 import { TeacherDashboardHeaderDecor } from "@/components/orid/TeacherDashboardDecor";
 import { ResearchAnalyticsPanel } from "@/components/teacher/ResearchAnalyticsPanel";
 import { isResearchObserverLogin } from "@/lib/orid/research-observer";
-import { ORID_TOTAL_WEEKS } from "@/lib/orid/week-flow";
+import { DEMO_WEEK, ORID_TOTAL_WEEKS } from "@/lib/orid/week-flow";
 import { useAuthenticatedUser } from "@/lib/use-authenticated-user";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -137,8 +137,12 @@ function overviewParticipationLabel(stage: string): string {
   return STAGE_LABELS[stage] ?? stage;
 }
 const ORID_STAGES = ["O", "R", "I", "D"] as const;
-const WEEKS = Array.from({ length: ORID_TOTAL_WEEKS }, (_, i) => i + 1);
+const WEEKS = [DEMO_WEEK, ...Array.from({ length: ORID_TOTAL_WEEKS }, (_, i) => i + 1)];
 const POST_TEST_STAGES = ["O", "R", "I", "D", "ALL"];
+
+function teacherWeekLabel(week: number): string {
+  return week === DEMO_WEEK ? "系統練習（第 0 週）" : `第 ${week} 週`;
+}
 
 /** Demo：後測評分尚未完成時設 false，隱藏區塊並略過 cpt／rubric 請求 */
 const SHOW_TEACHER_POST_TEST_UI = false;
@@ -200,7 +204,9 @@ export default function TeacherDashboardPage() {
   const canViewResearch = auth.status === "ready" && isResearchObserverLogin(auth.user.email);
   const [classes, setClasses] = useState<ClassInfo[]>([]);
   const [classId, setClassId] = useState("");
+  /** Observer (allclass) defaults to demo week so class dashboards show practice data first. */
   const [week, setWeek] = useState(1);
+  const [weekInitializedForObserver, setWeekInitializedForObserver] = useState(false);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedStudentId, setSelectedStudentId] = useState("");
@@ -224,8 +230,17 @@ export default function TeacherDashboardPage() {
     }
   }, [canViewResearch, mainTab]);
 
-  // On mount: fetch classes then immediately fetch overview with the first class
   useEffect(() => {
+    if (auth.status !== "ready" || weekInitializedForObserver) return;
+    if (isResearchObserverLogin(auth.user.email)) {
+      setWeek(DEMO_WEEK);
+    }
+    setWeekInitializedForObserver(true);
+  }, [auth, weekInitializedForObserver]);
+
+  // Load class list once auth/week default is ready; overview loads via classId+week effect.
+  useEffect(() => {
+    if (!weekInitializedForObserver) return;
     void (async () => {
       setLoading(true);
       const res = await fetch("/api/teacher/me/classes", { cache: "no-store" });
@@ -233,21 +248,10 @@ export default function TeacherDashboardPage() {
       const list: ClassInfo[] = await res.json().catch(() => []);
       setClasses(list);
       if (!list.length) { setLoading(false); return; }
-
-      const firstId = list[0].id;
-      setClassId(firstId);
-
-      const oRes = await fetch(`/api/teacher/classes/${firstId}/overview?week=1`, {
-        cache: "no-store",
-      });
-      if (oRes.ok) {
-        const data: Overview = await oRes.json().catch(() => null);
-        setOverview(data);
-        if (data?.students?.length) setSelectedStudentId(data.students[0].student_id);
-      }
+      setClassId((prev) => prev || list[0].id);
       setLoading(false);
     })();
-  }, []);
+  }, [weekInitializedForObserver]);
 
   // Re-fetch overview when classId or week changes
   useEffect(() => {
@@ -491,12 +495,12 @@ export default function TeacherDashboardPage() {
             </div>
           )}
           <Select value={String(week)} onValueChange={(v) => setWeek(Number(v))}>
-            <SelectTrigger className={`w-[100px] ${TEACHER_SELECT}`}>
+            <SelectTrigger className={`w-[180px] ${TEACHER_SELECT}`}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {WEEKS.map((w) => (
-                <SelectItem key={w} value={String(w)}>第 {w} 週</SelectItem>
+                <SelectItem key={w} value={String(w)}>{teacherWeekLabel(w)}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -567,7 +571,7 @@ export default function TeacherDashboardPage() {
                 iconBg="bg-[#f3effa]"
                 label="平均對話輪數"
                 value={avgInteractions}
-                sub={`${className} 第 ${week} 週`}
+                sub={`${className} ${teacherWeekLabel(week)}`}
               />
             </div>
 
@@ -725,7 +729,7 @@ export default function TeacherDashboardPage() {
                     <CardHeader className="pb-3">
                       <CardTitle className="text-base text-amber-950">ORID 完成狀態</CardTitle>
                       <p className="text-base text-amber-800/60">
-                        {studentLabel(studentDetail)} — 第 {studentDetail.week} 週
+                        {studentLabel(studentDetail)} — {teacherWeekLabel(studentDetail.week)}
                       </p>
                       <p className="text-xs text-amber-800/50">
                         各格「已完成」以本週寫入之草稿為準（與右欄「寫作完成」一致）；AI
@@ -999,7 +1003,7 @@ export default function TeacherDashboardPage() {
                       <CardHeader className="pb-2 pt-4">
                         <CardTitle className="text-base text-amber-950">對話紀錄</CardTitle>
                         <p className="text-xs font-normal text-amber-800/55">
-                          {studentLabel(studentDetail)} · 第 {studentDetail.week} 週寫作教練 · 僅顯示本週對話
+                          {studentLabel(studentDetail)} · {teacherWeekLabel(studentDetail.week)}寫作教練 · 僅顯示本週對話
                         </p>
                       </CardHeader>
                       <CardContent className="p-0">
@@ -1073,7 +1077,7 @@ export default function TeacherDashboardPage() {
               </div>
             ) : selectedStudentId ? (
               <div className="flex h-48 flex-col items-center justify-center gap-2 text-center text-amber-800/60">
-                <p>無法載入此學生在第 {week} 週的摘要（請檢查網路或稍後再試）。</p>
+                <p>無法載入此學生在{teacherWeekLabel(week)}的摘要（請檢查網路或稍後再試）。</p>
                 {detailError && (
                   <p className="max-w-lg rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700">
                     伺服器說明：{detailError}

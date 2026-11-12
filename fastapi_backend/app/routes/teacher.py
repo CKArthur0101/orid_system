@@ -46,6 +46,7 @@ from app.schemas import (
 from app.services.experiment_cohort import is_research_observer, teacher_student_password
 from app.users import current_active_user
 from app.content.week_plan import (
+    DEMO_WEEK,
     TOTAL_WEEKS,
     book_unit_for_week,
     first_week_of_book_unit,
@@ -406,7 +407,7 @@ async def teacher_me_classes(
 @router.get("/classes/{class_id}/overview", response_model=TeacherClassOverview)
 async def teacher_class_overview(
     class_id: UUID,
-    week: int = Query(1, ge=1, le=TOTAL_WEEKS),
+    week: int = Query(1, ge=DEMO_WEEK, le=TOTAL_WEEKS),
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
@@ -645,7 +646,7 @@ async def teacher_class_overview(
 async def teacher_student_summary(
     class_id: UUID,
     student_id: UUID,
-    week: int = Query(1, ge=1, le=TOTAL_WEEKS),
+    week: int = Query(1, ge=DEMO_WEEK, le=TOTAL_WEEKS),
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
@@ -774,7 +775,7 @@ async def teacher_student_summary(
 async def teacher_student_chat_messages(
     class_id: UUID,
     student_id: UUID,
-    week: int = Query(1, ge=1, le=TOTAL_WEEKS),
+    week: int = Query(1, ge=DEMO_WEEK, le=TOTAL_WEEKS),
     limit: int = Query(500, ge=1, le=2000),
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
@@ -894,7 +895,7 @@ async def upsert_post_test_score(
 
 @router.get("/rubric")
 async def get_writing_rubric(
-    week: int = Query(1, ge=1, le=TOTAL_WEEKS),
+    week: int = Query(1, ge=DEMO_WEEK, le=TOTAL_WEEKS),
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
@@ -939,7 +940,7 @@ async def get_writing_rubric(
 @router.get("/classes/{class_id}/export")
 async def export_class_csv(
     class_id: UUID,
-    week: int = Query(1, ge=1, le=TOTAL_WEEKS),
+    week: int = Query(1, ge=DEMO_WEEK, le=TOTAL_WEEKS),
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
